@@ -34,6 +34,15 @@ def get_redirect_uri() -> str:
 
 def build_google_oauth_flow(redirect_uri: str) -> Flow:
     client = st.secrets['google_oauth_client']
+    
+    # ✅ 1) 若是字串（JSON），先轉 dict
+    if isinstance(client, str):
+        client = json.loads(client)
+
+    # ✅ 2) 若使用者只貼了 web 內部，幫它包回正確格式
+    if "web" not in client and "installed" not in client:
+        client = {"web": client}
+
     flow = Flow.from_client_config(client, scopes=SCOPES, redirect_uri=redirect_uri)
     return flow
 
