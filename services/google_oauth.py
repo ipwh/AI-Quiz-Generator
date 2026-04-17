@@ -11,9 +11,7 @@ SCOPES = [
 
 
 def oauth_is_configured() -> bool:
-    """
-    Streamlit secrets 內必須有 google_oauth_client
-    """
+    """Streamlit secrets 內必須有 google_oauth_client"""
     return "google_oauth_client" in st.secrets
 
 
@@ -36,11 +34,11 @@ def _load_google_client_config() -> dict:
     """
     client = st.secrets["google_oauth_client"]
 
-    # Streamlit secrets 常用做法：以 """...""" 存 JSON 字串，故這裡需 json.loads [3](https://docs.ucloud.cn/modelverse/api_doc/text_api/deepseek-ocr?id=deepseek-ocr-%e6%a8%a1%e5%9e%8b)[4](blob:https://m365.cloud.microsoft/416c93ef-4252-48fd-a0d4-ad845993cab4)
+    # secrets 常用做法：以多行字串存 JSON，所以要 json.loads 轉 dict。[3](https://docs.ucloud.cn/modelverse/api_doc/text_api/deepseek-ocr?id=deepseek-ocr-%e6%a8%a1%e5%9e%8b)[4](blob:https://m365.cloud.microsoft/416c93ef-4252-48fd-a0d4-ad845993cab4)
     if isinstance(client, str):
         client = json.loads(client)
 
-    # 如果用戶只貼了 web 內部那段，幫佢包回正確格式
+    # 若只貼了 web 內部，幫你包回正確格式
     if "web" not in client and "installed" not in client:
         client = {"web": client}
 
@@ -49,12 +47,11 @@ def _load_google_client_config() -> dict:
 
 def build_google_oauth_flow(redirect_uri: str, code_verifier: str | None = None) -> Flow:
     """
-    建立 OAuth Flow。
-    重要：啟用 PKCE 時必須保存 code_verifier，否則會 invalid_grant Missing code verifier。[1](https://cloud.google.com/use-cases/ocr)
+    建立 OAuth Flow（含 PKCE）。
+    Flow 支援 code_verifier / autogenerate_code_verifier 參數。[1](https://cloud.google.com/use-cases/ocr)
     """
     client_config = _load_google_client_config()
 
-    # Flow 支援 code_verifier / autogenerate_code_verifier 參數（PKCE）[1](https://cloud.google.com/use-cases/ocr)
     flow = Flow.from_client_config(
         client_config,
         scopes=SCOPES,
@@ -65,14 +62,21 @@ def build_google_oauth_flow(redirect_uri: str, code_verifier: str | None = None)
     return flow
 
 
-def build_auth_url_and_store_pkce() -> str:
+def get_or_create_auth_url() -> str:
     """
-    產生登入連結，並把 state + code_verifier 保存到 session_state。
+    只在第一次生成登入連結（避免每次 rerun 覆蓋 state / code_verifier）。
     """
+    # 如果之前已生成過，直接重用
+    if (
+        st.session_state.get("google_oauth_auth_url")
+        and st.session_state.get("google_oauth_state")
+        and st.session_state.get("google_oauth_code_verifier")
+    ):
+        return st.session_state["google_oauth_auth_url"]
+
     redirect_uri = get_redirect_uri()
     flow = build_google_oauth_flow(redirect_uri)
 
-    # 產生 auth_url，並使用 PKCE（S256）
     auth_url, state = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
@@ -80,23 +84,34 @@ def build_auth_url_and_store_pkce() -> str:
         code_challenge_method="S256",
     )
 
-    # 保存 state 與 code_verifier（最關鍵）
+    # 保存（最關鍵）
+    st.session_state["google_oauth_auth_url"] = auth_url
     st.session_state["google_oauth_state"] = state
     st.session_state["google_oauth_code_verifier"] = flow.code_verifier
 
     return auth_url
 
 
-def exchange_code_for_credentials(code: str, state: str | None = None) -> Credentials:
+def clear_oauth_temp_state():
+    """登入完成或失敗後，可清走暫存（讓下次重新生成乾淨的 auth_url/state/verifier）"""
+    for k in [
+        "google_oauth_auth_url",
+        "google_oauth_state",
+        "google_oauth_code_verifier",
+    ]:
+        if k in st.session_state:
+            st.session_state.pop(k, None)
+
+
+def exchange_code_for_credentials(code: str, returned_state: str | None = None) -> Credentials:
     """
     用 callback 回來的 code 換取 Credentials。
-    會檢查 state 及使用之前保存的 code_verifier，避免 Missing code verifier。[1](https://cloud.google.com/use-cases/ocr)
+    會檢查 state 並使用保存的 code_verifier（PKCE），否則會 invalid_grant Missing code verifier。[1](https://cloud.google.com/use-cases/ocr)
     """
     expected_state = st.session_state.get("google_oauth_state")
     verifier = st.session_state.get("google_oauth_code_verifier")
 
-    # state 檢查（防止 CSRF）
-    if expected_state and state and state != expected_state:
+    if expected_state and returned_state and returned_state != expected_state:
         raise ValueError("state 不匹配：請重新按『連接 Google（登入）』。")
 
     if not verifier:
@@ -104,8 +119,6 @@ def exchange_code_for_credentials(code: str, state: str | None = None) -> Creden
 
     redirect_uri = get_redirect_uri()
     flow = build_google_oauth_flow(redirect_uri, code_verifier=verifier)
-
-    # fetch_token 會用 code_verifier 完成 PKCE 換 token [1](https://cloud.google.com/use-cases/ocr)
     flow.fetch_token(code=code)
     return flow.credentials
 
@@ -130,3 +143,4 @@ def credentials_from_dict(data: dict) -> Credentials:
         client_secret=data.get("client_secret"),
         scopes=data.get("scopes"),
     )
+``
