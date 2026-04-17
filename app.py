@@ -15,9 +15,8 @@ from exporters.export_wayground_docx import export_wayground_docx
 
 from services.google_oauth import (
     oauth_is_configured,
-    get_or_create_auth_url,
+    get_auth_url,
     exchange_code_for_credentials,
-    clear_oauth_temp_state,
     credentials_to_dict,
     credentials_from_dict,
 )
@@ -36,10 +35,7 @@ def to_editor_df(data):
             opts.append("")
 
         corr = q.get("correct", ["1"])
-        if isinstance(corr, list) and corr:
-            corr_val = str(corr[0])
-        else:
-            corr_val = str(corr) if corr else "1"
+        corr_val = str(corr[0]) if isinstance(corr, list) and corr else "1"
 
         rows.append(
             {
@@ -90,12 +86,13 @@ if "imported_data" not in st.session_state:
 if "generated_data" not in st.session_state:
     st.session_state.generated_data = None
 
-# ✅ 先處理 OAuth callback（code/state），避免 rerun 覆蓋暫存
+# ✅ 先處理 OAuth callback（code/state）
 params = st.query_params
 if oauth_is_configured() and "code" in params and not st.session_state.google_creds:
     try:
         code = params.get("code")
         state = params.get("state")
+
         if isinstance(code, list):
             code = code[0]
         if isinstance(state, list):
@@ -104,18 +101,16 @@ if oauth_is_configured() and "code" in params and not st.session_state.google_cr
         creds = exchange_code_for_credentials(code=code, returned_state=state)
         st.session_state.google_creds = credentials_to_dict(creds)
 
-        clear_oauth_temp_state()
         st.query_params.clear()
         st.rerun()
     except Exception as e:
-        clear_oauth_temp_state()
         st.query_params.clear()
         st.error("Google 登入失敗：" + str(e))
         st.info("請回到左側重新按『連接 Google（登入）』一次（建議使用無痕視窗，避免多分頁干擾）。")
         st.stop()
 
 # =========================
-# Sidebar：Google Forms 連接（顯示成按鈕）
+# Sidebar：Google Forms 連接（按鈕）
 # =========================
 st.sidebar.header("🟦 Google Forms 連接")
 
@@ -126,19 +121,16 @@ else:
         st.sidebar.success("✅ 已連接 Google（可一鍵建立 Google Form Quiz）")
         if st.sidebar.button("🔒 登出 Google"):
             st.session_state.google_creds = None
-            clear_oauth_temp_state()
             st.rerun()
     else:
-        auth_url = get_or_create_auth_url()
-        # ✅ 真正按鈕（會在新頁開 Google 登入）
+        auth_url = get_auth_url()
         st.sidebar.link_button("🔐 連接 Google（登入）", auth_url)
-        st.sidebar.caption("如曾開多個分頁登入，建議用無痕視窗重新登入一次。")
+        st.sidebar.caption("提示：避免多分頁登入；建議用同一分頁/無痕視窗完成授權。")
 
 st.sidebar.divider()
 
 # =========================
-# Sidebar：AI API 設定（你原本多 API 功能可保留/自行整合）
-# （以下保持簡化，避免改動太大；你可用你現有版本替換這段）
+# Sidebar：AI API 設定（你可保留原本版本；此處保持簡化）
 # =========================
 st.sidebar.header("🔌 AI API 設定")
 preset = st.sidebar.selectbox("快速選擇（簡易）", ["DeepSeek（推薦）", "OpenAI", "Azure OpenAI", "自訂（OpenAI 相容）"])
