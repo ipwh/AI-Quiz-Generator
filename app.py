@@ -74,7 +74,7 @@ EDITOR_COLUMN_CONFIG = {
 }
 
 st.set_page_config(page_title="AI 題目生成器", layout="wide")
-st.title("🏫 香港中學 AI 題目生成器（多 API｜Google Forms 直出｜無 OCR）")
+st.title("🏫  AI 題目生成器（生成檔案匯入Kahoot / Wayground｜直接生成Google Form）")
 
 # session init
 if "google_creds" not in st.session_state:
@@ -185,7 +185,7 @@ if mode == "🪄 AI 生成新題目":
     level_map = {"基礎（理解與記憶）":"easy","標準（應用與理解）":"medium","進階（分析與思考）":"hard","混合（課堂活動建議）":"mixed"}
     level_code = level_map[level_label]
 
-    files = st.file_uploader("上載教材（PDF/DOCX/TXT/PPTX/XLSX；無 OCR 不接受圖片）", accept_multiple_files=True,
+    files = st.file_uploader("上載教材（支援PDF/DOCX/TXT/PPTX/XLSX）", accept_multiple_files=True,
                              type=["pdf","docx","txt","pptx","xlsx"])
 
     cfg = api_config()
