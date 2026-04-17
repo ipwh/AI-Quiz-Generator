@@ -90,13 +90,12 @@ if "imported_data" not in st.session_state:
 if "generated_data" not in st.session_state:
     st.session_state.generated_data = None
 
-# ✅ 先處理 OAuth callback（避免 rerun 覆蓋 state）
+# ✅ 先處理 OAuth callback（code/state），避免 rerun 覆蓋暫存
 params = st.query_params
 if oauth_is_configured() and "code" in params and not st.session_state.google_creds:
     try:
         code = params.get("code")
         state = params.get("state")
-
         if isinstance(code, list):
             code = code[0]
         if isinstance(state, list):
@@ -116,39 +115,10 @@ if oauth_is_configured() and "code" in params and not st.session_state.google_cr
         st.stop()
 
 # =========================
-# Sidebar：AI API（略，你保留原本多 API 設定即可）
-# =========================
-st.sidebar.header("🔌 AI API 設定")
-preset = st.sidebar.selectbox("快速選擇（簡易）", ["DeepSeek（推薦）", "OpenAI", "Azure OpenAI", "自訂（OpenAI 相容）"])
-api_key = st.sidebar.text_input("API Key", type="password")
-
-if preset == "DeepSeek（推薦）":
-    default_base = "https://api.deepseek.com/v1"
-    default_model = "deepseek-chat"
-elif preset == "OpenAI":
-    default_base = "https://api.openai.com/v1"
-    default_model = "gpt-4o-mini"
-else:
-    default_base = ""
-    default_model = ""
-
-base_url = st.sidebar.text_input("Base URL（含 /v1）", value=default_base, disabled=(preset in ["DeepSeek（推薦）", "OpenAI"]))
-model = st.sidebar.text_input("Model", value=default_model, disabled=(preset in ["DeepSeek（推薦）", "OpenAI"]))
-
-azure_endpoint = ""
-azure_deployment = ""
-azure_api_version = "2024-02-15-preview"
-with st.sidebar.expander("⚙️ 進階設定（IT/管理員）", expanded=(preset == "Azure OpenAI")):
-    azure_endpoint = st.text_input("Azure Endpoint", value="")
-    azure_deployment = st.text_input("Deployment name", value="")
-    azure_api_version = st.text_input("API version", value="2024-02-15-preview")
-
-st.sidebar.divider()
-
-# =========================
-# Sidebar：Google 連接（登入連結只生成一次重用）
+# Sidebar：Google Forms 連接（顯示成按鈕）
 # =========================
 st.sidebar.header("🟦 Google Forms 連接")
+
 if not oauth_is_configured():
     st.sidebar.warning("⚠️ 尚未設定 Google OAuth（請在 Streamlit Secrets 設定 google_oauth_client 及 APP_URL）。")
 else:
@@ -160,14 +130,41 @@ else:
             st.rerun()
     else:
         auth_url = get_or_create_auth_url()
-        st.sidebar.markdown(f"{auth_url}")
+        # ✅ 真正按鈕（會在新頁開 Google 登入）
+        st.sidebar.link_button("🔐 連接 Google（登入）", auth_url)
         st.sidebar.caption("如曾開多個分頁登入，建議用無痕視窗重新登入一次。")
 
 st.sidebar.divider()
 
 # =========================
-# Sidebar：模式與科目
+# Sidebar：AI API 設定（你原本多 API 功能可保留/自行整合）
+# （以下保持簡化，避免改動太大；你可用你現有版本替換這段）
 # =========================
+st.sidebar.header("🔌 AI API 設定")
+preset = st.sidebar.selectbox("快速選擇（簡易）", ["DeepSeek（推薦）", "OpenAI", "Azure OpenAI", "自訂（OpenAI 相容）"])
+api_key = st.sidebar.text_input("API Key", type="password")
+
+if preset == "DeepSeek（推薦）":
+    base_url = "https://api.deepseek.com/v1"
+    model = "deepseek-chat"
+elif preset == "OpenAI":
+    base_url = "https://api.openai.com/v1"
+    model = "gpt-4o-mini"
+else:
+    base_url = st.sidebar.text_input("Base URL（含 /v1）", value="")
+    model = st.sidebar.text_input("Model", value="")
+
+azure_endpoint = ""
+azure_deployment = ""
+azure_api_version = "2024-02-15-preview"
+if preset == "Azure OpenAI":
+    with st.sidebar.expander("⚙️ Azure 設定", expanded=True):
+        azure_endpoint = st.text_input("Azure Endpoint", value="")
+        azure_deployment = st.text_input("Deployment name", value="")
+        azure_api_version = st.text_input("API version", value="2024-02-15-preview")
+
+st.sidebar.divider()
+
 mode = st.sidebar.radio("📂 試題來源模式", ["🪄 AI 生成新題目", "📄 匯入現有題目（AI 協助）"])
 subject = st.sidebar.selectbox(
     "📘 科目",
@@ -177,8 +174,8 @@ subject = st.sidebar.selectbox(
 
 def api_config():
     if preset == "Azure OpenAI":
-        return {"type": "azure", "api_key": api_key, "endpoint": azure_endpoint, "deployment": azure_deployment, "api_version": azure_api_version}
-    return {"type": "openai_compat", "api_key": api_key, "base_url": base_url, "model": model}
+        return {"type":"azure","api_key":api_key,"endpoint":azure_endpoint,"deployment":azure_deployment,"api_version":azure_api_version}
+    return {"type":"openai_compat","api_key":api_key,"base_url":base_url,"model":model}
 
 def can_call_ai(cfg: dict):
     if not cfg.get("api_key"):
@@ -188,25 +185,22 @@ def can_call_ai(cfg: dict):
     return bool(cfg.get("base_url")) and bool(cfg.get("model"))
 
 # =========================
-# 模式一：AI 生成（略）
+# 模式一：AI 生成
 # =========================
 if mode == "🪄 AI 生成新題目":
-    st.sidebar.subheader("🧮 題目數目")
-    question_count = st.sidebar.selectbox("數目", [5, 8, 10, 12, 15, 20], index=2)
-    st.sidebar.subheader("🎯 難度")
-    level_label = st.sidebar.radio("整體難度", ["基礎（理解與記憶）","標準（應用與理解）","進階（分析與思考）","混合（課堂活動建議）"])
+    question_count = st.sidebar.selectbox("🧮 題目數目", [5, 8, 10, 12, 15, 20], index=2)
+    level_label = st.sidebar.radio("🎯 難度", ["基礎（理解與記憶）","標準（應用與理解）","進階（分析與思考）","混合（課堂活動建議）"])
     level_map = {"基礎（理解與記憶）":"easy","標準（應用與理解）":"medium","進階（分析與思考）":"hard","混合（課堂活動建議）":"mixed"}
     level_code = level_map[level_label]
 
     files = st.file_uploader("上載教材（PDF/DOCX/TXT/PPTX/XLSX；無 OCR 不接受圖片）", accept_multiple_files=True,
                              type=["pdf","docx","txt","pptx","xlsx"])
-    cfg = api_config()
-    can_generate = can_call_ai(cfg) and bool(files)
 
-    if st.button("生成題目", disabled=not can_generate):
+    cfg = api_config()
+    if st.button("生成題目", disabled=not (can_call_ai(cfg) and bool(files))):
         text = "".join(extract_text(f) for f in files)[:5000]
         cache = load_cache()
-        key = str(hash(text + subject + level_code + str(question_count) + cfg.get("type","") + cfg.get("base_url","") + cfg.get("model","") + cfg.get("deployment","")))
+        key = str(hash(text + subject + level_code + str(question_count)))
         if key in cache:
             st.session_state.generated_data = cache[key]
         else:
@@ -218,6 +212,7 @@ if mode == "🪄 AI 生成新題目":
     if st.session_state.generated_data:
         df = to_editor_df(st.session_state.generated_data)
         edited = st.data_editor(df, use_container_width=True, num_rows="dynamic", column_config=EDITOR_COLUMN_CONFIG, disabled=["type"])
+
         st.download_button("⬇️ Kahoot Excel", export_kahoot(edited), "kahoot.xlsx")
         st.download_button("⬇️ Wayground DOCX", export_wayground_docx(edited, subject), "wayground.docx")
 
@@ -232,7 +227,7 @@ if mode == "🪄 AI 生成新題目":
             st.info("先在左側登入 Google，才可一鍵建立。")
 
 # =========================
-# 模式二：匯入現有題目（略）
+# 模式二：匯入現有題目
 # =========================
 if mode == "📄 匯入現有題目（AI 協助）":
     def load_import_file_to_textbox():
@@ -247,10 +242,7 @@ if mode == "📄 匯入現有題目（AI 協助）":
     st.text_area("貼上題目內容", height=320, key="imported_text")
 
     cfg = api_config()
-    can_run = bool(st.session_state.imported_text.strip())
-    disable_btn = (not can_run) or (use_ai_assist and not can_call_ai(cfg))
-
-    if st.button("✨ 整理並轉換", disabled=disable_btn):
+    if st.button("✨ 整理並轉換", disabled=not (bool(st.session_state.imported_text.strip()) and (not use_ai_assist or can_call_ai(cfg)))):
         raw = st.session_state.imported_text.strip()
         with st.spinner("🧠 整理中..."):
             if use_ai_assist:
@@ -261,6 +253,7 @@ if mode == "📄 匯入現有題目（AI 協助）":
     if st.session_state.imported_data:
         df = to_editor_df(st.session_state.imported_data)
         edited = st.data_editor(df, use_container_width=True, num_rows="dynamic", column_config=EDITOR_COLUMN_CONFIG, disabled=["type"])
+
         st.download_button("⬇️ Kahoot Excel", export_kahoot(edited), "kahoot.xlsx")
         st.download_button("⬇️ Wayground DOCX", export_wayground_docx(edited, subject), "wayground.docx")
 
@@ -273,3 +266,4 @@ if mode == "📄 匯入現有題目（AI 協助）":
                 st.write("發佈連結：", result.get("responderUrl"))
         else:
             st.info("先在左側登入 Google，才可一鍵建立。")
+``
