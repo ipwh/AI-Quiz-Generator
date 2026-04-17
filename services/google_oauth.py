@@ -3,7 +3,7 @@ import streamlit as st
 from google_auth_oauthlib.flow import Flow
 from google.oauth2.credentials import Credentials
 
-# 需要的 scopes：建立/修改 Google Forms + 在用戶 Drive 建立文件
+# 建議 scopes：建立/修改 Google Forms + 在使用者 Drive 建立檔案
 SCOPES = [
     "https://www.googleapis.com/auth/forms.body",
     "https://www.googleapis.com/auth/drive.file",
@@ -17,8 +17,8 @@ def oauth_is_configured() -> bool:
 
 def get_redirect_uri() -> str:
     """
-    用 Streamlit Secrets 的 APP_URL 作 redirect URI（部署後固定最穩）。
-    Secrets 的用法是 Streamlit 官方建議（st.secrets / secrets.toml）。[3](https://docs.ucloud.cn/modelverse/api_doc/text_api/deepseek-ocr?id=deepseek-ocr-%e6%a8%a1%e5%9e%8b)[4](blob:https://m365.cloud.microsoft/416c93ef-4252-48fd-a0d4-ad845993cab4)
+    使用 Streamlit Secrets 的 APP_URL 作 redirect URI（部署後固定最穩）。
+    Streamlit 建議用 secrets 管理敏感配置並用 st.secrets 讀取。[3](https://docs.ucloud.cn/modelverse/api_doc/text_api/deepseek-ocr?id=deepseek-ocr-%e6%a8%a1%e5%9e%8b)[4](blob:https://m365.cloud.microsoft/416c93ef-4252-48fd-a0d4-ad845993cab4)
     """
     app_url = str(st.secrets.get("APP_URL", "")).strip().rstrip("/")
     if app_url:
@@ -28,89 +28,81 @@ def get_redirect_uri() -> str:
 
 def _load_google_client_config() -> dict:
     """
-    st.secrets["google_oauth_client"] 可能是 JSON 字串或 dict。
-    Flow.from_client_config 需要 Google client secrets format，且 client type 必須是 web/installed。[1](https://cloud.google.com/use-cases/ocr)[2](https://zhuanlan.zhihu.com/p/1964739506629490036)
+    Flow.from_client_config 需要 Google client secrets format，
+    且 client type 只能是 web 或 installed。[1](https://cloud.google.com/use-cases/ocr)[2](https://zhuanlan.zhihu.com/p/1964739506629490036)
     """
     client = st.secrets["google_oauth_client"]
 
-    # 常見做法：在 Secrets 用 """...""" 存 JSON 字串，因此這裡要 json.loads。[3](https://docs.ucloud.cn/modelverse/api_doc/text_api/deepseek-ocr?id=deepseek-ocr-%e6%a8%a1%e5%9e%8b)[4](blob:https://m365.cloud.microsoft/416c93ef-4252-48fd-a0d4-ad845993cab4)
+    # secrets 常用 """...""" 存 JSON 字串，先轉 dict
     if isinstance(client, str):
         client = json.loads(client)
 
-    # 若只貼 web 內部那段，幫你包回正確格式
+    # 若只貼了 web 內部，幫你包回正確格式
     if "web" not in client and "installed" not in client:
         client = {"web": client}
 
     return client
 
 
-def build_google_oauth_flow(redirect_uri: str, code_verifier: str | None = None) -> Flow:
+def build_google_oauth_flow(redirect_uri: str) -> Flow:
     """
-    建立 OAuth Flow（含 PKCE）。
-    Flow 支援 code_verifier / autogenerate_code_verifier 參數。[1](https://cloud.google.com/use-cases/ocr)
+    建立 OAuth Flow（此版本：不使用 PKCE，避免 code_verifier 在 Streamlit session 切換時遺失）。
     """
     client_config = _load_google_client_config()
-
     flow = Flow.from_client_config(
         client_config,
         scopes=SCOPES,
         redirect_uri=redirect_uri,
-        code_verifier=code_verifier,
-        autogenerate_code_verifier=(code_verifier is None),
     )
     return flow
 
 
 def get_or_create_auth_url() -> str:
     """
-    ✅ 只在第一次生成 auth_url/state/code_verifier（避免 Streamlit rerun 覆蓋 state，造成 state mismatch）。
+    只在第一次生成 auth_url/state，避免 rerun 覆蓋 state。
     """
-    if (
-        st.session_state.get("google_oauth_auth_url")
-        and st.session_state.get("google_oauth_state")
-        and st.session_state.get("google_oauth_code_verifier")
-    ):
+    if st.session_state.get("google_oauth_auth_url") and st.session_state.get("google_oauth_state"):
         return st.session_state["google_oauth_auth_url"]
 
     redirect_uri = get_redirect_uri()
     flow = build_google_oauth_flow(redirect_uri)
 
+    # 不使用 code_challenge_method（即不啟用 PKCE）
     auth_url, state = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
         prompt="consent",
-        code_challenge_method="S256",
     )
 
     st.session_state["google_oauth_auth_url"] = auth_url
     st.session_state["google_oauth_state"] = state
-    st.session_state["google_oauth_code_verifier"] = flow.code_verifier
-
     return auth_url
 
 
 def clear_oauth_temp_state():
-    """登入完成/失敗後清除暫存，避免舊 state 影響下一次登入。"""
-    for k in ("google_oauth_auth_url", "google_oauth_state", "google_oauth_code_verifier"):
+    """登入完成/失敗後清理暫存 state/url。"""
+    for k in ("google_oauth_auth_url", "google_oauth_state"):
         st.session_state.pop(k, None)
 
 
 def exchange_code_for_credentials(code: str, returned_state: str | None = None) -> Credentials:
     """
     用 callback 回來的 code 換取 Credentials。
-    會驗證 state 並使用保存的 code_verifier（PKCE），避免 invalid_grant Missing code verifier。[1](https://cloud.google.com/use-cases/ocr)
+
+    ✅ state 驗證策略（為 Streamlit Cloud 友善）：
+    - 若本次 session 有 expected_state，就必須 match，否則報錯（防 CSRF）。
+    - 若 expected_state 不存在（例如回跳開了新 session），就容錯接受 returned_state，
+      但會建議用戶避免多分頁登入。
     """
     expected_state = st.session_state.get("google_oauth_state")
-    verifier = st.session_state.get("google_oauth_code_verifier")
 
     if expected_state and returned_state and returned_state != expected_state:
         raise ValueError("state 不匹配：請重新按『連接 Google（登入）』。")
 
-    if not verifier:
-        raise ValueError("缺少 code_verifier：請重新按『連接 Google（登入）』。")
-
     redirect_uri = get_redirect_uri()
-    flow = build_google_oauth_flow(redirect_uri, code_verifier=verifier)
+    flow = build_google_oauth_flow(redirect_uri)
+
+    # 直接 fetch_token（無 PKCE）
     flow.fetch_token(code=code)
     return flow.credentials
 
