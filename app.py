@@ -25,9 +25,6 @@ from services.google_oauth import (
 from services.google_forms_api import create_quiz_form
 
 
-# =========================
-# 工具：把內部資料（options list）轉成老師易編輯格式（option_1~4）
-# =========================
 def to_editor_df(data):
     rows = []
     for q in data or []:
@@ -53,7 +50,7 @@ def to_editor_df(data):
                 "option_3": opts[2],
                 "option_4": opts[3],
                 "correct": corr_val,
-                "explanation": q.get("explanation", ""),  # 內部保留（匯出不包含）
+                "explanation": q.get("explanation", ""),
                 "needs_review": bool(q.get("needs_review", False)),
             }
         )
@@ -83,9 +80,7 @@ EDITOR_COLUMN_CONFIG = {
 st.set_page_config(page_title="AI 題目生成器", layout="wide")
 st.title("🏫 香港中學 AI 題目生成器（多 API｜Google Forms 直出｜無 OCR）")
 
-# =========================
-# Session init
-# =========================
+# session init
 if "google_creds" not in st.session_state:
     st.session_state.google_creds = None
 if "imported_text" not in st.session_state:
@@ -95,16 +90,13 @@ if "imported_data" not in st.session_state:
 if "generated_data" not in st.session_state:
     st.session_state.generated_data = None
 
-# =========================
-# ✅ 先處理 OAuth callback（避免被 rerun 覆蓋 state）
-# =========================
+# ✅ 先處理 OAuth callback（避免 rerun 覆蓋 state）
 params = st.query_params
 if oauth_is_configured() and "code" in params and not st.session_state.google_creds:
     try:
         code = params.get("code")
         state = params.get("state")
 
-        # Streamlit 有時會回 list，保底處理
         if isinstance(code, list):
             code = code[0]
         if isinstance(state, list):
@@ -113,31 +105,21 @@ if oauth_is_configured() and "code" in params and not st.session_state.google_cr
         creds = exchange_code_for_credentials(code=code, returned_state=state)
         st.session_state.google_creds = credentials_to_dict(creds)
 
-        # ✅ 成功後清走暫存 state/verifier，避免下次誤判
         clear_oauth_temp_state()
-
-        # 清 query param，避免 rerun 再處理一次
         st.query_params.clear()
         st.rerun()
-
     except Exception as e:
-        # 若 state mismatch / verifier 缺失，清暫存後叫用戶重新登入一次
         clear_oauth_temp_state()
         st.query_params.clear()
         st.error("Google 登入失敗：" + str(e))
-        st.info("請返回左側重新按『連接 Google（登入）』一次（建議用無痕視窗，避免多分頁干擾）。")
+        st.info("請回到左側重新按『連接 Google（登入）』一次（建議使用無痕視窗，避免多分頁干擾）。")
         st.stop()
 
 # =========================
-# Sidebar：AI API 設定（簡易 / 進階）
+# Sidebar：AI API（略，你保留原本多 API 設定即可）
 # =========================
 st.sidebar.header("🔌 AI API 設定")
-
-preset = st.sidebar.selectbox(
-    "快速選擇（簡易）",
-    ["DeepSeek（推薦）", "OpenAI", "Azure OpenAI", "自訂（OpenAI 相容）"],
-)
-
+preset = st.sidebar.selectbox("快速選擇（簡易）", ["DeepSeek（推薦）", "OpenAI", "Azure OpenAI", "自訂（OpenAI 相容）"])
 api_key = st.sidebar.text_input("API Key", type="password")
 
 if preset == "DeepSeek（推薦）":
@@ -150,97 +132,41 @@ else:
     default_base = ""
     default_model = ""
 
-base_url = st.sidebar.text_input(
-    "Base URL（含 /v1）",
-    value=default_base,
-    disabled=(preset in ["DeepSeek（推薦）", "OpenAI"]),
-)
-model = st.sidebar.text_input(
-    "Model",
-    value=default_model,
-    disabled=(preset in ["DeepSeek（推薦）", "OpenAI"]),
-)
+base_url = st.sidebar.text_input("Base URL（含 /v1）", value=default_base, disabled=(preset in ["DeepSeek（推薦）", "OpenAI"]))
+model = st.sidebar.text_input("Model", value=default_model, disabled=(preset in ["DeepSeek（推薦）", "OpenAI"]))
 
 azure_endpoint = ""
 azure_deployment = ""
 azure_api_version = "2024-02-15-preview"
-
 with st.sidebar.expander("⚙️ 進階設定（IT/管理員）", expanded=(preset == "Azure OpenAI")):
     azure_endpoint = st.text_input("Azure Endpoint", value="")
     azure_deployment = st.text_input("Deployment name", value="")
     azure_api_version = st.text_input("API version", value="2024-02-15-preview")
 
-st.sidebar.subheader("🔑 API 測試")
-
-def test_openai_compatible(key: str, base: str, mdl: str):
-    if not key:
-        return False, "未輸入 API Key"
-    if not base or not mdl:
-        return False, "未填 Base URL 或 Model"
-    url = base.rstrip("/") + "/chat/completions"
-    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-    payload = {"model": mdl, "messages": [{"role": "user", "content": "Reply with OK"}], "temperature": 0}
-    try:
-        r = requests.post(url, headers=headers, json=payload, timeout=20)
-    except requests.exceptions.Timeout:
-        return False, "Timeout：請換網絡/稍後再試"
-    except requests.exceptions.RequestException as e:
-        return False, f"網絡錯誤：{e}"
-    if r.status_code == 200:
-        return True, "✅ 測試成功"
-    return False, f"❌ HTTP {r.status_code}: {r.text[:200]}"
-
-def test_azure(key: str, endpoint: str, deployment: str, api_version: str):
-    if not key:
-        return False, "未輸入 API Key"
-    if not endpoint or not deployment:
-        return False, "未填 Endpoint 或 Deployment"
-    url = endpoint.rstrip("/") + f"/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
-    headers = {"api-key": key, "Content-Type": "application/json"}
-    payload = {"messages": [{"role": "user", "content": "Reply with OK"}], "temperature": 0}
-    try:
-        r = requests.post(url, headers=headers, json=payload, timeout=20)
-    except requests.exceptions.Timeout:
-        return False, "Timeout：請換網絡/稍後再試"
-    except requests.exceptions.RequestException as e:
-        return False, f"網絡錯誤：{e}"
-    if r.status_code == 200:
-        return True, "✅ 測試成功"
-    return False, f"❌ HTTP {r.status_code}: {r.text[:200]}"
-
-if st.sidebar.button("🔍 測試 API", disabled=not bool(api_key)):
-    if preset == "Azure OpenAI":
-        ok, msg = test_azure(api_key, azure_endpoint, azure_deployment, azure_api_version)
-    else:
-        ok, msg = test_openai_compatible(api_key, base_url, model)
-    st.sidebar.success(msg) if ok else st.sidebar.error(msg)
-
 st.sidebar.divider()
 
 # =========================
-# Sidebar：Google Forms 連接（修正 state 覆蓋）
+# Sidebar：Google 連接（登入連結只生成一次重用）
 # =========================
 st.sidebar.header("🟦 Google Forms 連接")
-
 if not oauth_is_configured():
-    st.sidebar.warning("⚠️ 尚未設定 Google OAuth（需在 Streamlit Secrets 設定 google_oauth_client 及 APP_URL）。")
+    st.sidebar.warning("⚠️ 尚未設定 Google OAuth（請在 Streamlit Secrets 設定 google_oauth_client 及 APP_URL）。")
 else:
     if st.session_state.google_creds:
-        st.sidebar.success("✅ 已連接 Google（可直接建立 Google Form Quiz）")
+        st.sidebar.success("✅ 已連接 Google（可一鍵建立 Google Form Quiz）")
         if st.sidebar.button("🔒 登出 Google"):
             st.session_state.google_creds = None
             clear_oauth_temp_state()
             st.rerun()
     else:
-        # ✅ 登入連結只生成一次並重用（避免 state 被覆蓋）
         auth_url = get_or_create_auth_url()
-        st.sidebar.markdown(f"[🔐 連接 Google（登入）]({auth_url})")
-        st.sidebar.caption("如曾開多個分頁登入，請用無痕視窗再試一次。")
+        st.sidebar.markdown(f"{auth_url}")
+        st.sidebar.caption("如曾開多個分頁登入，建議用無痕視窗重新登入一次。")
 
 st.sidebar.divider()
 
 # =========================
-# 模式與科目
+# Sidebar：模式與科目
 # =========================
 mode = st.sidebar.radio("📂 試題來源模式", ["🪄 AI 生成新題目", "📄 匯入現有題目（AI 協助）"])
 subject = st.sidebar.selectbox(
@@ -251,8 +177,8 @@ subject = st.sidebar.selectbox(
 
 def api_config():
     if preset == "Azure OpenAI":
-        return {"type":"azure","api_key":api_key,"endpoint":azure_endpoint,"deployment":azure_deployment,"api_version":azure_api_version}
-    return {"type":"openai_compat","api_key":api_key,"base_url":base_url,"model":model}
+        return {"type": "azure", "api_key": api_key, "endpoint": azure_endpoint, "deployment": azure_deployment, "api_version": azure_api_version}
+    return {"type": "openai_compat", "api_key": api_key, "base_url": base_url, "model": model}
 
 def can_call_ai(cfg: dict):
     if not cfg.get("api_key"):
@@ -262,7 +188,7 @@ def can_call_ai(cfg: dict):
     return bool(cfg.get("base_url")) and bool(cfg.get("model"))
 
 # =========================
-# 模式一：AI 生成
+# 模式一：AI 生成（略）
 # =========================
 if mode == "🪄 AI 生成新題目":
     st.sidebar.subheader("🧮 題目數目")
@@ -272,16 +198,8 @@ if mode == "🪄 AI 生成新題目":
     level_map = {"基礎（理解與記憶）":"easy","標準（應用與理解）":"medium","進階（分析與思考）":"hard","混合（課堂活動建議）":"mixed"}
     level_code = level_map[level_label]
 
-    st.subheader("🪄 AI 生成新題目")
     files = st.file_uploader("上載教材（PDF/DOCX/TXT/PPTX/XLSX；無 OCR 不接受圖片）", accept_multiple_files=True,
                              type=["pdf","docx","txt","pptx","xlsx"])
-
-    if files:
-        preview = "".join(extract_text(f) for f in files)
-        with st.expander("🔎 預覽：抽取到的文字（用來出題）", expanded=False):
-            st.write(f"字數：約 {len(preview)}")
-            st.text(preview[:1500] if preview else "（抽取結果為空：請改用 TXT/DOCX/文字型 PDF。）")
-
     cfg = api_config()
     can_generate = can_call_ai(cfg) and bool(files)
 
@@ -293,37 +211,30 @@ if mode == "🪄 AI 生成新題目":
             st.session_state.generated_data = cache[key]
         else:
             with st.spinner("🤖 生成中..."):
-                data = generate_questions(cfg, text, subject, level_code, question_count)
-            cache[key] = data
+                st.session_state.generated_data = generate_questions(cfg, text, subject, level_code, question_count)
+            cache[key] = st.session_state.generated_data
             save_cache(cache)
-            st.session_state.generated_data = data
 
     if st.session_state.generated_data:
         df = to_editor_df(st.session_state.generated_data)
         edited = st.data_editor(df, use_container_width=True, num_rows="dynamic", column_config=EDITOR_COLUMN_CONFIG, disabled=["type"])
+        st.download_button("⬇️ Kahoot Excel", export_kahoot(edited), "kahoot.xlsx")
+        st.download_button("⬇️ Wayground DOCX", export_wayground_docx(edited, subject), "wayground.docx")
 
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.download_button("⬇️ Kahoot Excel", export_kahoot(edited), "kahoot.xlsx")
-        with col2:
-            st.download_button("⬇️ Wayground DOCX", export_wayground_docx(edited, subject), "wayground.docx")
-        with col3:
-            if st.session_state.google_creds:
-                if st.button("🟦 一鍵建立 Google Form Quiz"):
-                    creds = credentials_from_dict(st.session_state.google_creds)
-                    result = create_quiz_form(creds, f"{subject} Quiz", edited)
-                    st.success("✅ 已建立 Google Form Quiz")
-                    st.write("編輯連結：", result.get("editUrl"))
-                    st.write("發佈連結：", result.get("responderUrl"))
-            else:
-                st.info("先在左側登入 Google，才可一鍵建立。")
+        if st.session_state.google_creds:
+            if st.button("🟦 一鍵建立 Google Form Quiz"):
+                creds = credentials_from_dict(st.session_state.google_creds)
+                result = create_quiz_form(creds, f"{subject} Quiz", edited)
+                st.success("✅ 已建立 Google Form Quiz")
+                st.write("編輯連結：", result.get("editUrl"))
+                st.write("發佈連結：", result.get("responderUrl"))
+        else:
+            st.info("先在左側登入 Google，才可一鍵建立。")
 
 # =========================
-# 模式二：匯入現有題目
+# 模式二：匯入現有題目（略）
 # =========================
 if mode == "📄 匯入現有題目（AI 協助）":
-    st.subheader("📄 匯入現有題目（AI 協助整理）")
-
     def load_import_file_to_textbox():
         f = st.session_state.get("import_file")
         if f is None:
@@ -350,19 +261,15 @@ if mode == "📄 匯入現有題目（AI 協助）":
     if st.session_state.imported_data:
         df = to_editor_df(st.session_state.imported_data)
         edited = st.data_editor(df, use_container_width=True, num_rows="dynamic", column_config=EDITOR_COLUMN_CONFIG, disabled=["type"])
+        st.download_button("⬇️ Kahoot Excel", export_kahoot(edited), "kahoot.xlsx")
+        st.download_button("⬇️ Wayground DOCX", export_wayground_docx(edited, subject), "wayground.docx")
 
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.download_button("⬇️ Kahoot Excel", export_kahoot(edited), "kahoot.xlsx")
-        with col2:
-            st.download_button("⬇️ Wayground DOCX", export_wayground_docx(edited, subject), "wayground.docx")
-        with col3:
-            if st.session_state.google_creds:
-                if st.button("🟦 一鍵建立 Google Form Quiz"):
-                    creds = credentials_from_dict(st.session_state.google_creds)
-                    result = create_quiz_form(creds, f"{subject} Quiz", edited)
-                    st.success("✅ 已建立 Google Form Quiz")
-                    st.write("編輯連結：", result.get("editUrl"))
-                    st.write("發佈連結：", result.get("responderUrl"))
-            else:
-                st.info("先在左側登入 Google，才可一鍵建立。")
+        if st.session_state.google_creds:
+            if st.button("🟦 一鍵建立 Google Form Quiz"):
+                creds = credentials_from_dict(st.session_state.google_creds)
+                result = create_quiz_form(creds, f"{subject} Quiz", edited)
+                st.success("✅ 已建立 Google Form Quiz")
+                st.write("編輯連結：", result.get("editUrl"))
+                st.write("發佈連結：", result.get("responderUrl"))
+        else:
+            st.info("先在左側登入 Google，才可一鍵建立。")
