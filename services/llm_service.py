@@ -8,260 +8,128 @@ import random
 _SESSION = requests.Session()
 _SESSION_LOCK = threading.Lock()
 
-def _chat(cfg: dict, messages: list, temperature: float, max_tokens: int, timeout: int):
-    """
-    統一呼叫 LLM 的入口：
-    - cfg['type'] == 'azure' 用 Azure
-    - 其他用 OpenAI-compatible（DeepSeek / OpenAI / 自訂）
-    """
-    if cfg.get("type") == "azure":
-        data = _post_azure(
-            api_key=cfg["api_key"],
-            endpoint=cfg["endpoint"],
-            deployment=cfg["deployment"],
-            api_version=cfg.get("api_version", "2024-02-15-preview"),
-            payload={
-                "messages": messages,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-            },
-            timeout=timeout,
-        )
-    else:
-        data = _post_openai_compat(
-            api_key=cfg["api_key"],
-            base_url=cfg["base_url"],
-            payload={
-                "model": cfg["model"],
-                "messages": messages,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-            },
-            timeout=timeout,
-        )
 
-    return data.get("choices", [{}])[0].get("message", {}).get("content", "")
 def _reset_session():
-    """
-    重新建立 requests.Session（當 keep-alive 連線壞咗、或 ConnectionError 時用）
-    用 helper 包住 global，避免在其他函數出現 'used prior to global' 語法錯。
-    """
+    """重建 requests.Session（keep-alive 連線壞咗、或 ConnectionError/ReadTimeout 時用）"""
     global _SESSION
     try:
         _SESSION.close()
     except Exception:
         pass
     _SESSION = requests.Session()
+
+
 # -------------------------
 # 科目特性（可按校本再擴充）
+# 注意：同一 key 只保留一份；並補齊 app 下拉選單會用到的 alias key
 # -------------------------
 SUBJECT_TRAITS = {
-    "中國語文": "重點：篇章理解、修辭手法、語境推斷、段落主旨、作者態度。干擾項：以偏概全、張冠李戴、偷換概念。",
-    "英國語文": "Focus: reading comprehension, inference, tone/purpose, vocabulary in context, grammar usage. Distractors: near-synonym traps, extreme options.",
-    "數學": "重點：概念+運算、步驟正確性、圖像/表格解讀、公式應用。干擾項：公式套錯、單位/符號錯、概念混淆。",
-    "公民與社會發展": "重點：概念辨析、情境應用、因果關係。干擾項：概念混淆、因果倒置、以偏概全。",
-    "科學": "重點：核心概念+生活情境應用、變因控制。干擾項：把相關性當因果、混淆變因。",
-    "物理": "重點：定律應用、方向性、單位、圖像解讀。干擾項：方向/符號、把速度當加速度。",
-    "化學": "重點：粒子模型、方程式、酸鹼/氧化還原、實驗觀察。干擾項：配平錯、概念混淆。",
-    "生物": "重點：結構與功能、恆常性、遺傳、生態互動。干擾項：器官功能混淆、相關性當因果。",
-    "資訊及通訊科技（ICT）": "重點：實務應用（資料處理/試算表/網絡/安全/系統開發）。干擾項：忽略私隱/保安、概念混用。",
-    "地理": "重點：地圖/圖表解讀、成因+影響、案例應用。干擾項：把描述當解釋、忽略尺度。",
-    "歷史": "重點：史料解讀、時序因果、證據支持。干擾項：年代混淆、單因解釋多因現象。",
-    "經濟": "重點：供求/彈性/成本收益/政策影響、圖表。干擾項：短期長期混、名義與實質混淆。",
-# ===== 新增：公民、經濟與社會（中一至中三）=====
-    "公民、經濟與社會": (
-        "重點：按初中課程三大範疇出題——"
-        "（1）個人與群性發展：自我認識、情緒與生活技能、健康生活、人際關係、多元共融；"
-        "（2）資源與經濟活動：理財教育、金錢價值觀、公共財政、經濟表現指標與趨勢（如GDP/失業/通脹等）;"
-        "（3）社會體系與公民精神：權利與義務、法治、憲法與基本法、國家安全、國民身份、全球互依與合作。"
-        "題型：情境題、數據/表格解讀、概念辨析、因果與利弊分析。"
-        "干擾項：把描述當解釋、因果倒置、概念混淆（權利vs義務、公平vs公義、公共資源vs私人資源、需要vs想要）、"
-        "以偏概全、忽略數據趨勢。"
-        "用語：採用課程常用詞，如『價值觀和態度』『慎思明辨』『公共資源/公共財政』『國民身份認同』等。"
+    # ==== 語文 / 人文 ====
+    "中國語文": (
+        "重點：以『讀寫聽說』為主導，帶動文學、中華文化、品德情意、思維、語文自學九大範疇；"
+        "出題同時兼顧工具性（語文運用）與人文性（思想、文化、審美）。"
+        "題型：閱讀主旨/段意/寫作手法、語境推斷、語體得體、文學感受→鑒賞。"
+        "干擾項：只看字面忽略語境、混淆作者/敘述者觀點、把描寫當論證、以偏概全、忽略轉折承接。"
+        "用語：『細讀文本』『誦讀/背誦』『文道並重』『慎思明辨』『語文自學』『文化認識/反思/認同』等。"
+    ),
+    "英國語文": (
+        "Focus: reading comprehension, inference, tone/purpose, vocabulary in context, grammar usage. "
+        "Distractors: near-synonym traps, extreme options, misreading of reference/pronouns."
+    ),
+    "歷史": (
+        "重點：史料解讀、時序因果、證據支持。干擾項：年代混淆、單因解釋多因現象、以偏概全。"
     ),
 
-# ====== 中國語文（通用：如你的下拉選單只有「中國語文」就用這個）======
-"中國語文": (
-    "重點：以『讀寫聽說』為主導，帶動文學、中華文化、品德情意、思維、語文自學九大範疇；"
-    "出題必須同時兼顧工具性（語文運用）與人文性（思想、文化、審美）。"
-    "題型建議："
-    "（1）閱讀理解：主旨、段落關係、寫作手法（描寫/抒情/議論）、人物形象、語境推斷；"
-    "（2）語文基礎：詞語用法、句式、語體得體（口語/書面語）；"
-    "（3）文學賞析：意象、語言特色、情感線索（以整體感受→再分析鑒賞）；"
-    "（4）中華文化：從文本/生活素材辨識『物質/制度/精神』文化元素，並作簡短反思；"
-    "（5）思維：要求學生作慎思明辨（比較、歸納、推論）而非死記。"
-    "干擾項設計："
-    "常見錯誤包括只看字面不顧語境、把作者/敘述者觀點混淆、把描寫當論證、以偏概全、"
-    "忽略關鍵詞句/承接轉折、將情感線索斷裂、混淆修辭效果。"
-    "用語要求："
-    "題幹與選項需使用課程常用語：『細讀文本』『誦讀/背誦』『文道並重』『慎思明辨』"
-    "『語文自學』『文化認識/反思/認同』等；避免只考術語定義。"
-),
-
-# ====== 中國歷史：更貼合課程九時期＋三主軸＋探究學習 ======
-"中國歷史（中一至中三）": (
-    "重點：九個歷史時期（史前至夏商周、秦漢、三國兩晉南北朝、隋唐、宋元、明、清、中華民國、中華人民共和國），"
-    "以政治演變為主，並以文化特色與香港發展作輔；加入社會文化史課題以提升興趣。"
-    "題型建議："
-    "（1）時期特徵題：用關鍵制度/政策/現象判斷所屬時期；"
-    "（2）因果與影響題：制度改革、民族互動、中外交流、外力衝擊的因果鏈；"
-    "（3）人物/事件配對：人物事蹟與其時代關係；"
-    "（4）史料/圖像題：用材料支持結論（避免純背誦）。"
-    "干擾項："
-    "混淆相近時期（例如不同改革/變法）、把文化特色誤當政治制度、忽略香港相關史事在中國脈絡中的位置、"
-    "用沒有證據的價值判斷取代分析。"
-    "用語："
-    "強調『探究式學習』『史識（鑑古知今）』『求真持平』與『國民身份認同/責任感』等價值觀元素，但必須以史料/史實作支撐。"
-),
-
-    # 如你 app 下拉用「企業、會計及財務概論」，建議同時加一個同義鍵
-    "企業、會計及財務概論": (
-        "重點：營商環境（經濟/社會/政治法律/科技等因素）、企業擁有權類型（獨資/合夥/有限公司）及其優劣、"
-        "商業道德與社會責任（持份者/道德決策）、會計作商業溝通語言（會計資訊與決策）、"
-        "管理功能（計劃/組織/領導/控制）、以及個人理財（時間價值/消費者信貸/投資與風險）。"
-        "題型：情境決策題（企業/消費者/投資者/僱員/企業家角色）、計算或概念應用、比較題（融資方式/擁有權類型/信貸產品）。"
-        "干擾項：把收入/利潤混淆、名義vs實質回報、風險vs回報關係、把短期現金流當作長期盈利、"
-        "忽略持份者與社會責任、把會計信息用途誤解。"
-        "用語：優先使用『持份者』『社會責任』『會計資訊』『策略/管理功能』『時間值（現值/未來值）』等。"
+    # app 下拉選單用「中國歷史」，所以要有這個 key
+    "中國歷史": (
+        "重點：九個歷史時期以政治演變為主，兼及文化特色與香港發展；強調史料分析、因果、脈絡、比較與評價。"
+        "題型：時期特徵判斷、因果與影響、人物/事件配對、史料/圖像題。"
+        "干擾項：相近時期混淆、把文化特色誤當政治制度、忽略香港在中國脈絡的位置、無證據價值判斷。"
+        "用語：『史料』『脈絡』『因果』『比較』『評價』『求真持平』『探究式學習』等。"
     ),
 
-    # ===== 新增：旅遊與款待（中四至中六）=====
-    "旅遊與款待": (
-        "重點：旅遊與款待業的重要性、旅遊系統與界別（旅遊業/款待業/交通/公營與私營機構/中介分銷途徑）、"
-        "旅遊與款待業的影響（經濟/社會文化/環境的正負面影響）、可持續發展旅遊策略、"
-        "顧客服務原則與技巧、專業操守，以及本地與國際趨勢與議題。"
-        "題型：情境服務題（顧客需要/客務流程/處理投訴）、案例分析（目的地/景點/酒店/旅行社）、"
-        "概念辨析（旅遊vs旅行/旅客分類/承載力/可持續發展）、利弊題。"
-        "干擾項：把旅遊影響只講正面、忽略承載力限制、把服務禮儀當作唯一專業、"
-        "混淆旅遊界別角色（旅行代理商vs旅行團經營商）、忽略東道主與文化尊重。"
-        "用語：優先使用『可持續發展』『承載力』『顧客服務』『東道主』『旅遊系統/分銷途徑』等。"
-    ),
-"科學": (
-    "重點：初中科學以主題式設計，涵蓋「生命與生活、物料世界、能量與變化、地球與太空」，"
-    "並強調「科學、科技、社會與環境（STSE）」連繫與 STEM 綜合應用。"
-    "出題必須同時評核：科學概念 + 科學探究（過程技能）+ 負責任公民態度。"
-    "核心框架（統一概念）必須滲入題幹或選項："
-    "（1）系統和組織（系統由組成部分構成、按層次組織）；"
-    "（2）證據和模型（以觀察/數據支持解釋或用模型作預測）；"
-    "（3）變化和恆常（過程引致改變；某些特質保持不變）；"
-    "（4）形態與功能（結構解釋功能、功能亦反映結構）。"
-    "探究技能必須滲入：觀察/分類、提出問題、假說、辨識變量、公平測試、使用儀器量度、"
-    "以圖表展示數據、推論與結論、用科學語言傳意。"
-    "常見干擾項（要刻意設計）："
-    "把『相關性』當作『因果』、混淆自變量/因變量/控制變量、忘記公平測試、"
-    "把模型當事實、忽略證據不足與測量誤差、把能量『消失』而非轉換（能量守恆）、"
-    "把安全守則/風險管理忽略（尤其實驗室、化學品與加熱）。"
-    "用語要求：優先使用課程常用語如「科學本質」「科學探究」「公平測試」「控制變量」"
-    "「證據」「模型」「科學語言」「負責任公民」「可持續發展」「STSE」等。"
-),
-    
-"科學（中一至中三）": (
-    "重點同「科學」，但更貼近初中 14 單元的學習脈絡（如科學入門、水、觀察生物、細胞與遺傳、"
-    "能量、粒子觀、電、酸鹼、環境察覺、力與運動、健康身體、原子到材料、光與光譜）。"
-    "題型建議：生活情境題 + 實驗設計題 + 數據/圖表判讀題（折線/柱狀/直方/概念圖）+ STSE 議題題。"
-    "干擾項：把『物態變化溫度恆常』誤解、把溶解速率因素混淆、把生物分類的主要特徵與功能脫節、"
-    "把 DNA/染色體/性染色體概念混用、把能源議題只講科技不講污染與資源限制。"
-),
-    
-"地理": (
-    "重點：以「空間、地方、區域、人與環境互動、全球相互依存、可持續發展」等核心概念出題，"
-    "並以議題探究方式培養地理思考與探究能力（提出問題→蒐集一/二手數據→組織展示→分析闡釋→結論）。"
-    "初中課程結構為三部分十二單元："
-    "甲部（香港到世界：空間/地方）、乙部（中國到世界：區域問題/人地互動）、丙部（全球挑戰：相互依存/可持續）。"
-    "題型建議："
-    "（1）地圖/照片/衛星圖像判讀：區位、形態、分布與轉變；"
-    "（2）數據題：圖表（柱/線/圓）、密度/比率/百分比、趨勢與關係；"
-    "（3）實地考察情境題：觀察、量度、訪問、記錄、草圖、抽樣；"
-    "（4）可持續發展決策題：評估方案、權衡利弊、持份者觀點。"
-    "常見干擾項（要刻意設計）："
-    "混淆『在哪裏』與『為甚麼在那裏』（區位 vs 因素）、把描述當解釋、因果倒置、忽略尺度（本地/區域/全球）、"
-    "把相關當因果、忽略資料可靠性與偏差、地圖比例/方向/圖例誤讀、把 GIS 當作地圖圖片而非分析工具。"
-    "用語要求：題幹可用『它在哪裏/為甚麼/如何改變/帶來甚麼影響/如何管理』的地理思考問題鏈，"
-    "並使用『地理探究』『實地考察』『空間數據』『可持續發展』『全球相互依存』等用語。"
-),
-"地理（中一至中三）": (
-    "重點同「地理」，但更貼初中要求：三年內修讀 9 單元（6 核心 + 3 選修），每單元約 11 小時（含實地與空間數據探究）。"
-    "出題常用情境：香港城市土地利用/城市問題、自然災害（山泥傾瀉/熱帶氣旋/地震等）、旅遊、氣候變化、"
-    "中國糧食與水問題、能源/製造業轉移、疾病/海洋等（以課程單元為情境）。"
-    "干擾項：把『全球議題』只當背誦事實、忽略比較（香港/中國/世界）、忽略價值觀與行動層面（可持續方案）。"
-),
-    "地理（中四至中六）": (
-    "重點：高中地理以「空間、地方、環境」三大核心，透過探究式學習建立地理認知與探究能力，"
-    "強調明辨性思考、數據處理、價值澄清與可持續發展決策。"
-    "課程架構：必修 68%（7 個議題/問題，分三主題）+ 選修 20%（4 選 2）+ 實地考察 12%（含空間數據探究）。"
-    "必修三主題七議題："
-    "（1）與自然環境共存：災害頻生地區（板塊→地震/火山/海嘯、風險與脆弱性）、河流與海岸管理；"
-    "（2）人文環境轉變：工業區位轉變（區位因素、全球化、科技/政策）、可持續城市；"
-    "（3）全球性挑戰：饑荒（農業區位/科技/可持續）、雨林砍伐（生態系統/衝突/保育）、氣候變化（證據/成因/減緩與適應）。"
-    "選修單元：動態的地球、天氣與氣候、運輸發展規劃管理、珠江三角洲區域研習。"
-    "題型建議："
-    "（1）『五W』探究鏈：是甚麼/在哪裏/如何/為何/如果…會怎樣（要求論據與證據）；"
-    "（2）多源資料題：地圖+統計+照片/衛星圖像+新聞材料（資料可靠性判斷）；"
-    "（3）評鑑題：比較較發達/欠發達地區的脆弱性與政策選擇；"
-    "（4）管理策略題：硬/軟工程、土地利用分區、保育/發展權衡、持份者角度。"
-    "常見干擾項："
-    "只背『結論』不以證據推導、把區位因素當固定不變、忽略尺度與時空變化、把環境訴求單一化、"
-    "忽略價值觀差異對決策的影響、把 GIS 當作繪圖而非分析、把相關性當因果。"
-    "用語要求：必用『區位與分布』『人地關係』『區域特徵』『可持續發展』『明辨性思考』『地理探究』"
-    "『實地考察/空間數據』等語彙。"
-),
-
-# ====== 經濟（中四至中六）======
-"經濟": (
-    "重點：以『實證分析 + 規範判斷』並行，訓練學生用經濟學概念/模型作明辨性思考與理性決策；"
-    "課程核心涵蓋：基本概念（稀少性、選擇、機會成本、私有產權、專門化/交易）、"
-    "微觀（需求供應、彈性、盈餘、價格功能、政府干預、效率與公平、收入分配）、"
-    "宏觀（GDP/物價/失業等量度、AD-AS、貨幣與銀行、政策）、以及國際貿易與金融（比較優勢等）。"
-    "題型建議："
-    "（1）需求/供應圖與比較靜態：均衡、移動、稅/津貼/配額/價格上限下限的影響（含消費者/生產者盈餘與淨損失）；"
-    "（2）彈性：弧彈性計算 + 與總收入關係；"
-    "（3）宏觀：GDP（三面/名義實質/平減指數或CPI比較）、失業率/就業不足率計算與詮釋、AD-AS短期/長期比較；"
-    "（4）制度與政策：效率 vs 公平（收入不均、洛倫茨曲線/堅尼系數詮釋）、政策取捨（收入均等化/機會均等化、稅轉移抑制作用）。"
-    "常見干擾項（要刻意設計）："
-    "混淆『稀少性』與『短缺』；把機會成本當作所有成本（其實只計被放棄選擇中價值最高者）；"
-    "混淆『需求量改變』與『需求改變』（供應同理）；"
-    "把『效率』等同『公平』；把 GDP 直接等同經濟福利；把失業率誤當所有未工作者比例；"
-    "混淆『比較優勢』與『絕對優勢』；忘記『有效』價格干預/配額才有影響。"
-    "用語要求：必須使用課程常用詞：稀少性、機會成本、邊際、均衡、彈性、盈餘、淨損失、"
-    "效率、公平、收入分配、GDP、物價指數、失業率、AD-AS、貨幣供應/需求、比較優勢、匯率等；"
-    "並鼓勵在答案解釋（explanation）用『先指出屬實證/規範→再用模型與證據推論』的結構。"
-),
-
-
-# ====== 資訊及通訊科技（ICT）（中四至中六）======
-"資訊及通訊科技（ICT）": (
-    "重點：ICT 以『資訊處理 + 系統理解 + 互聯網與保安 + 計算思維/程式 + 社會影響（道德/法律）』為主軸，"
-    "強調資訊素養（有效選取/組織/分析/使用資訊）、解難與創意、以及負責任與有道德使用科技。"
-    "課程結構：必修五單元（資訊處理、電腦系統基礎、互聯網及其應用、計算思維與程式編寫、ICT對社會影響），"
-    "選修三選二（數據庫、網絡應用程式開發、算法與程式編寫）。"
-    "題型建議："
-    "（1）資訊處理：數據與資訊分別、資料流程（收集/組織/分析/儲存/傳輸/演示）、試算表數據分析（如樞紐分析表、假設情境）、"
-    "數據表示（十/二/十六進制轉換、溢出、字符編碼如 ASCII/Unicode、多媒體檔案格式比較）；"
-    "（2）系統基礎：硬件/軟件/數據關係、CPU基本概念、儲存與周邊、系統軟件；"
-    "（3）互聯網：LAN/WAN、TCP/IP、DNS、HTTP/HTTPS、URL、網上威脅與保安（私隱、身份驗證、加密/SSL等概念層面）；"
-    "（4）程式：計算思維（抽象化/分解/模式/算法）、流程圖/偽代碼、控制結構、模組化、測試與除錯（語法/邏輯/運行時錯誤）；"
-    "（5）社會影響：知識產權（版權/授權/數碼水印/數碼簽署等概念層面）、健康與道德議題（人機工程/RSI/數碼隔閡）。"
-    "常見干擾項（要刻意設計）："
-    "二進制轉換/補碼與溢出概念混亂；ASCII vs Unicode 混淆；RAM/ROM/Cache 混用；"
-    "HTTP vs HTTPS／DNS 功能誤解；SQL/資料庫概念（主鍵/外鍵/冗餘/正規化）混淆；"
-    "把『語法錯誤』當成『邏輯錯誤』或忽略邊界測試。"
-    "用語要求：必須使用課程常用語：資訊素養、DBMS、SQL、LAN/WAN、TCP/IP、HTTP/HTTPS、DNS、"
-    "計算思維、算法、模組化、測試與除錯、知識產權、私隱、網上保安、道德使用等。"
-),
-
-
-    # ✅ 新增：宗教（硬性規定天主教用字）
     "宗教": (
         "【天主教用字硬規則】\n"
         "1) 必須使用天主教版本用字，嚴禁使用基督宗教其他派別常用詞。\n"
-        "2) 必用詞：\n"
-        "   - 天主（不用「上帝」「神」）\n"
-        "   - 伯多祿（不用「彼得」）\n"
-        "   - 聖母瑪利亞（不用單稱「馬利亞」作敬禮語境）\n"
-        "   - 教宗、主教、神父（不用「牧師」「長老」「傳道」）\n"
-        "   - 教友（避免用「基督徒」作天主教內部稱呼）\n"
-        "3) 題幹/選項/解說應維持天主教教理語境與概念（例如聖事、彌撒、聖體、教會、信經等）。\n"
-        "4) 干擾項：以常見概念混淆（例如：聖事/禮儀、教會訓導/個人意見、聖經/聖傳等）作設計。\n"
+        "2) 必用詞：天主（不用「上帝」「神」）、伯多祿（不用「彼得」）、聖母瑪利亞、教宗/主教/神父、教友。\n"
+        "3) 題幹/選項/解說維持天主教教理語境（聖事、彌撒、聖體、教會、信經等）。\n"
+        "4) 干擾項：以概念混淆（聖事/禮儀、聖經/聖傳、訓導/個人意見等）設計。\n"
+    ),
+
+    # ==== 數理科 / 科學 ====
+    "數學": (
+        "重點：概念+運算、步驟正確、圖像/表格解讀、公式應用。干擾項：公式套錯、單位/符號錯、概念混淆。"
+    ),
+    "物理": (
+        "重點：定律應用、方向性、單位、圖像解讀。干擾項：方向/符號錯、把速度當加速度。"
+    ),
+    "化學": (
+        "重點：粒子模型、方程式、酸鹼/氧化還原、實驗觀察。干擾項：配平錯、概念混淆。"
+    ),
+    "生物": (
+        "重點：結構與功能、恆常性、遺傳、生態互動。干擾項：器官功能混淆、相關性當因果。"
+    ),
+
+    # 你 app 下拉選單用「科學」，保留詳細版（刪走舊短版）
+    "科學": (
+        "重點：初中科學以主題式設計，涵蓋生命與生活、物料世界、能量與變化、地球與太空；"
+        "並強調科學、科技、社會與環境（STSE）及 STEM 綜合應用。"
+        "統一概念：系統和組織、證據和模型、變化和恆常、形態與功能。"
+        "科學探究：提出問題/假說、辨識變量、公平測試、量度、圖表、數據分析、推論與結論、科學語言傳意。"
+        "干擾項：把相關性當因果、混淆自變量/因變量/控制變量、忽略公平測試、把模型當事實、忽略誤差與安全守則。"
+    ),
+
+    # ==== 地理 ====
+    "地理": (
+        "重點：核心概念（空間、地方、區域、人地互動、全球相互依存、可持續發展）；"
+        "以議題探究（提問→蒐集→組織→分析→結論）培養地理思考。"
+        "題型：地圖/照片/衛星圖像判讀、圖表與統計（密度/比率/趨勢）、實地考察情境、可持續決策（權衡利弊/持份者）。"
+        "干擾項：把描述當解釋、因果倒置、忽略尺度、地圖比例/方向/圖例誤讀、把 GIS 當圖片而非分析工具。"
+    ),
+
+    # ==== 經濟 ====
+    # 你 app 下拉選單用「經濟」，保留詳細版（刪走舊短版）
+    "經濟": (
+        "重點：實證分析 + 規範判斷並行；用經濟學概念/模型作明辨性思考與理性決策。"
+        "核心：稀少性/機會成本/私有產權/專門化；需求供應/彈性/盈餘/干預/效率公平；"
+        "宏觀（GDP/物價/失業、AD-AS、貨幣與銀行、政策）及國際貿易（比較優勢等）。"
+        "題型：供需圖比較靜態、稅/津貼/配額/價格上限下限、盈餘與淨損失、弧彈性計算、GDP/失業率詮釋、AD-AS短長期比較。"
+        "干擾項：稀少性≠短缺；需求改變≠需求量改變（供應同理）；效率≠公平；GDP≠福利；比較優勢≠絕對優勢；干預需有效才有影響。"
+        "用語：稀少性、機會成本、邊際、均衡、彈性、盈餘、淨損失、GDP、物價指數、失業率、AD-AS、貨幣供應/需求等。"
+    ),
+
+    # ==== 公民、經濟及社會（app 用「公民、經濟及社會」，所以加 alias）====
+    "公民、經濟及社會": (
+        "重點：三大範疇——"
+        "（1）個人與群性發展；（2）資源與經濟活動（理財/公共財政/經濟指標）；（3）社會體系與公民精神（法治/基本法/國民身份等）。"
+        "題型：情境題、數據/表格解讀、概念辨析、因果與利弊分析。"
+        "干擾項：把描述當解釋、因果倒置、權利vs義務、公平vs公義、需要vs想要混淆、忽略數據趨勢。"
+    ),
+    "公民、經濟與社會": (  # 你早前也用過這個寫法，保留同義 key
+        "重點同「公民、經濟及社會」。題型與干擾項同上。"
+    ),
+
+    # ==== ICT（app key：資訊及通訊科技（ICT））====
+    "資訊及通訊科技（ICT）": (
+        "重點：資訊處理 + 系統理解 + 互聯網與保安 + 計算思維/程式 + 社會影響（道德/法律）。"
+        "強調資訊素養（選取/組織/分析/使用資訊）、解難與創意、負責任使用科技。"
+        "題型：進制轉換/溢出、字符編碼（ASCII/Unicode）、試算表/樞紐分析、DBMS/SQL、"
+        "網絡概念（TCP/IP、DNS、HTTP/HTTPS）、程式流程與除錯（語法/邏輯/運行時）、知識產權/私隱/網安。"
+        "干擾項：RAM/ROM/Cache 混用、HTTP vs HTTPS 誤解、ASCII vs Unicode 混淆、SQL鍵/冗餘/正規化概念混亂、忽略邊界測試。"
+    ),
+
+    # ==== BAFS / 旅遊與款待（補齊 app key）====
+    "企業、會計與財務概論": (
+        "重點：營商環境、擁有權形式、商業道德/社會責任、會計資訊、管理功能、個人理財。"
+        "干擾項：收入/利潤混淆、名義vs實質回報、風險vs回報、短期現金流當長期盈利、忽略持份者。"
+    ),
+    "企業、會計及財務概論": (  # 同義 key
+        "重點同「企業、會計與財務概論」。"
+    ),
+
+    "旅遊與款待": (
+        "重點：旅遊與款待系統與界別、影響（經濟/社會文化/環境）、可持續發展、顧客服務、專業操守。"
+        "干擾項：只講正面忽略承載力/負面影響、角色混淆（代理商/營辦商）、忽略文化尊重。"
     ),
 }
 
@@ -332,28 +200,20 @@ def _prefix_review_warning(expl: str) -> str:
 
 
 # -------------------------
-# ✅ 宗教科：天主教用字後處理（自動校正 + 違規標記 needs_review）
+# 宗教科：天主教用字後處理（自動校正 + 違規標記 needs_review）
 # -------------------------
 _CATHOLIC_REPLACE = [
-    # 安全直接替換
     (r"\b彼得\b", "伯多祿"),
     (r"\b上帝\b", "天主"),
     (r"\b神\b", "天主"),
-    # 「馬利亞」在敬禮語境常見：保守做法：直接替換為「聖母瑪利亞」
     (r"\b馬利亞\b", "聖母瑪利亞"),
-    # 「基督徒」作天主教內部稱呼時：替換為「教友」
     (r"\b基督徒\b", "教友"),
 ]
 
-# 這些詞通常表示「基督宗教其他派別領袖稱謂」，不建議自動換成神父/主教（語境未必對）
 _CATHOLIC_FLAG_ONLY = [
-    "牧師",
-    "長老",
-    "傳道",
-    "傳道人",
-    "會眾",
-    "敬拜讚美",  # 常見新教用語（視校本而定）
+    "牧師", "長老", "傳道", "傳道人", "會眾", "敬拜讚美"
 ]
+
 
 def _apply_catholic_terms(text: str) -> str:
     if not text:
@@ -371,11 +231,6 @@ def _contains_flag_terms(text: str) -> bool:
 
 
 def _enforce_catholic_language(item: dict) -> dict:
-    """
-    對單題做後處理：
-    - 可安全替換的詞：直接替換
-    - 若出現「不應自動替換」的派別用語：needs_review=True + explanation 加警告
-    """
     q = str(item.get("question", "") or "")
     exp = str(item.get("explanation", "") or "")
     opts = item.get("options", [])
@@ -396,7 +251,6 @@ def _enforce_catholic_language(item: dict) -> dict:
     item["explanation"] = exp2.strip()
     item["options"] = opts2[:4] + [""] * (4 - len(opts2[:4]))
     item["needs_review"] = needs_review
-
     return item
 
 
@@ -404,19 +258,9 @@ def _enforce_catholic_language(item: dict) -> dict:
 # HTTP：OpenAI 相容 / Azure
 # -------------------------
 def _post_openai_compat(api_key: str, base_url: str, payload: dict, timeout: int = 90, max_retries: int = 5):
-    """
-    OpenAI 相容 API（OpenAI / DeepSeek / 自訂 OpenAI-compatible）
-    正確 Header：Authorization: Bearer <API_KEY>
-    加入：timeout tuple + retry + session lock + session reset
-    """
     url = base_url.rstrip("/") + "/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-
-    # connect/read timeout 分拆，避免讀取長回應時更容易斷線
-    t = (15, timeout) # connect 15s, read timeout 90/180s
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    t = (15, timeout)  # connect, read
 
     last_err = None
     for attempt in range(max_retries):
@@ -428,18 +272,16 @@ def _post_openai_compat(api_key: str, base_url: str, payload: dict, timeout: int
 
         except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout) as e:
             last_err = e
-            # 指數退避 + 抖動
-            time.sleep(((2 ** attempt) * 2)+ random.random())
+            time.sleep(((2 ** attempt) * 2) + random.random())
             with _SESSION_LOCK:
                 _reset_session()
 
         except requests.exceptions.HTTPError:
-            # 401/403/429/5xx 等，交回上層處理（唔好盲目重試浪費quota）
             raise
 
         except requests.exceptions.RequestException as e:
             last_err = e
-            time.sleep((2 ** attempt) + random.random())
+            time.sleep(((2 ** attempt) * 2) + random.random())
             with _SESSION_LOCK:
                 _reset_session()
 
@@ -447,13 +289,8 @@ def _post_openai_compat(api_key: str, base_url: str, payload: dict, timeout: int
 
 
 def _post_azure(api_key: str, endpoint: str, deployment: str, api_version: str, payload: dict, timeout: int = 90, max_retries: int = 3):
-    """
-    Azure OpenAI：Header 用 api-key
-    加入：timeout tuple + retry + session lock + session reset
-    """
     url = endpoint.rstrip("/") + f"/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
     headers = {"api-key": api_key, "Content-Type": "application/json"}
-
     t = (10, timeout)
 
     last_err = None
@@ -480,42 +317,31 @@ def _post_azure(api_key: str, endpoint: str, deployment: str, api_version: str, 
                 _reset_session()
 
     raise requests.exceptions.ConnectionError(f"Azure request failed after retries: {last_err}")
+
+
 def _chat(cfg: dict, messages: list, temperature: float, max_tokens: int, timeout: int):
-    """
-    統一呼叫 LLM 的入口：
-    - cfg['type'] == 'azure' → Azure OpenAI
-    - 其他 → OpenAI-compatible（DeepSeek / OpenAI / 自訂）
-    """
+    """統一呼叫 LLM 的入口"""
     if cfg.get("type") == "azure":
         data = _post_azure(
             api_key=cfg["api_key"],
             endpoint=cfg["endpoint"],
             deployment=cfg["deployment"],
             api_version=cfg.get("api_version", "2024-02-15-preview"),
-            payload={
-                "messages": messages,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-            },
+            payload={"messages": messages, "temperature": temperature, "max_tokens": max_tokens},
             timeout=timeout,
         )
     else:
         data = _post_openai_compat(
             api_key=cfg["api_key"],
             base_url=cfg["base_url"],
-            payload={
-                "model": cfg["model"],
-                "messages": messages,
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-            },
+            payload={"model": cfg["model"], "messages": messages, "temperature": temperature, "max_tokens": max_tokens},
             timeout=timeout,
         )
-
     return data.get("choices", [{}])[0].get("message", {}).get("content", "")
 
+
 # -------------------------
-# 自動修 JSON（失敗自救，減少老師見到錯誤）
+# 自動修 JSON（失敗自救）
 # -------------------------
 def _fix_json(cfg: dict, bad_output: str, schema_hint: str, timeout: int):
     prompt = f"""
@@ -534,17 +360,12 @@ def _fix_json(cfg: dict, bad_output: str, schema_hint: str, timeout: int):
 def _call_with_retries(cfg: dict, messages: list, temperature: float, max_tokens: int, timeout: int, schema_hint: str):
     out = _chat(cfg, messages, temperature=temperature, max_tokens=max_tokens, timeout=timeout)
     try:
-        items = extract_json(out)
-        return items
+        return extract_json(out)
     except Exception:
         out2 = _fix_json(cfg, out, schema_hint=schema_hint, timeout=timeout)
-        items2 = extract_json(out2)
-        return items2
+        return extract_json(out2)
 
 
-# -------------------------
-# Few-shot：最短示例（提高格式穩定）
-# -------------------------
 _FEWSHOT = """
 示例（只示範格式，不要照抄內容）：
 [
@@ -584,7 +405,6 @@ def generate_questions(cfg, text, subject, level, question_count, fast_mode: boo
     max_tokens = 1200 if fast_mode else 1800
     timeout = 90 if fast_mode else 180
 
-    # ✅ 宗教科：額外硬規則再加一層，讓模型更少走樣
     catholic_hard_rule = ""
     if subject == "宗教":
         catholic_hard_rule = """
@@ -638,7 +458,6 @@ def generate_questions(cfg, text, subject, level, question_count, fast_mode: boo
 
         if len(expl) > 40:
             expl = expl[:40]
-
         if needs_review:
             expl = _prefix_review_warning(expl)
 
@@ -651,7 +470,6 @@ def generate_questions(cfg, text, subject, level, question_count, fast_mode: boo
             "needs_review": needs_review,
         }
 
-        # ✅ 宗教科：後處理強制天主教用字 + 標記
         if subject == "宗教":
             item = _enforce_catholic_language(item)
 
@@ -783,9 +601,9 @@ def parse_import_questions_locally(raw_text: str):
             needs_review = True
 
         optA = re.search(r"(?:\n|\r|\A)\s*(?:A[\.\)、\)]|\(A\))\s*(.+)", b)
-        optB = re.search(r"(?:\n|\r|\A)\s*(?:B[\.\)、\)]|\(B\))\s*(.+)", b)
-        optC = re.search(r"(?:\n|\r|\A)\s*(?:C[\.\)、\)]|\(C\))\s*(.+)", b)
-        optD = re.search(r"(?:\n|\r|\A)\s*(?:D[\.\)、\)]|\(D\))\s*(.+)", b)
+        optB = re.search(r"(?:\n|\r|\A)\s*(?:B[\.\、\)]|\(B\))\s*(.+)", b)
+        optC = re.search(r"(?:\n|\r|\A)\s*(?:C[\.\、\)]|\(C\))\s*(.+)", b)
+        optD = re.search(r"(?:\n|\r|\A)\s*(?:D[\.\、\)]|\(D\))\s*(.+)", b)
 
         options = [
             optA.group(1).strip() if optA else "",
@@ -796,22 +614,17 @@ def parse_import_questions_locally(raw_text: str):
         options = _normalize_options(options)
 
         qstem = re.sub(r"(?:答案|Answer)\s*[:：]\s*([A-D]|[1-4]).*", "", b, flags=re.IGNORECASE).strip()
-        qstem = re.sub(r"(?m)^\s*(?:[A-D][\.\)、\)]|\([A-D]\))\s*.+$", "", qstem).strip()
+        qstem = re.sub(r"(?m)^\s*(?:[A-D][\.\、\)]|\([A-D]\))\s*.+$", "", qstem).strip()
 
         expl = "⚠️需教師確認：未找到答案，請老師核對。" if needs_review else ""
 
-        item = {
+        out.append({
             "type": "single",
             "question": qstem,
             "options": options,
             "correct": [correct_num],
             "explanation": expl,
             "needs_review": needs_review,
-        }
-
-        # 本地解析如要強制天主教用字，也可以加：
-        # item = _enforce_catholic_language(item)
-
-        out.append(item)
+        })
 
     return out
