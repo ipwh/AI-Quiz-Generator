@@ -1,4 +1,4 @@
-# 香港中學 AI 題目生成器（多 API｜Google Forms 直出｜無 OCR）
+# 香港中學 AI 題目生成器（多 API｜Kahoot,Wayground,Google Form 直出｜無 OCR）
 
 ## 功能
 - 🪄 AI 生成新題目：上載 PDF/DOCX/TXT/PPTX/XLSX 生成 4 選 1
@@ -11,8 +11,8 @@
 ## 無 OCR
 - 本版本已移除 OCR，因此不接受圖片檔。
 
-## Google Forms 一鍵建立（方案 B3）
-本專案使用 Google Forms API：先建立表單，再用 batchUpdate 將表單設為 quiz 並加入題目。citeturn72search34turn72search36
+## Google Forms 一鍵建立
+本專案使用 Google Forms API：先建立表單，再用 batchUpdate 將表單設為 quiz 並加入題目。
 
 ### 你需要做一次的 Google Cloud 設定
 1. 建立 Google Cloud Project
