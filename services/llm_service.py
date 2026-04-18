@@ -325,7 +325,7 @@ def _enforce_catholic_language(item: dict) -> dict:
 # -------------------------
 # HTTP：OpenAI 相容 / Azure
 # -------------------------
-def _post_openai_compat(api_key: str, base_url: str, payload: dict, timeout: int = 90, max_retries: int = 3):
+def _post_openai_compat(api_key: str, base_url: str, payload: dict, timeout: int = 90, max_retries: int = 5):
     """
     OpenAI 相容 API（OpenAI / DeepSeek / 自訂 OpenAI-compatible）
     正確 Header：Authorization: Bearer <API_KEY>
@@ -351,7 +351,7 @@ def _post_openai_compat(api_key: str, base_url: str, payload: dict, timeout: int
         except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout) as e:
             last_err = e
             # 指數退避 + 抖動
-            time.sleep((2 ** attempt) + random.random())
+            time.sleep(((2 ** attempt) * 2)+ random.random())
             with _SESSION_LOCK:
                 _reset_session()
 
