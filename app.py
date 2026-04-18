@@ -221,9 +221,9 @@ if st.sidebar.button("🧪 一鍵測試 API"):
     else:
             st.sidebar.warning("⚠️ 已連線，但回覆未完全按指令（仍可視作可用）")
             st.sidebar.caption(f"回覆：{out_text[:80]}")
-else:
-    st.sidebar.error("❌ 連線失敗：請檢查 Key/Endpoint/Model 或服務狀態")
-    st.sidebar.code(r["error"])
+    else:
+            st.sidebar.error("❌ 連線失敗：請檢查 Key/Endpoint/Model 或服務狀態")
+            st.sidebar.code(r["error"])
 
 
 st.sidebar.divider()
