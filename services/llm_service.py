@@ -8,6 +8,17 @@ import random
 _SESSION = requests.Session()
 _SESSION_LOCK = threading.Lock()
 
+def _reset_session():
+    """
+    重新建立 requests.Session（當 keep-alive 連線壞咗、或 ConnectionError 時用）
+    用 helper 包住 global，避免在其他函數出現 'used prior to global' 語法錯。
+    """
+    global _SESSION
+    try:
+        _SESSION.close()
+    except Exception:
+        pass
+    _SESSION = requests.Session()
 # -------------------------
 # 科目特性（可按校本再擴充）
 # -------------------------
@@ -313,26 +324,19 @@ def _enforce_catholic_language(item: dict) -> dict:
 # -------------------------
 # HTTP：OpenAI 相容 / Azure
 # -------------------------
-def _post_openai_compat(
-    api_key: str,
-    base_url: str,
-    payload: dict,
-    timeout: int = 90,
-    max_retries: int = 3
-):
+def _post_openai_compat(api_key: str, base_url: str, payload: dict, timeout: int = 90, max_retries: int = 3):
     """
-    OpenAI 相容 API（OpenAI/DeepSeek/自訂 OpenAI-compatible）
-    正確 header 必須用 Authorization: Bearer <key>
-    同時加入：connect/read timeout 分拆 + retry + session lock
+    OpenAI 相容 API（OpenAI / DeepSeek / 自訂 OpenAI-compatible）
+    正確 Header：Authorization: Bearer <API_KEY>
+    加入：timeout tuple + retry + session lock + session reset
     """
     url = base_url.rstrip("/") + "/chat/completions"
-
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
 
-    # (connect_timeout, read_timeout)
+    # connect/read timeout 分拆，避免讀取長回應時更容易斷線
     t = (10, timeout)
 
     last_err = None
@@ -340,50 +344,33 @@ def _post_openai_compat(
         try:
             with _SESSION_LOCK:
                 r = _SESSION.post(url, headers=headers, json=payload, timeout=t)
-
-            # 若係 4xx/5xx，raise_for_status 會拋 HTTPError
             r.raise_for_status()
             return r.json()
 
         except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout) as e:
-            # 網絡中斷 / 讀取超時 → 退避重試
             last_err = e
-            sleep_s = (2 ** attempt) + random.random()
-            time.sleep(sleep_s)
-
-            # 有時 session keep-alive 會壞掉，重建 session 會更穩
-            try:
-                with _SESSION_LOCK:
-                    global _SESSION
-                    _SESSION.close()
-                    _SESSION = requests.Session()
-            except Exception:
-                pass
+            # 指數退避 + 抖動
+            time.sleep((2 ** attempt) + random.random())
+            with _SESSION_LOCK:
+                _reset_session()
 
         except requests.exceptions.HTTPError:
-            # 401/403/429 等，交回上層顯示，唔好重試到浪費 quota
+            # 401/403/429/5xx 等，交回上層處理（唔好盲目重試浪費quota）
             raise
 
         except requests.exceptions.RequestException as e:
-            # 其他 requests 層錯誤：保守重試
             last_err = e
-            sleep_s = (2 ** attempt) + random.random()
-            time.sleep(sleep_s)
+            time.sleep((2 ** attempt) + random.random())
+            with _SESSION_LOCK:
+                _reset_session()
 
     raise requests.exceptions.ConnectionError(f"OpenAI-compatible request failed after retries: {last_err}")
 
-def _post_azure(
-    api_key: str,
-    endpoint: str,
-    deployment: str,
-    api_version: str,
-    payload: dict,
-    timeout: int = 90,
-    max_retries: int = 3
-):
+
+def _post_azure(api_key: str, endpoint: str, deployment: str, api_version: str, payload: dict, timeout: int = 90, max_retries: int = 3):
     """
-    Azure OpenAI：正確 header 是 api-key
-    同時加入 retry/timeout/lock
+    Azure OpenAI：Header 用 api-key
+    加入：timeout tuple + retry + session lock + session reset
     """
     url = endpoint.rstrip("/") + f"/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
     headers = {"api-key": api_key, "Content-Type": "application/json"}
@@ -400,23 +387,18 @@ def _post_azure(
 
         except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout) as e:
             last_err = e
-            sleep_s = (2 ** attempt) + random.random()
-            time.sleep(sleep_s)
-            try:
-                with _SESSION_LOCK:
-                    global _SESSION
-                    _SESSION.close()
-                    _SESSION = requests.Session()
-            except Exception:
-                pass
+            time.sleep((2 ** attempt) + random.random())
+            with _SESSION_LOCK:
+                _reset_session()
 
         except requests.exceptions.HTTPError:
             raise
 
         except requests.exceptions.RequestException as e:
             last_err = e
-            sleep_s = (2 ** attempt) + random.random()
-            time.sleep(sleep_s)
+            time.sleep((2 ** attempt) + random.random())
+            with _SESSION_LOCK:
+                _reset_session()
 
     raise requests.exceptions.ConnectionError(f"Azure request failed after retries: {last_err}")
 # -------------------------
