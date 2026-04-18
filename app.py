@@ -137,7 +137,7 @@ st.sidebar.header("🔌 AI API 設定")
 preset = st.sidebar.selectbox("快速選擇（簡易）", ["DeepSeek", "OpenAI", "Azure OpenAI", "自訂（OpenAI 相容）"])
 api_key = st.sidebar.text_input("API Key", type="password")
 
-if preset == "DeepSeek（推薦）":
+if preset == "DeepSeek":
     base_url = "https://api.deepseek.com/v1"
     model = "deepseek-chat"
 elif preset == "OpenAI":
