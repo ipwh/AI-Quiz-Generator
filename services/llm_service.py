@@ -19,7 +19,7 @@ def _reset_session():
 
 
 # -------------------------
-# 科目特性（按你已整理的版本；同義 key 已補）
+# 科目特性（同你已用緊的版本）
 # -------------------------
 SUBJECT_TRAITS = {
     "中國語文": (
@@ -153,7 +153,6 @@ _CATHOLIC_REPLACE = [
     (r"\b馬利亞\b", "聖母瑪利亞"),
     (r"\b基督徒\b", "教友"),
 ]
-
 _CATHOLIC_FLAG_ONLY = ["牧師", "長老", "傳道", "傳道人", "會眾", "敬拜讚美"]
 
 
@@ -184,8 +183,8 @@ def _enforce_catholic_language(item: dict) -> dict:
     opts2 = [_apply_catholic_terms(str(o or "")) for o in opts]
 
     flagged = _contains_flag_terms(q2) or _contains_flag_terms(exp2) or any(_contains_flag_terms(o) for o in opts2)
-
     needs_review = bool(item.get("needs_review", False)) or flagged
+
     if flagged:
         exp2 = _prefix_review_warning("用字可能出現非天主教版本稱謂/概念，請老師核對。 " + exp2)
 
@@ -269,8 +268,34 @@ def _chat(cfg: dict, messages: list, temperature: float, max_tokens: int, timeou
             payload={"model": cfg["model"], "messages": messages, "temperature": temperature, "max_tokens": max_tokens},
             timeout=timeout,
         )
-
     return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+
+
+# -------------------------
+# ✅ 新增：一鍵測試 API 用（極短 prompt）
+# -------------------------
+def ping_llm(cfg: dict, timeout: int = 25):
+    """
+    回傳 dict:
+      - ok: bool
+      - latency_ms: int
+      - output: str
+      - error: str
+    """
+    t0 = time.time()
+    try:
+        out = _chat(
+            cfg,
+            messages=[{"role": "user", "content": "回覆 OK"}],
+            temperature=0.0,
+            max_tokens=10,
+            timeout=timeout,
+        )
+        ms = int((time.time() - t0) * 1000)
+        return {"ok": True, "latency_ms": ms, "output": (out or "").strip(), "error": ""}
+    except Exception as e:
+        ms = int((time.time() - t0) * 1000)
+        return {"ok": False, "latency_ms": ms, "output": "", "error": repr(e)}
 
 
 def _fix_json(cfg: dict, bad_output: str, schema_hint: str, timeout: int):
