@@ -209,18 +209,18 @@ if st.sidebar.button("🧪 一鍵測試 API"):
         with st.sidebar.spinner("正在測試連線（通常 2–10 秒；慢時 10–30 秒）…"):
             r = ping_llm(cfg_test, timeout=25)
 
-        if r["ok"]:
-    ms = r["latency_ms"]
-    st.sidebar.success(f"✅ 連線成功：{ms} ms")
-    if ms >= 15000:
-        st.sidebar.warning("⚠️ 服務偏慢（可能對方繁忙或網絡不穩）")
+    if r["ok"]:
+        ms = r["latency_ms"]
+        st.sidebar.success(f"✅ 連線成功：{ms} ms")
+        if ms >= 15000:
+            st.sidebar.warning("⚠️ 服務偏慢（可能對方繁忙或網絡不穩）")
 
-    out_text = (r["output"] or "").strip()
-    if out_text == "OK":
-        st.sidebar.caption("回覆：OK")
+        out_text = (r["output"] or "").strip()
+        if out_text == "OK":
+            st.sidebar.caption("回覆：OK")
     else:
-        st.sidebar.warning("⚠️ 已連線，但回覆未完全按指令（仍可視作可用）")
-        st.sidebar.caption(f"回覆：{out_text[:80]}")
+            st.sidebar.warning("⚠️ 已連線，但回覆未完全按指令（仍可視作可用）")
+            st.sidebar.caption(f"回覆：{out_text[:80]}")
 else:
     st.sidebar.error("❌ 連線失敗：請檢查 Key/Endpoint/Model 或服務狀態")
     st.sidebar.code(r["error"])
