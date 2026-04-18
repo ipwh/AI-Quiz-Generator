@@ -5,7 +5,6 @@ pymupdf
 python-docx
 openpyxl
 python-pptx
-openpyxl
 google-auth
 google-auth-oauthlib
 google-api-python-client
