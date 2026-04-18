@@ -132,8 +132,9 @@ st.sidebar.divider()
 # =========================
 # Sidebar：AI API 設定（你可保留原本版本；此處保持簡化）
 # =========================
+fast_mode = st.sidebar.checkbox("⚡ 快速模式（更快但較保守）", value=True)
 st.sidebar.header("🔌 AI API 設定")
-preset = st.sidebar.selectbox("快速選擇（簡易）", ["DeepSeek（推薦）", "OpenAI", "Azure OpenAI", "自訂（OpenAI 相容）"])
+preset = st.sidebar.selectbox("快速選擇（簡易）", ["DeepSeek", "OpenAI", "Azure OpenAI", "自訂（OpenAI 相容）"])
 api_key = st.sidebar.text_input("API Key", type="password")
 
 if preset == "DeepSeek（推薦）":
@@ -197,7 +198,7 @@ if mode == "🪄 AI 生成新題目":
             st.session_state.generated_data = cache[key]
         else:
             with st.spinner("🤖 生成中..."):
-                st.session_state.generated_data = generate_questions(cfg, text, subject, level_code, question_count)
+                st.session_state.generated_data = generate_questions(cfg, text, subject, level_code, question_count, fast_mode=fast_mode)
             cache[key] = st.session_state.generated_data
             save_cache(cache)
 
@@ -238,7 +239,7 @@ if mode == "📄 匯入現有題目（AI 協助）":
         raw = st.session_state.imported_text.strip()
         with st.spinner("🧠 整理中..."):
             if use_ai_assist:
-                st.session_state.imported_data = assist_import_questions(cfg, raw, subject, allow_guess=True)
+                st.session_state.imported_data = assist_import_questions(cfg, raw, subject, allow_guess=True, fast_mode=fast_mode)
             else:
                 st.session_state.imported_data = parse_import_questions_locally(raw)
 
