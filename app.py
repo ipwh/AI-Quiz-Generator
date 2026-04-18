@@ -197,12 +197,12 @@ def can_call_ai(cfg: dict):
     return bool(cfg.get("base_url")) and bool(cfg.get("model"))
 
 
-# ✅ 新增：一鍵測試 API
+# ✅ 一鍵測試 API
 st.sidebar.divider()
 st.sidebar.header("🧪 API 連線測試")
 cfg_test = api_config()
 
-if st.sidebar.button("🧪 一鍵測試 API（回覆 OK）"):
+if st.sidebar.button("🧪 一鍵測試 API"):
     if not can_call_ai(cfg_test):
         st.sidebar.error("請先填妥 API Key／Base URL／Model（Azure 要 Endpoint + Deployment）。")
     else:
