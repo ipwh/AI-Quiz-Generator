@@ -125,7 +125,7 @@ else:
     else:
         auth_url = get_auth_url()
         st.sidebar.link_button("🔐 連接 Google（登入）", auth_url)
-        st.sidebar.caption("提示：避免多分頁登入；建議用同一分頁/無痕視窗完成授權。")
+        st.sidebar.caption("提示：若不用生成Google Form，則不用理會")
 
 st.sidebar.divider()
 
@@ -161,8 +161,8 @@ st.sidebar.divider()
 mode = st.sidebar.radio("📂 試題來源模式", ["🪄 AI 生成新題目", "📄 匯入現有題目（AI 協助）"])
 subject = st.sidebar.selectbox(
     "📘 科目",
-    ["中國語文","英國語文","數學","公民與社會發展","科學","物理","化學","生物",
-     "資訊及通訊科技（ICT）","地理","歷史","公民、經濟及社會","中國歷史","宗教","經濟"]
+    ["中國語文","英國語文","數學","公民與社會發展","科學","公民、經濟及社會","物理","化學","生物","地理","歷史","中國歷史","宗教",
+     "資訊及通訊科技（ICT）","經濟","企業、會計與財務概論","旅遊與款待"]
 )
 
 def api_config():
@@ -191,7 +191,7 @@ if mode == "🪄 AI 生成新題目":
 
     cfg = api_config()
     if st.button("生成題目", disabled=not (can_call_ai(cfg) and bool(files))):
-        text = "".join(extract_text(f) for f in files)[:5000]
+        text = "".join(extract_text(f) for f in files)[:6000]
         cache = load_cache()
         key = str(hash(text + subject + level_code + str(question_count)))
         if key in cache:
