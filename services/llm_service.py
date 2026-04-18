@@ -1,3 +1,5 @@
+import json
+import re
 import requests
 import threading
 import time
@@ -311,9 +313,77 @@ def _enforce_catholic_language(item: dict) -> dict:
 # -------------------------
 # HTTP：OpenAI 相容 / Azure
 # -------------------------
-def _post_azure(api_key: str, endpoint: str, deployment: str, api_version: str, payload: dict, timeout: int = 90, max_retries: int = 3):
+def _post_openai_compat(
+    api_key: str,
+    base_url: str,
+    payload: dict,
+    timeout: int = 90,
+    max_retries: int = 3
+):
     """
-    Azure OpenAI：同樣加入重試/退避/timeout 分拆/加鎖
+    OpenAI 相容 API（OpenAI/DeepSeek/自訂 OpenAI-compatible）
+    正確 header 必須用 Authorization: Bearer <key>
+    同時加入：connect/read timeout 分拆 + retry + session lock
+    """
+    url = base_url.rstrip("/") + "/chat/completions"
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    # (connect_timeout, read_timeout)
+    t = (10, timeout)
+
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            with _SESSION_LOCK:
+                r = _SESSION.post(url, headers=headers, json=payload, timeout=t)
+
+            # 若係 4xx/5xx，raise_for_status 會拋 HTTPError
+            r.raise_for_status()
+            return r.json()
+
+        except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout) as e:
+            # 網絡中斷 / 讀取超時 → 退避重試
+            last_err = e
+            sleep_s = (2 ** attempt) + random.random()
+            time.sleep(sleep_s)
+
+            # 有時 session keep-alive 會壞掉，重建 session 會更穩
+            try:
+                with _SESSION_LOCK:
+                    global _SESSION
+                    _SESSION.close()
+                    _SESSION = requests.Session()
+            except Exception:
+                pass
+
+        except requests.exceptions.HTTPError:
+            # 401/403/429 等，交回上層顯示，唔好重試到浪費 quota
+            raise
+
+        except requests.exceptions.RequestException as e:
+            # 其他 requests 層錯誤：保守重試
+            last_err = e
+            sleep_s = (2 ** attempt) + random.random()
+            time.sleep(sleep_s)
+
+    raise requests.exceptions.ConnectionError(f"OpenAI-compatible request failed after retries: {last_err}")
+
+def _post_azure(
+    api_key: str,
+    endpoint: str,
+    deployment: str,
+    api_version: str,
+    payload: dict,
+    timeout: int = 90,
+    max_retries: int = 3
+):
+    """
+    Azure OpenAI：正確 header 是 api-key
+    同時加入 retry/timeout/lock
     """
     url = endpoint.rstrip("/") + f"/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
     headers = {"api-key": api_key, "Content-Type": "application/json"}
@@ -332,6 +402,13 @@ def _post_azure(api_key: str, endpoint: str, deployment: str, api_version: str, 
             last_err = e
             sleep_s = (2 ** attempt) + random.random()
             time.sleep(sleep_s)
+            try:
+                with _SESSION_LOCK:
+                    global _SESSION
+                    _SESSION.close()
+                    _SESSION = requests.Session()
+            except Exception:
+                pass
 
         except requests.exceptions.HTTPError:
             raise
@@ -342,8 +419,6 @@ def _post_azure(api_key: str, endpoint: str, deployment: str, api_version: str, 
             time.sleep(sleep_s)
 
     raise requests.exceptions.ConnectionError(f"Azure request failed after retries: {last_err}")
-
-
 # -------------------------
 # 自動修 JSON（失敗自救，減少老師見到錯誤）
 # -------------------------
