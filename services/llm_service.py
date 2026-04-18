@@ -279,20 +279,31 @@ def ping_llm(cfg: dict, timeout: int = 25):
     回傳 dict:
       - ok: bool
       - latency_ms: int
-      - output: str
+      - output: str  （成功時盡量統一為 'OK'）
       - error: str
     """
     t0 = time.time()
     try:
         out = _chat(
             cfg,
-            messages=[{"role": "user", "content": "回覆 OK"}],
+            messages=[{
+                "role": "user",
+                "content": "只輸出兩個字：OK。不要輸出任何其他文字、標點或換行。"
+            }],
             temperature=0.0,
-            max_tokens=10,
+            max_tokens=3,   # ✅ 收緊，避免客套句
             timeout=timeout,
         )
         ms = int((time.time() - t0) * 1000)
-        return {"ok": True, "latency_ms": ms, "output": (out or "").strip(), "error": ""}
+
+        text = (out or "").strip()
+
+        # ✅ 後處理：只要包含 OK（大小寫都得），就統一顯示 OK
+        if "OK" in text.upper():
+            text = "OK"
+
+        return {"ok": True, "latency_ms": ms, "output": text, "error": ""}
+
     except Exception as e:
         ms = int((time.time() - t0) * 1000)
         return {"ok": False, "latency_ms": ms, "output": "", "error": repr(e)}
