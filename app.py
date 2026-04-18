@@ -7,6 +7,7 @@ from services.llm_service import (
     generate_questions,
     assist_import_questions,
     parse_import_questions_locally,
+    ping_llm,  # ✅ 新增
 )
 from services.cache_service import load_cache, save_cache
 from extractors.extract import extract_text
@@ -50,6 +51,7 @@ def to_editor_df(data):
 
         rows.append(
             {
+                "export": True,  # ✅ 新增：預設全選匯出
                 "type": q.get("type", "single"),
                 "question": q.get("question", ""),
                 "option_1": opts[0],
@@ -65,6 +67,11 @@ def to_editor_df(data):
 
 
 EDITOR_COLUMN_CONFIG = {
+    "export": st.column_config.CheckboxColumn(
+        "匯出",
+        help="✅ 勾選：會匯出到 Kahoot/Wayground/Google Form；取消：不匯出此題",
+        width="small",
+    ),
     "correct": st.column_config.SelectboxColumn(
         "正確答案（1-4）",
         help="1=option_1, 2=option_2, 3=option_3, 4=option_4",
@@ -97,7 +104,7 @@ if "imported_data" not in st.session_state:
 if "generated_data" not in st.session_state:
     st.session_state.generated_data = None
 
-# ✅ OAuth callback
+# OAuth callback
 params = st.query_params
 if oauth_is_configured() and "code" in params and not st.session_state.google_creds:
     try:
@@ -169,19 +176,18 @@ if preset == "Azure OpenAI":
         azure_deployment = st.text_input("Deployment name", value="")
         azure_api_version = st.text_input("API version", value="2024-02-15-preview")
 
-st.sidebar.divider()
-
-mode = st.sidebar.radio("📂 試題來源模式", ["🪄 AI 生成新題目", "📄 匯入現有題目（AI 協助）"])
-subject = st.sidebar.selectbox(
-    "📘 科目",
-    ["中國語文","英國語文","數學","公民與社會發展","科學","公民、經濟及社會","物理","化學","生物","地理","歷史","中國歷史","宗教",
-     "資訊及通訊科技（ICT）","經濟","企業、會計與財務概論","旅遊與款待"]
-)
 
 def api_config():
     if preset == "Azure OpenAI":
-        return {"type": "azure", "api_key": api_key, "endpoint": azure_endpoint, "deployment": azure_deployment, "api_version": azure_api_version}
+        return {
+            "type": "azure",
+            "api_key": api_key,
+            "endpoint": azure_endpoint,
+            "deployment": azure_deployment,
+            "api_version": azure_api_version,
+        }
     return {"type": "openai_compat", "api_key": api_key, "base_url": base_url, "model": model}
+
 
 def can_call_ai(cfg: dict):
     if not cfg.get("api_key"):
@@ -189,6 +195,42 @@ def can_call_ai(cfg: dict):
     if cfg.get("type") == "azure":
         return bool(cfg.get("endpoint")) and bool(cfg.get("deployment"))
     return bool(cfg.get("base_url")) and bool(cfg.get("model"))
+
+
+# ✅ 新增：一鍵測試 API
+st.sidebar.divider()
+st.sidebar.header("🧪 API 連線測試")
+cfg_test = api_config()
+
+if st.sidebar.button("🧪 一鍵測試 API（回覆 OK）"):
+    if not can_call_ai(cfg_test):
+        st.sidebar.error("請先填妥 API Key／Base URL／Model（Azure 要 Endpoint + Deployment）。")
+    else:
+        with st.sidebar.spinner("正在測試連線（通常 2–10 秒；慢時 10–30 秒）…"):
+            r = ping_llm(cfg_test, timeout=25)
+
+        if r["ok"]:
+            ms = r["latency_ms"]
+            st.sidebar.success(f"✅ 連線成功：{ms} ms")
+            if ms >= 15000:
+                st.sidebar.warning("⚠️ 服務偏慢（可能對方繁忙或網絡不穩）")
+            snippet = (r["output"] or "").replace("\n", " ")
+            st.sidebar.caption(f"回應片段：{snippet[:80]}")
+        else:
+            st.sidebar.error("❌ 連線失敗：請檢查 Key/Endpoint/Model 或服務狀態")
+            st.sidebar.code(r["error"])
+
+
+st.sidebar.divider()
+
+mode = st.sidebar.radio("📂 試題來源模式", ["🪄 AI 生成新題目", "📄 匯入現有題目（AI 協助）"])
+subject = st.sidebar.selectbox(
+    "📘 科目",
+    [
+        "中國語文","英國語文","數學","公民與社會發展","科學","公民、經濟及社會","物理","化學","生物","地理","歷史","中國歷史","宗教",
+        "資訊及通訊科技（ICT）","經濟","企業、會計與財務概論","旅遊與款待"
+    ],
+)
 
 # =========================
 # 模式一：AI 生成
@@ -199,8 +241,11 @@ if mode == "🪄 AI 生成新題目":
     level_map = {"基礎（理解與記憶）":"easy","標準（應用與理解）":"medium","進階（分析與思考）":"hard","混合（課堂活動建議）":"mixed"}
     level_code = level_map[level_label]
 
-    files = st.file_uploader("上載教材（支援PDF/DOCX/TXT/PPTX/XLSX）", accept_multiple_files=True,
-                             type=["pdf","docx","txt","pptx","xlsx"])
+    files = st.file_uploader(
+        "上載教材（支援PDF/DOCX/TXT/PPTX/XLSX）",
+        accept_multiple_files=True,
+        type=["pdf","docx","txt","pptx","xlsx"],
+    )
 
     cfg = api_config()
     if st.button("生成題目", disabled=not (can_call_ai(cfg) and bool(files))):
@@ -219,7 +264,9 @@ if mode == "🪄 AI 生成新題目":
                 st.session_state.generated_data = cache[key]
             else:
                 with st.spinner("🤖 正在呼叫 AI，請稍候 10–30 秒…"):
-                    st.session_state.generated_data = generate_questions(cfg, used_text, subject, level_code, question_count, fast_mode=fast_mode)
+                    st.session_state.generated_data = generate_questions(
+                        cfg, used_text, subject, level_code, question_count, fast_mode=fast_mode
+                    )
                 cache[key] = st.session_state.generated_data
                 save_cache(cache)
 
@@ -229,21 +276,46 @@ if mode == "🪄 AI 生成新題目":
 
     if st.session_state.generated_data:
         df = to_editor_df(st.session_state.generated_data)
-        edited = st.data_editor(df, use_container_width=True, num_rows="dynamic", column_config=EDITOR_COLUMN_CONFIG, disabled=["type"])
 
-        st.download_button("⬇️ Kahoot Excel", export_kahoot(edited), "kahoot.xlsx")
-        st.download_button("⬇️ Wayground DOCX", export_wayground_docx(edited, subject), "wayground.docx")
+        # ✅ 加兩個快捷鍵：全選/全不選匯出
+        c1, c2, c3 = st.columns([1, 1, 3])
+        with c1:
+            if st.button("✅ 全選匯出"):
+                df["export"] = True
+        with c2:
+            if st.button("⛔ 全不選匯出"):
+                df["export"] = False
+
+        edited = st.data_editor(
+            df,
+            use_container_width=True,
+            num_rows="dynamic",
+            column_config=EDITOR_COLUMN_CONFIG,
+            disabled=["type"],
+        )
+
+        selected = edited[edited["export"] == True].copy()
+        if selected.empty:
+            st.warning("⚠️ 你未選擇任何題目匯出。請先勾選『匯出』欄。")
+        else:
+            st.caption(f"✅ 已選擇匯出 {len(selected)} 題（共 {len(edited)} 題）")
+
+        st.download_button("⬇️ Kahoot Excel（只匯出已勾選）", export_kahoot(selected if not selected.empty else edited), "kahoot.xlsx")
+        st.download_button("⬇️ Wayground DOCX（只匯出已勾選）", export_wayground_docx(selected if not selected.empty else edited, subject), "wayground.docx")
 
         if st.session_state.google_creds:
-            if st.button("🟦 一鍵建立 Google Form Quiz"):
+            if st.button("🟦 一鍵建立 Google Form Quiz（只匯出已勾選）"):
                 try:
-                    with st.spinner("🟦 正在建立 Google Form（通常 5–20 秒）…"):
-                        creds = credentials_from_dict(st.session_state.google_creds)
-                        result = create_quiz_form(creds, f"{subject} Quiz", edited)
+                    if selected.empty:
+                        st.warning("⚠️ 未選擇任何題目匯出，已取消建立 Google Form。")
+                    else:
+                        with st.spinner("🟦 正在建立 Google Form（通常 5–20 秒）…"):
+                            creds = credentials_from_dict(st.session_state.google_creds)
+                            result = create_quiz_form(creds, f"{subject} Quiz", selected)
 
-                    st.success("✅ 已建立 Google Form Quiz")
-                    st.write("編輯連結：", result.get("editUrl"))
-                    st.write("發佈連結：", result.get("responderUrl") or "（Google API 未提供 responderUri，可於表單右上角『傳送』取得）")
+                        st.success("✅ 已建立 Google Form Quiz")
+                        st.write("編輯連結：", result.get("editUrl"))
+                        st.write("發佈連結：", result.get("responderUrl") or "（Google API 未提供 responderUri，可於表單右上角『傳送』取得）")
 
                 except Exception as e:
                     show_exception("⚠️ 建立 Google Form 失敗（常見：配額用盡/權限不足/未啟用 Forms API）。", e)
@@ -285,21 +357,45 @@ if mode == "📄 匯入現有題目（AI 協助）":
 
     if st.session_state.imported_data:
         df = to_editor_df(st.session_state.imported_data)
-        edited = st.data_editor(df, use_container_width=True, num_rows="dynamic", column_config=EDITOR_COLUMN_CONFIG, disabled=["type"])
 
-        st.download_button("⬇️ Kahoot Excel", export_kahoot(edited), "kahoot.xlsx")
-        st.download_button("⬇️ Wayground DOCX", export_wayground_docx(edited, subject), "wayground.docx")
+        c1, c2, c3 = st.columns([1, 1, 3])
+        with c1:
+            if st.button("✅ 全選匯出（匯入）"):
+                df["export"] = True
+        with c2:
+            if st.button("⛔ 全不選匯出（匯入）"):
+                df["export"] = False
+
+        edited = st.data_editor(
+            df,
+            use_container_width=True,
+            num_rows="dynamic",
+            column_config=EDITOR_COLUMN_CONFIG,
+            disabled=["type"],
+        )
+
+        selected = edited[edited["export"] == True].copy()
+        if selected.empty:
+            st.warning("⚠️ 你未選擇任何題目匯出。請先勾選『匯出』欄。")
+        else:
+            st.caption(f"✅ 已選擇匯出 {len(selected)} 題（共 {len(edited)} 題）")
+
+        st.download_button("⬇️ Kahoot Excel（只匯出已勾選）", export_kahoot(selected if not selected.empty else edited), "kahoot.xlsx")
+        st.download_button("⬇️ Wayground DOCX（只匯出已勾選）", export_wayground_docx(selected if not selected.empty else edited, subject), "wayground.docx")
 
         if st.session_state.google_creds:
-            if st.button("🟦 一鍵建立 Google Form Quiz"):
+            if st.button("🟦 一鍵建立 Google Form Quiz（只匯出已勾選）"):
                 try:
-                    with st.spinner("🟦 正在建立 Google Form（通常 5–20 秒）…"):
-                        creds = credentials_from_dict(st.session_state.google_creds)
-                        result = create_quiz_form(creds, f"{subject} Quiz", edited)
+                    if selected.empty:
+                        st.warning("⚠️ 未選擇任何題目匯出，已取消建立 Google Form。")
+                    else:
+                        with st.spinner("🟦 正在建立 Google Form（通常 5–20 秒）…"):
+                            creds = credentials_from_dict(st.session_state.google_creds)
+                            result = create_quiz_form(creds, f"{subject} Quiz", selected)
 
-                    st.success("✅ 已建立 Google Form Quiz")
-                    st.write("編輯連結：", result.get("editUrl"))
-                    st.write("發佈連結：", result.get("responderUrl") or "（Google API 未提供 responderUri，可於表單右上角『傳送』取得）")
+                        st.success("✅ 已建立 Google Form Quiz")
+                        st.write("編輯連結：", result.get("editUrl"))
+                        st.write("發佈連結：", result.get("responderUrl") or "（Google API 未提供 responderUri，可於表單右上角『傳送』取得）")
 
                 except Exception as e:
                     show_exception("⚠️ 建立 Google Form 失敗（常見：配額用盡/權限不足/未啟用 Forms API）。", e)
