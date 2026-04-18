@@ -8,6 +8,39 @@ import random
 _SESSION = requests.Session()
 _SESSION_LOCK = threading.Lock()
 
+def _chat(cfg: dict, messages: list, temperature: float, max_tokens: int, timeout: int):
+    """
+    統一呼叫 LLM 的入口：
+    - cfg['type'] == 'azure' 用 Azure
+    - 其他用 OpenAI-compatible（DeepSeek / OpenAI / 自訂）
+    """
+    if cfg.get("type") == "azure":
+        data = _post_azure(
+            api_key=cfg["api_key"],
+            endpoint=cfg["endpoint"],
+            deployment=cfg["deployment"],
+            api_version=cfg.get("api_version", "2024-02-15-preview"),
+            payload={
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            },
+            timeout=timeout,
+        )
+    else:
+        data = _post_openai_compat(
+            api_key=cfg["api_key"],
+            base_url=cfg["base_url"],
+            payload={
+                "model": cfg["model"],
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            },
+            timeout=timeout,
+        )
+
+    return data.get("choices", [{}])[0].get("message", {}).get("content", "")
 def _reset_session():
     """
     重新建立 requests.Session（當 keep-alive 連線壞咗、或 ConnectionError 時用）
@@ -73,38 +106,6 @@ SUBJECT_TRAITS = {
     "用語要求："
     "題幹與選項需使用課程常用語：『細讀文本』『誦讀/背誦』『文道並重』『慎思明辨』"
     "『語文自學』『文化認識/反思/認同』等；避免只考術語定義。"
-),
-
-# ====== 中國語文（中一至中三）：更偏重建立語感、廣泛閱讀、誦讀背誦、九範疇整合 ======
-"中國語文（中一至中三）": (
-    "重點：建基母語經驗，強調兩文三語、工具性與人文性並重；以讀寫聽說主導，"
-    "推動文學、中華文化、品德情意、思維、語文自學的整合學習。"
-    "題型建議："
-    "（1）細讀文本：找關鍵句、段意、結構（承接/轉折/對比）與寫作意圖；"
-    "（2）誦讀與語感：以節奏、語氣、重音推斷情感/語意；"
-    "（3）文學入門：感受→鑒賞（不過度術語化），聚焦語言之美與情意；"
-    "（4）文化與品德情意：從篇章提煉價值觀/品德情意（個人/親屬師友/團體國家世界）。"
-    "干擾項："
-    "把『內容』與『形式手法』混作一談、忽略生活經驗連結、以單一角度解讀、"
-    "用過度極端字眼（必然/一定/完全）誤導。"
-    "用語："
-    "題幹應自然帶出『朗讀』『背誦』『廣泛閱讀』『寫作過程（構思→表達→修訂）』"
-    "『教學結合生活』『多向互動』等概念。"
-),
-
-# ====== 中國語文（中四至中六）：更聚焦高中語文綜合運用、思辨、文學/文化深度、評估導向 ======
-"中國語文（中四至中六）": (
-    "重點：延續九大範疇，強化『綜合運用』與『慎思明辨』，並以文學/中華文化學習深化審美與文化素養。"
-    "題型建議："
-    "（1）閱讀：多角度理解、比較論證、推論含意、辨識觀點與論據；"
-    "（2）寫作能力相關MCQ：審題、立意、結構安排、論證/描寫策略（以過程概念出題）；"
-    "（3）文言/經典：字詞句理解、語意推斷、篇章結構與思想；"
-    "（4）跨媒體/資訊素養：在真偽難辨資訊中篩選、整合重點（以閱讀策略出題）。"
-    "干擾項："
-    "常見錯誤包括依賴標準答案、只背誦不理解、忽略文本內證、把例子當論點、"
-    "缺乏比較與論據支撐、以偏概全或偷換概念。"
-    "用語："
-    "可出現『全方位學習』『探究』『學習社群』『多元評估/回饋』等詞，但題目仍需貼文本與語境。"
 ),
 
 # ====== 中國歷史（通用：如你的下拉選單只有「中國歷史」就用這個）======
@@ -401,6 +402,40 @@ def _post_azure(api_key: str, endpoint: str, deployment: str, api_version: str, 
                 _reset_session()
 
     raise requests.exceptions.ConnectionError(f"Azure request failed after retries: {last_err}")
+def _chat(cfg: dict, messages: list, temperature: float, max_tokens: int, timeout: int):
+    """
+    統一呼叫 LLM 的入口：
+    - cfg['type'] == 'azure' → Azure OpenAI
+    - 其他 → OpenAI-compatible（DeepSeek / OpenAI / 自訂）
+    """
+    if cfg.get("type") == "azure":
+        data = _post_azure(
+            api_key=cfg["api_key"],
+            endpoint=cfg["endpoint"],
+            deployment=cfg["deployment"],
+            api_version=cfg.get("api_version", "2024-02-15-preview"),
+            payload={
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            },
+            timeout=timeout,
+        )
+    else:
+        data = _post_openai_compat(
+            api_key=cfg["api_key"],
+            base_url=cfg["base_url"],
+            payload={
+                "model": cfg["model"],
+                "messages": messages,
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            },
+            timeout=timeout,
+        )
+
+    return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+
 # -------------------------
 # 自動修 JSON（失敗自救，減少老師見到錯誤）
 # -------------------------
