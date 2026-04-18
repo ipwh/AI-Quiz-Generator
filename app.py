@@ -191,7 +191,7 @@ if mode == "🪄 AI 生成新題目":
 
     cfg = api_config()
     if st.button("生成題目", disabled=not (can_call_ai(cfg) and bool(files))):
-        text = "".join(extract_text(f) for f in files)[:6000]
+        text = "".join(extract_text(f) for f in files)[:5000]
         cache = load_cache()
         key = str(hash(text + subject + level_code + str(question_count)))
         if key in cache:
