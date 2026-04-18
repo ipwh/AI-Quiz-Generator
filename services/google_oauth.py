@@ -1,3 +1,4 @@
+
 import time
 import secrets
 import streamlit as st
@@ -10,7 +11,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive.file",
 ]
 
-# 全域暫存（以 state 作 key 保存 flow）；避免 callback 落到 rerun 後丟失資料
+# 用 state 作 key 暫存 flow（含 code_verifier 等資訊）
 _OAUTH_FLOW_STORE = {}
 _STORE_TTL_SEC = 15 * 60  # 15 分鐘
 
@@ -30,7 +31,7 @@ def oauth_is_configured() -> bool:
 def get_redirect_uri() -> str:
     """
     用 Streamlit Secrets 的 APP_URL 作 redirect URI（部署後固定最穩）。
-    若未設定，回退 localhost。
+    注意：redirect URI 必須與 Google Cloud Console 的 Authorized redirect URIs 完全一致。
     """
     app_url = str(st.secrets.get("APP_URL", "")).strip().rstrip("/")
     return app_url if app_url else "http://localhost:8501"
@@ -39,42 +40,41 @@ def get_redirect_uri() -> str:
 def _load_google_client_config() -> dict:
     """
     Flow.from_client_config 需要 Google client secrets format。
-    你的 secrets 應該存成 google_oauth_client。
+    secrets 內建議以 google_oauth_client 儲存整段 client JSON（web）。
     """
     return st.secrets["google_oauth_client"]
 
 
-def _build_flow(redirect_uri: str) -> Flow:
+def get_auth_url() -> str:
+    """
+    生成登入 URL，並把 state -> flow 存入全域 store（跨 rerun 可取回）。
+    Flow.authorization_url 會回傳 (auth_url, state)。[6](https://googleapis.dev/python/google-auth-oauthlib/latest/reference/google_auth_oauthlib.flow.html)
+    """
+    _prune_store()
+
     client_config = _load_google_client_config()
-    return Flow.from_client_config(
+    redirect_uri = get_redirect_uri()
+
+    flow = Flow.from_client_config(
         client_config,
         scopes=SCOPES,
         redirect_uri=redirect_uri,
     )
 
-
-def get_auth_url() -> str:
-    """生成登入 URL，並把 state -> flow 存入全域 store（跨 rerun 可取回）。"""
-    _prune_store()
-
-    state = secrets.token_urlsafe(24)
-    flow = _build_flow(get_redirect_uri())
-
-    auth_url, returned_state = flow.authorization_url(
+    auth_url, state = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
         prompt="consent",
-        state=state,
     )
 
-    _OAUTH_FLOW_STORE[returned_state] = {"flow": flow, "ts": time.time()}
+    _OAUTH_FLOW_STORE[state] = {"flow": flow, "ts": time.time()}
     return auth_url
 
 
 def exchange_code_for_credentials(code: str, returned_state: str) -> Credentials:
     """
-    用 callback 回來的 code 換取 Credentials。
-    會用 returned_state 從全域 store 找回 flow，避免 Missing verifier/state mismatch。
+    用 callback 回來的 code 換取 Credentials（fetch_token）。[3](https://google-auth-oauthlib.readthedocs.io/en/latest/reference/google_auth_oauthlib.flow.html)[6](https://googleapis.dev/python/google-auth-oauthlib/latest/reference/google_auth_oauthlib.flow.html)
+    會用 returned_state 從全域 store 找回 flow，避免 state 遺失。
     """
     _prune_store()
 
@@ -86,8 +86,8 @@ def exchange_code_for_credentials(code: str, returned_state: str) -> Credentials
 
     flow: Flow = entry["flow"]
     flow.fetch_token(code=code)
-    creds = flow.credentials
 
+    creds = flow.credentials
     _OAUTH_FLOW_STORE.pop(returned_state, None)
     return creds
 
