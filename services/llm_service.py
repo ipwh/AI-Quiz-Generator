@@ -338,7 +338,7 @@ def _post_openai_compat(api_key: str, base_url: str, payload: dict, timeout: int
     }
 
     # connect/read timeout 分拆，避免讀取長回應時更容易斷線
-    t = (10, timeout)
+    t = (15, timeout) # connect 15s, read timeout 90/180s
 
     last_err = None
     for attempt in range(max_retries):
@@ -503,8 +503,8 @@ def generate_questions(cfg, text, subject, level, question_count, fast_mode: boo
 """
 
     temperature = 0.15 if fast_mode else 0.2
-    max_tokens = 1500 if fast_mode else 2400
-    timeout = 45 if fast_mode else 90
+    max_tokens = 1200 if fast_mode else 1800
+    timeout = 90 if fast_mode else 180
 
     # ✅ 宗教科：額外硬規則再加一層，讓模型更少走樣
     catholic_hard_rule = ""
