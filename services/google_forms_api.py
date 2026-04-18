@@ -4,10 +4,9 @@ from googleapiclient.errors import HttpError
 
 def create_quiz_form(creds, title: str, df):
     """
-    使用 Google Forms API 建立 Quiz 表單：
+    Google Forms API 建立 Quiz 表單：
     1) create form
     2) batchUpdate：設定 isQuiz + 逐題 createItem
-    回傳：formId, editUrl, responderUrl(如 API 有提供)
     """
     service = build("forms", "v1", credentials=creds, cache_discovery=False)
 
@@ -35,7 +34,6 @@ def create_quiz_form(creds, title: str, df):
                 str(row.get("option_3", "")).strip(),
                 str(row.get("option_4", "")).strip(),
             ]
-
             options = [o for o in options_raw if o]
             if len(options) < 2:
                 options = [options_raw[0] or "（選項A）", "（選項B）"]
@@ -45,12 +43,23 @@ def create_quiz_form(creds, title: str, df):
                 correct = "1"
             correct_index = int(correct) - 1
 
-            if correct_index >= 0 and correct_index < len(options_raw) and options_raw[correct_index].strip():
+            if 0 <= correct_index < len(options_raw) and options_raw[correct_index].strip():
                 correct_value = options_raw[correct_index].strip()
             else:
                 correct_value = options[0]
 
             explanation = str(row.get("explanation", "")).strip()
+
+            grading = {
+                "pointValue": 1,
+                "correctAnswers": {"answers": [{"value": correct_value}]},
+            }
+
+            # ✅ 修正：自動評分多項選擇題不能用 generalFeedback
+            # 要用 whenRight / whenWrong 提供回饋 [5](https://developers.google.cn/workspace/forms/api/guides/setup-grading?hl=en)[4](https://googleapis.dev/dotnet/Google.Apis.Forms.v1/latest/api/Google.Apis.Forms.v1.Data.Grading.html)
+            if explanation:
+                grading["whenRight"] = {"text": explanation}
+                grading["whenWrong"] = {"text": explanation}
 
             item_req = {
                 "createItem": {
@@ -64,10 +73,7 @@ def create_quiz_form(creds, title: str, df):
                                     "options": [{"value": o} for o in options],
                                     "shuffle": False,
                                 },
-                                "grading": {
-                                    "pointValue": 1,
-                                    "correctAnswers": {"answers": [{"value": correct_value}]},
-                                },
+                                "grading": grading,
                             }
                         },
                     },
@@ -75,18 +81,13 @@ def create_quiz_form(creds, title: str, df):
                 }
             }
 
-            if explanation:
-                item_req["createItem"]["item"]["questionItem"]["question"]["grading"]["generalFeedback"] = {
-                    "text": explanation
-                }
-
             requests.append(item_req)
             idx += 1
 
         service.forms().batchUpdate(formId=form_id, body={"requests": requests}).execute()
 
         info = service.forms().get(formId=form_id).execute()
-        responder_url = info.get("responderUri")  # 不一定存在
+        responder_url = info.get("responderUri")  # 可能存在也可能沒有 [9](https://developers.google.com/workspace/forms/api/reference/rest/v1/forms)
 
         return {
             "formId": form_id,
