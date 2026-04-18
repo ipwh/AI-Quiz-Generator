@@ -10,7 +10,6 @@ _SESSION_LOCK = threading.Lock()
 
 
 def _reset_session():
-    """重建 requests.Session（keep-alive 連線壞咗、或 ConnectionError/ReadTimeout 時用）"""
     global _SESSION
     try:
         _SESSION.close()
@@ -20,11 +19,9 @@ def _reset_session():
 
 
 # -------------------------
-# 科目特性（可按校本再擴充）
-# 注意：同一 key 只保留一份；並補齊 app 下拉選單會用到的 alias key
+# 科目特性（按你已整理的版本；同義 key 已補）
 # -------------------------
 SUBJECT_TRAITS = {
-    # ==== 語文 / 人文 ====
     "中國語文": (
         "重點：以『讀寫聽說』為主導，帶動文學、中華文化、品德情意、思維、語文自學九大範疇；"
         "出題同時兼顧工具性（語文運用）與人文性（思想、文化、審美）。"
@@ -32,169 +29,66 @@ SUBJECT_TRAITS = {
         "干擾項：只看字面忽略語境、混淆作者/敘述者觀點、把描寫當論證、以偏概全、忽略轉折承接。"
         "用語：『細讀文本』『誦讀/背誦』『文道並重』『慎思明辨』『語文自學』『文化認識/反思/認同』等。"
     ),
-    
     "英國語文": (
         "Focus: reading comprehension, inference, tone/purpose, vocabulary in context, grammar usage. "
-        "Distractors: near-synonym traps, extreme options, misreading of reference/pronouns."
+        "Distractors: near-synonym traps, extreme options."
     ),
-    
+    "數學": "重點：概念+運算、步驟正確性、圖像/表格解讀、公式應用。干擾項：公式套錯、單位/符號錯、概念混淆。",
+    "公民與社會發展": "重點：概念辨析、情境應用、因果關係。干擾項：概念混淆、因果倒置、以偏概全。",
+    "公民、經濟及社會": (
+        "重點：三大範疇——（1）個人與群性發展；（2）資源與經濟活動；（3）社會體系與公民精神。"
+        "題型：情境題、數據/表格解讀、概念辨析、因果與利弊分析。"
+        "干擾項：因果倒置、權利vs義務、公平vs公義、需要vs想要混淆、忽略數據趨勢。"
+    ),
+    "公民、經濟與社會": "重點同「公民、經濟及社會」。",
+    "科學": (
+        "重點：主題式設計，涵蓋生命與生活、物料世界、能量與變化、地球與太空；強調 STSE 與 STEM。"
+        "統一概念：系統和組織、證據和模型、變化和恆常、形態與功能。"
+        "探究技能：問題/假說、辨識變量、公平測試、量度、圖表、推論與結論、科學語言。"
+        "干擾項：把相關性當因果、混淆變量、忽略公平測試、忽略誤差與安全守則。"
+    ),
+    "物理": "重點：定律應用、方向性、單位、圖像解讀。干擾項：方向/符號、把速度當加速度。",
+    "化學": "重點：粒子模型、方程式、酸鹼/氧化還原、實驗觀察。干擾項：配平錯、概念混淆。",
+    "生物": "重點：結構與功能、恆常性、遺傳、生態互動。干擾項：器官功能混淆、相關性當因果。",
+    "資訊及通訊科技（ICT）": (
+        "重點：資訊處理 + 系統基礎 + 互聯網與保安 + 計算思維/程式 + 社會影響（道德/法律）。"
+        "題型：進制轉換、字符編碼、試算表/DBMS/SQL、TCP/IP、DNS、HTTP/HTTPS、除錯、知識產權/私隱/網安。"
+        "干擾項：RAM/ROM/Cache 混用、HTTP vs HTTPS 誤解、ASCII vs Unicode 混淆、SQL鍵/冗餘/正規化混亂。"
+    ),
+    "地理": (
+        "重點：空間、地方、區域、人地互動、全球相互依存、可持續發展；題型含地圖/圖表/實地考察/GIS。"
+        "干擾項：把描述當解釋、因果倒置、忽略尺度、地圖比例/方向/圖例誤讀。"
+    ),
     "歷史": (
-    "重點：以『時序 + 主題』組織世界史與香港史，採探究式學習（doing history）與史料為本（source-based learning），"
-    "培養歷史素養：時間與時序、因果關係、轉變與延續、多角度詮釋、歷史論證（以證據支持結論）、同理心（代入感）與持平判斷。"
-    "高中（中四至中六）核心聚焦二十世紀，採兩大主題："
-    "（甲）二十世紀亞洲的現代化與蛻變（香港/中國/日本與東南亞）"
-    "（乙）二十世紀世界的衝突與合作（兩次世界大戰、冷戰、其他衝突與和平努力、國際協作與繁榮）。"
-    "題型建議："
-    "（1）時序/分期/脈絡題：重組事件先後，解釋背景與趨勢；"
-    "（2）因果與影響題：分辨長短期因素、直接/間接影響，避免單因論；"
-    "（3）史料題：一手/二手、作者立場、目的、對象、可靠性、偏見與限制；"
-    "（4）比較與詮釋題：比較不同地域/時期的模式（如現代化、城市發展、冷戰影響），並以證據支持。"
-    "常見干擾項："
-    "把『事實』當『見解』、只背結論不引用證據、忽略時空背景以現代價值直接評斷、"
-    "把轉變與延續混淆、把多因現象用單一原因解釋、把史料內容照抄當論點。"
-    "用語要求：必用『史料』『證據』『詮釋』『因果』『轉變與延續』『時序』『偏見/可靠性』『代入感/同理心』『持平』等，"
-    "解說（explanation）宜用「主張→證據→推論」三段式。"
-),
-
-"歷史（中一至中三）": (
-    "重點：三年一貫、時序為軸：中一古代世界（史前至14世紀）、中二近代世界（15-19世紀）、中三現代世界（20世紀至今）；"
-    "12課題（每年4課題）含基礎+延伸部分，並設探究問題與導入問題，強調歷史技能（時序、因果、史料分類、歸納推論、事實/見解）。"
-    "題型：文明特徵、文化交流、殖民擴張與影響、兩次世界大戰與冷戰、香港發展脈絡（19世紀至回歸）。"
-    "干擾項：把世界史脈絡與香港發展脫節、忽略多角度（政治/經濟/社會/文化）、把事件影響只看單面。"
-),
-
-"歷史（中四至中六）": (
-    "重點：聚焦二十世紀兩大主題："
-    "A『二十世紀亞洲的現代化與蛻變』：香港（政治制度、國際城市、與內地關係）、中國（改革/革命、毛澤東時代與改革開放）、"
-    "日本（軍國主義、戰後重建）、東南亞（殖民影響、非殖民地化、東盟）。"
-    "B『二十世紀世界的衝突與合作』：兩次世界大戰與和約、冷戰（成因/特點/緩和/瓦解）、其他衝突（中東、巴爾幹、南非種族隔離）、"
-    "以及戰後歐洲重建與經濟統合、人口資源/環境/科技的國際協作。"
-    "選修方向（四十小時一選一）：比較歷史／歷史議題探究／本地文化承傳研習（更著重探究與研究技能）。"
-    "常見干擾項："
-    "把『現代化』等同單一經濟增長；把冷戰事件當孤立零碎史實；忽略政策背後政治與經濟考慮；"
-    "把聯合國角色神化（忽略成就與局限）；忽略『新國際秩序』是否成立需以證據論證。"
-    "用語：必用『現代化』『蛻變』『國際秩序』『冷戰特點』『因果鏈』『證據/論據』『比較（異同/模式）』等；"
-    "題幹可採『探究問題』形式（例如：某政策/協議的影響是否構成轉捩點？）。"
-),
-
-    # app 下拉選單用「中國歷史」，所以要有這個 key
-    "中國歷史": (
-        "重點：九個歷史時期以政治演變為主，兼及文化特色與香港發展；強調史料分析、因果、脈絡、比較與評價。"
-        "題型：時期特徵判斷、因果與影響、人物/事件配對、史料/圖像題。"
-        "干擾項：相近時期混淆、把文化特色誤當政治制度、忽略香港在中國脈絡的位置、無證據價值判斷。"
-        "用語：『史料』『脈絡』『因果』『比較』『評價』『求真持平』『探究式學習』等。"
+        "重點：時序、因果、轉變與延續、史料為本、多角度詮釋、證據支持結論、同理心與持平判斷。"
+        "干擾項：事實/見解不分、單因論、忽略時空背景、只背結論不引用證據。"
     ),
-
+    "中國歷史": (
+        "重點：時序脈絡、因果、史料分析、香港與國家關係；干擾項：年代混淆、張冠李戴、把結果當原因。"
+    ),
+    "經濟": (
+        "重點：實證+規範；供需/彈性/盈餘/干預/效率公平；GDP/物價/失業、AD-AS、貨幣與銀行；比較優勢。"
+        "干擾項：稀少性≠短缺；需求改變≠需求量改變；效率≠公平；GDP≠福利；比較優勢≠絕對優勢。"
+    ),
+    "企業、會計與財務概論": (
+        "重點：營商環境、管理功能、會計循環與報表、財務/個人理財、道德與社會責任。"
+        "干擾項：收入/利潤/現金流混淆、比率誤用、成本分類錯、忽略持份者。"
+    ),
+    "企業、會計及財務概論": "重點同「企業、會計與財務概論」。",
+    "旅遊與款待": (
+        "重點：行業體系、分銷途徑、產品生命週期、承載力、影響評估、RATER/GAP、服務補救、可持續發展。"
+        "干擾項：概念混淆（承載力/PLC/RATER/GAP）、只講經濟忽略社會文化/環境。"
+    ),
     "宗教": (
         "【天主教用字硬規則】\n"
-        "1) 必須使用天主教版本用字，嚴禁使用基督宗教其他派別常用詞。\n"
-        "2) 必用詞：天主（不用「上帝」「神」）、伯多祿（不用「彼得」）、聖母瑪利亞、教宗/主教/神父、教友。\n"
-        "3) 題幹/選項/解說維持天主教教理語境（聖事、彌撒、聖體、教會、信經等）。\n"
-        "4) 干擾項：以概念混淆（聖事/禮儀、聖經/聖傳、訓導/個人意見等）設計。\n"
+        "必用：天主、伯多祿、聖母瑪利亞、教宗/主教/神父、教友。\n"
+        "避免：上帝、神、彼得、牧師、長老、傳道、基督徒（作天主教內部稱呼）。\n"
     ),
-
-    # ==== 數理科 / 科學 ====
-    "數學": (
-        "重點：概念+運算、步驟正確、圖像/表格解讀、公式應用。干擾項：公式套錯、單位/符號錯、概念混淆。"
-    ),
-    "物理": (
-        "重點：定律應用、方向性、單位、圖像解讀。干擾項：方向/符號錯、把速度當加速度。"
-    ),
-    "化學": (
-        "重點：粒子模型、方程式、酸鹼/氧化還原、實驗觀察。干擾項：配平錯、概念混淆。"
-    ),
-    "生物": (
-        "重點：結構與功能、恆常性、遺傳、生態互動。干擾項：器官功能混淆、相關性當因果。"
-    ),
-
-    "科學": (
-        "重點：初中科學以主題式設計，涵蓋生命與生活、物料世界、能量與變化、地球與太空；"
-        "並強調科學、科技、社會與環境（STSE）及 STEM 綜合應用。"
-        "統一概念：系統和組織、證據和模型、變化和恆常、形態與功能。"
-        "科學探究：提出問題/假說、辨識變量、公平測試、量度、圖表、數據分析、推論與結論、科學語言傳意。"
-        "干擾項：把相關性當因果、混淆自變量/因變量/控制變量、忽略公平測試、把模型當事實、忽略誤差與安全守則。"
-    ),
-
-    # ==== 地理 ====
-    "地理": (
-        "重點：核心概念（空間、地方、區域、人地互動、全球相互依存、可持續發展）；"
-        "以議題探究（提問→蒐集→組織→分析→結論）培養地理思考。"
-        "題型：地圖/照片/衛星圖像判讀、圖表與統計（密度/比率/趨勢）、實地考察情境、可持續決策（權衡利弊/持份者）。"
-        "干擾項：把描述當解釋、因果倒置、忽略尺度、地圖比例/方向/圖例誤讀、把 GIS 當圖片而非分析工具。"
-    ),
-
-    # ==== 經濟 ====
-    # 你 app 下拉選單用「經濟」，保留詳細版（刪走舊短版）
-    "經濟": (
-        "重點：實證分析 + 規範判斷並行；用經濟學概念/模型作明辨性思考與理性決策。"
-        "核心：稀少性/機會成本/私有產權/專門化；需求供應/彈性/盈餘/干預/效率公平；"
-        "宏觀（GDP/物價/失業、AD-AS、貨幣與銀行、政策）及國際貿易（比較優勢等）。"
-        "題型：供需圖比較靜態、稅/津貼/配額/價格上限下限、盈餘與淨損失、弧彈性計算、GDP/失業率詮釋、AD-AS短長期比較。"
-        "干擾項：稀少性≠短缺；需求改變≠需求量改變（供應同理）；效率≠公平；GDP≠福利；比較優勢≠絕對優勢；干預需有效才有影響。"
-        "用語：稀少性、機會成本、邊際、均衡、彈性、盈餘、淨損失、GDP、物價指數、失業率、AD-AS、貨幣供應/需求等。"
-    ),
-
-    # ==== 公民、經濟及社會（app 用「公民、經濟及社會」，所以加 alias）====
-    "公民、經濟及社會": (
-        "重點：三大範疇——"
-        "（1）個人與群性發展；（2）資源與經濟活動（理財/公共財政/經濟指標）；（3）社會體系與公民精神（法治/基本法/國民身份等）。"
-        "題型：情境題、數據/表格解讀、概念辨析、因果與利弊分析。"
-        "干擾項：把描述當解釋、因果倒置、權利vs義務、公平vs公義、需要vs想要混淆、忽略數據趨勢。"
-    ),
-   # ==== ICT（app key：資訊及通訊科技（ICT））====
-    "資訊及通訊科技（ICT）": (
-        "重點：資訊處理 + 系統理解 + 互聯網與保安 + 計算思維/程式 + 社會影響（道德/法律）。"
-        "強調資訊素養（選取/組織/分析/使用資訊）、解難與創意、負責任使用科技。"
-        "題型：進制轉換/溢出、字符編碼（ASCII/Unicode）、試算表/樞紐分析、DBMS/SQL、"
-        "網絡概念（TCP/IP、DNS、HTTP/HTTPS）、程式流程與除錯（語法/邏輯/運行時）、知識產權/私隱/網安。"
-        "干擾項：RAM/ROM/Cache 混用、HTTP vs HTTPS 誤解、ASCII vs Unicode 混淆、SQL鍵/冗餘/正規化概念混亂、忽略邊界測試。"
-    ),
-
-"企業、會計與財務概論": (
-    "重點：兩大範疇（會計、商業管理），強調把概念應用於真實商業情境，培養明辨性思考、決策、溝通與協作；"
-    "同時重視商業道德與社會責任。"
-    "核心必修：營商環境（香港經濟特徵、全球化、企業擁有權：獨資/合夥/有限公司、跨國公司）、"
-    "管理基礎（管理功能：計劃/組織/領導/控制；主要商業功能）、會計基礎（會計循環、複式記帳、財務報表）、"
-    "基礎個人理財（時間值、信貸、投資與風險）。"
-    "常見選修範圍："
-    "會計：財務會計、成本會計（成本分類、邊際/吸收成本、決策）；"
-    "管理：管理導論/財務管理/人力資源/市場營銷（視校本選擇）。"
-    "題型建議："
-    "（1）情境決策題：在限制（資源/時間/風險）下選方案，需用概念與數據支持；"
-    "（2）會計題：報表編製/解讀、會計原則與用途、比率分析與解釋；"
-    "（3）成本與定價：成本分類、盈虧/邊際概念、決策取捨；"
-    "（4）倫理題：非法 vs 不道德、持份者影響、社會責任與長短期代價。"
-    "常見干擾項："
-    "混淆收入/利潤/現金流、把資產當開支、誤用財務比率（分子分母/意義）、成本分類錯、"
-    "把風險與回報關係說反、忽略道德/社會責任、把企業擁有權特徵（責任/融資/控制權）混淆。"
-    "用語要求：必用『營商環境』『企業擁有權』『持份者』『商業道德/社會責任』『管理功能』"
-    "『會計循環』『複式記帳』『財務報表/比率分析』『時間值（現值/未來值）』『風險管理』等。"
-),
-
-
-    "旅遊與款待": (
-    "重點：理解旅遊與款待業的重要性與行業體系，能評估其經濟/社會文化/環境影響，並運用服務質素概念改善顧客體驗；"
-    "同時強調可持續發展與東道主（host）角色。"
-    "課程主軸（五大課題）：旅遊導論、款待導論、地理名勝、客務關係及服務、旅遊與款待業趨勢及議題（另含實地考察）。"
-    "題型建議："
-    "（1）概念/模型題：旅遊動機（Maslow/推拉等）、旅客分類（Cohen/Plog）、產品生命週期、承載力、分銷途徑；"
-    "（2）影響評估題：旅遊對經濟/社會文化/環境的正負面影響與權衡；"
-    "（3）服務質素題：RATER、服務質差距（Gap Model）、服務補救（service recovery）與投訴處理；"
-    "（4）情境題：住宿/餐飲/會展（MICE）運作、食物安全五要點、文化禮儀與溝通技巧。"
-    "常見干擾項："
-    "混淆旅遊/旅行/旅客定義、把承載力等同旅客量、把產品生命週期階段混淆、"
-    "混淆RATER五維與Gap Model差距來源、住宿/餐飲分類錯、只講經濟效益忽略社會文化與環境成本。"
-    "用語要求：必用『可持續發展』『承載力』『產品生命週期』『分銷途徑』『東道主』『RATER』『Gap Model』"
-    "『服務補救』『食物安全』等；題幹宜採行業情境（酒店/旅行社/目的地/會展）來設問。"
-),
 }
 
 DEFAULT_TRAITS = "重點：根據教材內容出題，避免離題。干擾項：以常見誤解作干擾。"
 
 
-# -------------------------
-# 工具：文字清洗（減 token、增穩定）
-# -------------------------
 def _clean_text(text: str) -> str:
     if not text:
         return ""
@@ -203,9 +97,6 @@ def _clean_text(text: str) -> str:
     return text.strip()
 
 
-# -------------------------
-# 工具：抽 JSON（容錯）
-# -------------------------
 def extract_json(text: str):
     if not text:
         raise ValueError("AI 回傳內容是空的")
@@ -255,9 +146,6 @@ def _prefix_review_warning(expl: str) -> str:
     return "⚠️需教師確認：" + (expl if expl else "系統推測答案，請老師核對。")
 
 
-# -------------------------
-# 宗教科：天主教用字後處理（自動校正 + 違規標記 needs_review）
-# -------------------------
 _CATHOLIC_REPLACE = [
     (r"\b彼得\b", "伯多祿"),
     (r"\b上帝\b", "天主"),
@@ -266,9 +154,7 @@ _CATHOLIC_REPLACE = [
     (r"\b基督徒\b", "教友"),
 ]
 
-_CATHOLIC_FLAG_ONLY = [
-    "牧師", "長老", "傳道", "傳道人", "會眾", "敬拜讚美"
-]
+_CATHOLIC_FLAG_ONLY = ["牧師", "長老", "傳道", "傳道人", "會眾", "敬拜讚美"]
 
 
 def _apply_catholic_terms(text: str) -> str:
@@ -310,31 +196,25 @@ def _enforce_catholic_language(item: dict) -> dict:
     return item
 
 
-# -------------------------
-# HTTP：OpenAI 相容 / Azure
-# -------------------------
 def _post_openai_compat(api_key: str, base_url: str, payload: dict, timeout: int = 90, max_retries: int = 5):
     url = base_url.rstrip("/") + "/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    t = (15, timeout)  # connect, read
-
+    t = (15, timeout)
     last_err = None
+
     for attempt in range(max_retries):
         try:
             with _SESSION_LOCK:
                 r = _SESSION.post(url, headers=headers, json=payload, timeout=t)
             r.raise_for_status()
             return r.json()
-
         except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout) as e:
             last_err = e
             time.sleep(((2 ** attempt) * 2) + random.random())
             with _SESSION_LOCK:
                 _reset_session()
-
         except requests.exceptions.HTTPError:
             raise
-
         except requests.exceptions.RequestException as e:
             last_err = e
             time.sleep(((2 ** attempt) * 2) + random.random())
@@ -348,24 +228,21 @@ def _post_azure(api_key: str, endpoint: str, deployment: str, api_version: str, 
     url = endpoint.rstrip("/") + f"/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
     headers = {"api-key": api_key, "Content-Type": "application/json"}
     t = (10, timeout)
-
     last_err = None
+
     for attempt in range(max_retries):
         try:
             with _SESSION_LOCK:
                 r = _SESSION.post(url, headers=headers, json=payload, timeout=t)
             r.raise_for_status()
             return r.json()
-
         except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout) as e:
             last_err = e
             time.sleep((2 ** attempt) + random.random())
             with _SESSION_LOCK:
                 _reset_session()
-
         except requests.exceptions.HTTPError:
             raise
-
         except requests.exceptions.RequestException as e:
             last_err = e
             time.sleep((2 ** attempt) + random.random())
@@ -376,7 +253,6 @@ def _post_azure(api_key: str, endpoint: str, deployment: str, api_version: str, 
 
 
 def _chat(cfg: dict, messages: list, temperature: float, max_tokens: int, timeout: int):
-    """統一呼叫 LLM 的入口"""
     if cfg.get("type") == "azure":
         data = _post_azure(
             api_key=cfg["api_key"],
@@ -393,12 +269,10 @@ def _chat(cfg: dict, messages: list, temperature: float, max_tokens: int, timeou
             payload={"model": cfg["model"], "messages": messages, "temperature": temperature, "max_tokens": max_tokens},
             timeout=timeout,
         )
+
     return data.get("choices", [{}])[0].get("message", {}).get("content", "")
 
 
-# -------------------------
-# 自動修 JSON（失敗自救）
-# -------------------------
 def _fix_json(cfg: dict, bad_output: str, schema_hint: str, timeout: int):
     prompt = f"""
 你剛才輸出不是有效 JSON 或格式不符合要求。
@@ -437,9 +311,6 @@ _FEWSHOT = """
 """
 
 
-# -------------------------
-# 生成新題目（fast_mode）
-# -------------------------
 def generate_questions(cfg, text, subject, level, question_count, fast_mode: bool = False):
     traits = SUBJECT_TRAITS.get(subject, DEFAULT_TRAITS)
     text = _clean_text(text)
@@ -534,9 +405,6 @@ def generate_questions(cfg, text, subject, level, question_count, fast_mode: boo
     return cleaned
 
 
-# -------------------------
-# 匯入整理（fast_mode）
-# -------------------------
 def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode: bool = False):
     traits = SUBJECT_TRAITS.get(subject, DEFAULT_TRAITS)
     raw_text = _clean_text(raw_text)
@@ -633,9 +501,6 @@ def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode:
     return cleaned
 
 
-# -------------------------
-# 本地簡易拆題（不變）
-# -------------------------
 def parse_import_questions_locally(raw_text: str):
     raw_text = _clean_text(raw_text)
     if not raw_text:
@@ -657,9 +522,9 @@ def parse_import_questions_locally(raw_text: str):
             needs_review = True
 
         optA = re.search(r"(?:\n|\r|\A)\s*(?:A[\.\)、\)]|\(A\))\s*(.+)", b)
-        optB = re.search(r"(?:\n|\r|\A)\s*(?:B[\.\、\)]|\(B\))\s*(.+)", b)
-        optC = re.search(r"(?:\n|\r|\A)\s*(?:C[\.\、\)]|\(C\))\s*(.+)", b)
-        optD = re.search(r"(?:\n|\r|\A)\s*(?:D[\.\、\)]|\(D\))\s*(.+)", b)
+        optB = re.search(r"(?:\n|\r|\A)\s*(?:B[\.\)、\)]|\(B\))\s*(.+)", b)
+        optC = re.search(r"(?:\n|\r|\A)\s*(?:C[\.\)、\)]|\(C\))\s*(.+)", b)
+        optD = re.search(r"(?:\n|\r|\A)\s*(?:D[\.\)、\)]|\(D\))\s*(.+)", b)
 
         options = [
             optA.group(1).strip() if optA else "",
@@ -670,7 +535,7 @@ def parse_import_questions_locally(raw_text: str):
         options = _normalize_options(options)
 
         qstem = re.sub(r"(?:答案|Answer)\s*[:：]\s*([A-D]|[1-4]).*", "", b, flags=re.IGNORECASE).strip()
-        qstem = re.sub(r"(?m)^\s*(?:[A-D][\.\、\)]|\([A-D]\))\s*.+$", "", qstem).strip()
+        qstem = re.sub(r"(?m)^\s*(?:[A-D][\.\)、\)]|\([A-D]\))\s*.+$", "", qstem).strip()
 
         expl = "⚠️需教師確認：未找到答案，請老師核對。" if needs_review else ""
 
