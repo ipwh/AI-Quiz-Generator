@@ -1,12 +1,10 @@
-import json
-import re
-import time
 import requests
+import threading
+import time
+import random
 
-# -------------------------
-# 全域 Session（Keep-Alive 加快連線）
-# -------------------------
 _SESSION = requests.Session()
+_SESSION_LOCK = threading.Lock()
 
 # -------------------------
 # 科目特性（可按校本再擴充）
@@ -313,40 +311,37 @@ def _enforce_catholic_language(item: dict) -> dict:
 # -------------------------
 # HTTP：OpenAI 相容 / Azure
 # -------------------------
-def _post_openai_compat(api_key: str, base_url: str, payload: dict, timeout: int):
-    url = base_url.rstrip("/") + "/chat/completions"
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    r = _SESSION.post(url, headers=headers, json=payload, timeout=timeout)
-    r.raise_for_status()
-    return r.json()
-
-
-def _post_azure(api_key: str, endpoint: str, deployment: str, api_version: str, payload: dict, timeout: int):
+def _post_azure(api_key: str, endpoint: str, deployment: str, api_version: str, payload: dict, timeout: int = 90, max_retries: int = 3):
+    """
+    Azure OpenAI：同樣加入重試/退避/timeout 分拆/加鎖
+    """
     url = endpoint.rstrip("/") + f"/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
     headers = {"api-key": api_key, "Content-Type": "application/json"}
-    r = _SESSION.post(url, headers=headers, json=payload, timeout=timeout)
-    r.raise_for_status()
-    return r.json()
 
+    t = (10, timeout)
 
-def _chat(cfg: dict, messages: list, temperature: float, max_tokens: int, timeout: int):
-    if cfg.get("type") == "azure":
-        data = _post_azure(
-            api_key=cfg["api_key"],
-            endpoint=cfg["endpoint"],
-            deployment=cfg["deployment"],
-            api_version=cfg.get("api_version", "2024-02-15-preview"),
-            payload={"messages": messages, "temperature": temperature, "max_tokens": max_tokens},
-            timeout=timeout,
-        )
-    else:
-        data = _post_openai_compat(
-            api_key=cfg["api_key"],
-            base_url=cfg["base_url"],
-            payload={"model": cfg["model"], "messages": messages, "temperature": temperature, "max_tokens": max_tokens},
-            timeout=timeout,
-        )
-    return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            with _SESSION_LOCK:
+                r = _SESSION.post(url, headers=headers, json=payload, timeout=t)
+            r.raise_for_status()
+            return r.json()
+
+        except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout) as e:
+            last_err = e
+            sleep_s = (2 ** attempt) + random.random()
+            time.sleep(sleep_s)
+
+        except requests.exceptions.HTTPError:
+            raise
+
+        except requests.exceptions.RequestException as e:
+            last_err = e
+            sleep_s = (2 ** attempt) + random.random()
+            time.sleep(sleep_s)
+
+    raise requests.exceptions.ConnectionError(f"Azure request failed after retries: {last_err}")
 
 
 # -------------------------
@@ -416,7 +411,7 @@ def generate_questions(cfg, text, subject, level, question_count, fast_mode: boo
 """
 
     temperature = 0.15 if fast_mode else 0.2
-    max_tokens = 1800 if fast_mode else 2600
+    max_tokens = 1500 if fast_mode else 2400
     timeout = 45 if fast_mode else 90
 
     # ✅ 宗教科：額外硬規則再加一層，讓模型更少走樣
