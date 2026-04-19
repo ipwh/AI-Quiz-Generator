@@ -1,15 +1,9 @@
+
 import io
 import traceback
 import hashlib
 import streamlit as st
 import pandas as pd
-
-# Optional: for PDF page counting warning (won't crash if missing)
-try:
-    import fitz  # PyMuPDF
-    PYMUPDF_AVAILABLE = True
-except Exception:
-    PYMUPDF_AVAILABLE = False
 
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
@@ -20,15 +14,9 @@ from services.llm_service import (
     parse_import_questions_locally,
     ping_llm,
     get_xai_default_model,
-    # ✅ Vision fallback helpers (must exist in services/llm_service.py)
-    generate_questions_from_images,
-    xai_pick_vision_model,
 )
-
 from services.cache_service import load_cache, save_cache
-
-# ✅ Vision-ready extractor (must exist in extractors/extract.py)
-from extractors.extract import extract_text, extract_payload
+from extractors.extract import extract_text
 
 from exporters.export_kahoot import export_kahoot
 from exporters.export_wayground_docx import export_wayground_docx
@@ -46,6 +34,7 @@ from services.google_forms_api import create_quiz_form
 # -------------------------
 # Helpers
 # -------------------------
+
 def stable_key(*parts) -> str:
     raw = "||".join("" if p is None else str(p) for p in parts)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -55,6 +44,32 @@ def show_exception(user_msg: str, e: Exception):
     st.error(user_msg)
     with st.expander("🔎 技術細節（供維護用）"):
         st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)))
+
+
+def split_paragraphs(text: str):
+    return [p.strip() for p in (text or "").split("
+
+") if p.strip()]
+
+
+def build_text_with_highlights(raw_text: str, marked_idx: set, limit: int):
+    paras = split_paragraphs(raw_text)
+    highlights = [paras[i] for i in range(len(paras)) if i in marked_idx]
+    others = [paras[i] for i in range(len(paras)) if i not in marked_idx]
+
+    out = ""
+    if highlights:
+        out += "【重點段落（老師標記）】
+" + "
+
+".join(highlights) + "
+
+"
+    out += "【其餘教材】
+" + "
+
+".join(others)
+    return out[:limit]
 
 
 def to_editor_df(data, subject: str):
@@ -73,21 +88,19 @@ def to_editor_df(data, subject: str):
         else:
             corr_val = str(corr).strip() or "1"
 
-        rows.append(
-            {
-                "export": True,
-                "subject": subject,
-                "qtype": q.get("qtype", "single"),
-                "question": q.get("question", ""),
-                "option_1": opts[0],
-                "option_2": opts[1],
-                "option_3": opts[2],
-                "option_4": opts[3],
-                "correct": corr_val,
-                "explanation": q.get("explanation", ""),
-                "needs_review": bool(q.get("needs_review", False)),
-            }
-        )
+        rows.append({
+            "export": True,
+            "subject": subject,
+            "qtype": "single",
+            "question": q.get("question", ""),
+            "option_1": opts[0],
+            "option_2": opts[1],
+            "option_3": opts[2],
+            "option_4": opts[3],
+            "correct": corr_val,
+            "explanation": q.get("explanation", ""),
+            "needs_review": bool(q.get("needs_review", False)),
+        })
     return pd.DataFrame(rows)
 
 
@@ -96,43 +109,24 @@ def drive_service(creds):
 
 
 def upload_bytes_to_drive(creds, filename: str, mimetype: str, data_bytes: bytes) -> dict:
+    service = drive_service(creds)
     media = MediaIoBaseUpload(io.BytesIO(data_bytes), mimetype=mimetype, resumable=False)
     meta = {"name": filename}
-    return drive_service(creds).files().create(body=meta, media_body=media, fields="id, webViewLink").execute()
+    return service.files().create(body=meta, media_body=media, fields="id, webViewLink").execute()
 
 
 def share_file_to_emails(creds, file_id: str, emails: list, role: str = "reader"):
-    """
-    Drive permissions.create 可用 sendNotificationEmail 寄通知郵件。[3](https://bing.com/search?q=Azure+AI+Vision+Read+OCR+API+documentation+image+to+text)[4](https://learn.microsoft.com/en-us/azure/ai-services/computer-vision/quickstarts-sdk/client-library)
-    """
     service = drive_service(creds)
     for email in emails:
         email = str(email).strip()
         if not email:
             continue
         body = {"type": "user", "role": role, "emailAddress": email}
-        service.permissions().create(
-            fileId=file_id,
-            body=body,
-            sendNotificationEmail=True,
-        ).execute()
-
-
-def count_pdf_pages(file) -> int:
-    if not PYMUPDF_AVAILABLE:
-        return 0
-    try:
-        data = file.getvalue()
-        with fitz.open(stream=data, filetype="pdf") as doc:
-            return len(doc)
-    except Exception:
-        return 0
+        service.permissions().create(fileId=file_id, body=body, sendNotificationEmail=True).execute()
 
 
 def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix: str):
-    """
-    匯出 + 透過 Drive 上載並一鍵電郵分享（寄通知）。
-    """
+    """匯出 Kahoot/Wayground，並可用 Google Drive 一鍵電郵分享檔案。"""
     if selected_df is None or selected_df.empty:
         st.warning("⚠️ 尚未選擇任何題目（請勾選『匯出』欄）。")
         return
@@ -143,10 +137,14 @@ def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix:
     c1, c2 = st.columns(2)
     with c1:
         st.download_button("⬇️ Kahoot Excel", kahoot_bytes, "kahoot.xlsx", key=f"dl_kahoot_{prefix}")
+        st.caption("Kahoot 匯入用 Excel（只包含已勾選題目）。")
     with c2:
         st.download_button("⬇️ Wayground DOCX", docx_bytes, "wayground.docx", key=f"dl_docx_{prefix}")
+        st.caption("Wayground/校內工作紙用 Word（只包含已勾選題目）。")
 
-    st.markdown("### 📧 一鍵電郵分享匯出檔（需要先登入 Google）")
+    st.markdown("### 📧 一鍵電郵分享匯出檔")
+    st.caption("會先把檔案上載到你的 Google Drive，然後分享並寄出通知電郵。")
+
     if not st.session_state.google_creds:
         st.info("請先在左側登入 Google，才可用電郵分享檔案。")
         return
@@ -195,23 +193,24 @@ def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix:
 
 
 # -------------------------
-# Streamlit Config
+# Page config + session
 # -------------------------
 st.set_page_config(page_title="AI 題目生成器", layout="wide")
-st.title("🏫 AI 題目生成器（Kahoot / Wayground / Google Form｜OCR + Grok Vision fallback）")
+st.title("🏫 AI 題目生成器")
+st.caption("支援：AI 生成｜匯入整理｜Kahoot/Wayground 匯出｜Google Form Quiz｜Google Drive 電郵分享")
 
-# session init
-defaults = {
+for k, v in {
     "google_creds": None,
     "generated_data": None,
     "imported_data": None,
     "imported_text": "",
+    "mark_idx": set(),
     "form_result_generate": None,
     "form_result_import": None,
-}
-for k, v in defaults.items():
+}.items():
     if k not in st.session_state:
         st.session_state[k] = v
+
 
 # -------------------------
 # OAuth callback
@@ -225,10 +224,8 @@ if oauth_is_configured() and "code" in params and not st.session_state.google_cr
             code = code[0]
         if isinstance(state, list):
             state = state[0]
-
         creds = exchange_code_for_credentials(code=code, returned_state=state)
         st.session_state.google_creds = credentials_to_dict(creds)
-
         st.query_params.clear()
         st.rerun()
     except Exception as e:
@@ -236,8 +233,9 @@ if oauth_is_configured() and "code" in params and not st.session_state.google_cr
         show_exception("Google 登入失敗。請重新按『連接 Google（登入）』一次。", e)
         st.stop()
 
+
 # -------------------------
-# Sidebar: Google connect
+# Sidebar: Google
 # -------------------------
 st.sidebar.header("🟦 Google 連接（Google Forms / Google Drive 一鍵分享檔案）")
 if not oauth_is_configured():
@@ -254,23 +252,22 @@ else:
 
 st.sidebar.divider()
 
+
 # -------------------------
-# Sidebar: Fast mode
+# Sidebar: AI
 # -------------------------
 fast_mode = st.sidebar.checkbox(
     "⚡ 快速模式",
     value=True,
-    help="較快、較保守：生成速度更快但題目變化較少；關閉後較慢但更豐富。"
+    help="較快、較保守：較短輸出與較短超時；適合日常快速出題。"
 )
+st.sidebar.caption("關閉快速模式：較慢，但題目更豐富/更有變化。")
 
-# -------------------------
-# Sidebar: AI API config
-# -------------------------
 st.sidebar.header("🔌 AI API 設定")
 preset = st.sidebar.selectbox(
     "快速選擇（簡易）",
     ["DeepSeek", "OpenAI", "Grok (xAI)", "Azure OpenAI", "自訂（OpenAI 相容）"],
-    key="preset"
+    key="preset",
 )
 api_key = st.sidebar.text_input("API Key", type="password", key="api_key")
 
@@ -311,10 +308,18 @@ if preset == "Grok (xAI)" and auto_xai and api_key:
         model = detected
         st.sidebar.caption(f"✅ 已自動選用：{model}")
 
+
 def api_config():
     if preset == "Azure OpenAI":
-        return {"type": "azure", "api_key": api_key, "endpoint": azure_endpoint, "deployment": azure_deployment, "api_version": azure_api_version}
+        return {
+            "type": "azure",
+            "api_key": api_key,
+            "endpoint": azure_endpoint,
+            "deployment": azure_deployment,
+            "api_version": azure_api_version,
+        }
     return {"type": "openai_compat", "api_key": api_key, "base_url": base_url, "model": model}
+
 
 def can_call_ai(cfg: dict):
     if not cfg.get("api_key"):
@@ -323,9 +328,8 @@ def can_call_ai(cfg: dict):
         return bool(cfg.get("endpoint")) and bool(cfg.get("deployment"))
     return bool(cfg.get("base_url")) and bool(cfg.get("model"))
 
-# -------------------------
-# Sidebar: API test
-# -------------------------
+
+# API test
 st.sidebar.divider()
 st.sidebar.header("🧪 API 連線測試")
 cfg_test = api_config()
@@ -341,29 +345,24 @@ if st.sidebar.button("🧪 一鍵測試 API（回覆 OK）", key="btn_ping_api")
             st.sidebar.error("❌ 失敗：請檢查 Key/Endpoint/Model 或服務狀態")
             st.sidebar.code(r.get("error", ""))
 
+
+# -------------------------
+# Sidebar: Teaching settings
+# -------------------------
 st.sidebar.divider()
-
-# -------------------------
-# Sidebar: mode/subject/difficulty/qtype
-# -------------------------
-mode = st.sidebar.radio(
-    "📂 試題來源模式",
-    ["🪄 AI 生成新題目", "📄 匯入現有題目（AI 協助）"],
-    key="mode"
-)
-
+st.sidebar.header("📘 出題設定")
 subject = st.sidebar.selectbox(
-    "📘 科目",
+    "科目",
     ["中國語文","英國語文","數學","公民與社會發展","科學","公民、經濟及社會","物理","化學","生物","地理","歷史","中國歷史","宗教",
      "資訊及通訊科技（ICT）","經濟","企業、會計與財務概論","旅遊與款待"],
-    key="subject"
+    key="subject",
 )
 
 level_label = st.sidebar.radio(
     "🎯 難度",
     ["基礎（理解與記憶）", "標準（應用與理解）", "進階（分析與思考）", "混合（課堂活動建議）"],
     index=1,
-    key="level_label"
+    key="level_label",
 )
 level_map = {
     "基礎（理解與記憶）": "easy",
@@ -373,158 +372,146 @@ level_map = {
 }
 level_code = level_map[level_label]
 
-if mode == "🪄 AI 生成新題目":
-    qtype_label = st.sidebar.selectbox(
-        "🧩 題型",
-        ["多項選擇題（四選一）", "是非題（對 / 錯）"],
-        key="qtype_generate"
-    )
-    qtype = "single" if qtype_label == "多項選擇題（四選一）" else "true_false"
-else:
-    qtype = "single"  # 匯入固定 single
+question_count = st.sidebar.selectbox("🧮 題目數目（生成用）", [5, 8, 10, 12, 15, 20], index=2, key="question_count")
+
 
 # -------------------------
-# Editor config
+# Main: flow guide
 # -------------------------
-EDITOR_COLUMN_CONFIG = {
-    "export": st.column_config.CheckboxColumn("匯出", width="small"),
-    "qtype": st.column_config.TextColumn("題型", width="small"),
-    "correct": st.column_config.TextColumn("答案", width="small"),
-    "needs_review": st.column_config.CheckboxColumn("需教師確認", width="small"),
-}
+with st.expander("🧭 使用流程（建議）", expanded=True):
+    st.markdown(
+        """
+**生成新題目（推薦）**
+1. 在左側完成：Google 登入（可選）＋設定 AI API。
+2. 選科目、難度與題目數目。
+3. 上載教材 →（可選）標記重點段落。
+4. 按「生成題目」→ 在表格中微調答案/選項。
+5. 勾選要匯出的題目 → 匯出 Kahoot/Wayground、建立 Google Form、或用電郵分享檔案。
+
+**匯入現有題目**
+1. 上載/貼上題目內容 → 勾「啟用 AI 協助整理」。
+2. 按「整理並轉換」→ 在表格中校對答案。
+3. 匯出/建立 Google Form/電郵分享。
+        """
+    )
+
+
+tabs = st.tabs(["🪄 生成新題目", "📄 匯入現有題目"])
 
 
 # =========================
-# Mode 1: Generate (OCR + Vision fallback)
+# Tab 1: Generate
 # =========================
-if mode == "🪄 AI 生成新題目":
-    st.subheader("🪄 AI 生成新題目（OCR + Grok Vision fallback）")
-
-    question_count = st.sidebar.selectbox("🧮 題目數目", [5, 8, 10, 12, 15, 20], index=2, key="question_count")
-    cfg = api_config()
-
-    enable_ocr = st.checkbox(
-        "🧾 啟用 OCR（圖片 / 掃描 PDF）",
-        value=False,
-        help="適合掃描/截圖題目；開啟會較慢。"
-    )
-    ocr_lang_choice = st.selectbox("OCR 語言", ["繁中+簡中+英", "繁中+英", "英"], index=0, key="ocr_lang_choice")
-    ocr_lang_map = {"繁中+簡中+英": "chi_tra+chi_sim+eng", "繁中+英": "chi_tra+eng", "英": "eng"}
-    ocr_lang = ocr_lang_map[ocr_lang_choice]
-
-    enable_vision = st.checkbox(
-        "🖼️ 啟用 Vision fallback（Grok 讀圖：圖表/幾何較準但較慢/較貴）",
-        value=False,
-        help="當 OCR/抽字不足時，把圖片/掃描PDF前幾頁交給 Grok 直接讀圖出題。"
-    )
-
-    # Vision fallback 保護：PDF 只取前 N 頁 images（必要）
-    VISION_PDF_MAX_PAGES = 3
+with tabs[0]:
+    st.markdown("## ① 上載教材")
+    st.caption("支援 PDF/DOCX/TXT/PPTX/XLSX。系統會先抽取文字，再交給 AI 出題。")
 
     files = st.file_uploader(
-        "上載教材（PDF/DOCX/TXT/PPTX/XLSX/PNG/JPG）",
+        "上載教材檔案",
         accept_multiple_files=True,
-        type=["pdf", "docx", "txt", "pptx", "xlsx", "png", "jpg", "jpeg"],
-        key="files_generate"
+        type=["pdf", "docx", "txt", "pptx", "xlsx"],
+        key="files_generate",
     )
 
-    # 建議頁數警告（不限制，但提示）
-    RECOMMEND_PDF_PAGES = 10
-
     raw_text = ""
-    images = []
-
     if files:
-        if enable_ocr or enable_vision:
-            pdf_pages = 0
-            for f in files:
-                if f.name.lower().endswith(".pdf"):
-                    pdf_pages += count_pdf_pages(f)
-            if pdf_pages > RECOMMEND_PDF_PAGES and pdf_pages != 0:
-                st.warning(f"⚠️ 建議上載不多於 {RECOMMEND_PDF_PAGES} 頁 PDF（你目前約 {pdf_pages} 頁），避免 OCR/分析超時。")
+        with st.spinner("📄 正在擷取文字…"):
+            raw_text = "".join(extract_text(f) for f in files)
+        st.info(f"✅ 已擷取 {len(raw_text)} 字")
 
-        with st.spinner("📄 正在擷取文字 / 準備 Vision 圖片…"):
-            payloads = [
-                extract_payload(
-                    f,
-                    enable_ocr=enable_ocr,
-                    ocr_lang=ocr_lang,
-                    enable_vision=enable_vision,
-                    vision_pdf_max_pages=VISION_PDF_MAX_PAGES
-                )
-                for f in files
-            ]
+        st.markdown("## ② 重點段落標記（可選）")
+        st.caption("勾選後，系統會把重點段落放到最前，提升貼題度。")
 
-        raw_text = "\n".join(p.get("text", "") for p in payloads).strip()
-        for p in payloads:
-            images.extend(p.get("images", []))
+        with st.expander("⭐ 打開段落清單", expanded=False):
+            paras = split_paragraphs(raw_text)
+            st.caption(f"段落數：{len(paras)}（以空行分段）")
 
-        if raw_text:
-            st.info(f"✅ 已抽取文字：約 {len(raw_text)} 字（OCR={'開' if enable_ocr else '關'}）")
-            with st.expander("🔎 預覽抽取文字（前 800 字）", expanded=False):
-                st.text(raw_text[:800])
-        else:
-            if enable_ocr:
-                st.warning("⚠️ OCR 未抽取到足夠文字（可能掃描模糊/反光/字太細，或內容主要是圖表/幾何）。")
-            else:
-                st.info("ℹ️ 尚未抽取到文字（未啟用 OCR 或檔案本身無文字層）。")
+            cA, cB = st.columns(2)
+            with cA:
+                if st.button("✅ 全選重點段落", key="btn_mark_all"):
+                    st.session_state.mark_idx = set(range(len(paras)))
+            with cB:
+                if st.button("⛔ 全不選", key="btn_mark_none"):
+                    st.session_state.mark_idx = set()
 
-        if enable_vision:
-            st.caption(f"🖼️ Vision 圖片已準備：{len(images)} 張（PDF 只取前 {VISION_PDF_MAX_PAGES} 頁做 Vision）")
+            for i, p in enumerate(paras[:80]):
+                checked = i in st.session_state.mark_idx
+                new_checked = st.checkbox(f"第 {i+1} 段", value=checked, key=f"para_{i}")
+                if new_checked:
+                    st.session_state.mark_idx.add(i)
+                else:
+                    st.session_state.mark_idx.discard(i)
+                st.write(p[:200] + ("…" if len(p) > 200 else ""))
 
+    st.markdown("## ③ 生成題目")
+    st.caption("按下後會呼叫 AI 生成題目。若你選了『混合』難度，系統會自動生成基礎/標準/進階再混合。")
+
+    cfg = api_config()
     limit = 8000 if fast_mode else 10000
 
-    if st.button("生成題目", disabled=not (can_call_ai(cfg) and (bool(raw_text) or (enable_vision and bool(images)))), key="btn_generate"):
+    if st.button("🪄 生成題目", disabled=not (can_call_ai(cfg) and bool(raw_text.strip())), key="btn_generate"):
         try:
-            # 文字足夠 → 正常生成
-            if raw_text and len(raw_text) >= 80:
-                used_text = raw_text[:limit]
-                st.info(f"✅ 用文字生成：{len(used_text)} 字｜題型：{qtype_label}｜難度：{level_label}")
-                st.session_state.generated_data = generate_questions(
-                    cfg, used_text, subject, level_code, question_count, fast_mode=fast_mode, qtype=qtype
-                )
-            else:
-                # 文字不足 → Vision fallback
-                if enable_vision and images:
-                    if preset == "Grok (xAI)":
-                        vision_model = xai_pick_vision_model(api_key, base_url)
-                        if not vision_model:
-                            st.error("⚠️ 未找到支援圖片輸入的 Grok 模型（請檢查 xAI key 權限/模型可用性）。")
-                            st.stop()
-                        cfg2 = dict(cfg)
-                        cfg2["model"] = vision_model
-                        st.info(f"🖼️ Vision fallback：使用 Grok 模型 {vision_model}")
-                    else:
-                        cfg2 = cfg
-                        st.info("🖼️ Vision fallback：使用目前模型（注意：需支援 image input）")
+            used_text = build_text_with_highlights(raw_text, st.session_state.mark_idx, limit)
+            st.info(f"送入 AI：{len(used_text)} 字（上限 {limit}）｜難度：{level_label}｜題數：{question_count}")
 
-                    st.session_state.generated_data = generate_questions_from_images(
-                        cfg2, images, subject, level_code, question_count, fast_mode=fast_mode, qtype=qtype
+            cache = load_cache()
+            key = stable_key(used_text, subject, level_code, question_count, fast_mode, preset, model, base_url)
+
+            if key in cache:
+                st.success("✅ 已從快取讀取（節省時間與額度）")
+                st.session_state.generated_data = cache[key]
+            else:
+                with st.spinner("🤖 正在生成…"):
+                    st.session_state.generated_data = generate_questions(
+                        cfg,
+                        used_text,
+                        subject,
+                        level_code,
+                        question_count,
+                        fast_mode=fast_mode,
+                        qtype="single",
                     )
-                else:
-                    st.error("⚠️ 未抽取到足夠文字；如為掃描/圖片，請開啟 OCR 或 Vision fallback。")
-                    st.stop()
+                cache[key] = st.session_state.generated_data
+                save_cache(cache)
 
             st.session_state.form_result_generate = None
 
         except Exception as e:
             show_exception("⚠️ 生成題目失敗。", e)
-            st.stop()
 
     if st.session_state.generated_data:
+        st.markdown("## ④ 檢視與微調")
+        st.caption("你可以直接在表格內修改題幹、選項、正確答案，以及勾選是否匯出。")
+
         df = to_editor_df(st.session_state.generated_data, subject)
+
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            if st.button("✅ 全選匯出", key="btn_export_all_generate"):
+                df["export"] = True
+        with c2:
+            if st.button("全部取消匯出", key="btn_export_none_generate"):
+                df["export"] = False
 
         edited = st.data_editor(
             df,
             use_container_width=True,
             num_rows="dynamic",
-            column_config=EDITOR_COLUMN_CONFIG,
-            key="editor_generate"
+            column_config={
+                "export": st.column_config.CheckboxColumn("匯出", width="small"),
+                "correct": st.column_config.SelectboxColumn("正確答案（1-4）", options=["1","2","3","4"], width="small"),
+                "needs_review": st.column_config.CheckboxColumn("需教師確認", width="small"),
+            },
+            disabled=["subject", "qtype"],
+            key="editor_generate",
         )
         selected = edited[edited["export"] == True].copy()
 
-        st.caption(f"✅ 已選擇匯出 {len(selected)} 題（共 {len(edited)} 題）")
+        st.success(f"✅ 已生成 {len(edited)} 題；已選擇匯出 {len(selected)} 題")
 
+        st.markdown("## ⑤ 匯出 / Google Form / 電郵分享")
+
+        # Google Form
         if st.session_state.google_creds and not selected.empty:
             if st.button("🟦 一鍵建立 Google Form Quiz", key="btn_form_generate"):
                 try:
@@ -544,11 +531,11 @@ if mode == "🪄 AI 生成新題目":
 
 
 # =========================
-# Mode 2: Import (保持：固定 single)
+# Tab 2: Import
 # =========================
-if mode == "📄 匯入現有題目（AI 協助）":
-    st.subheader("📄 匯入現有題目（AI 協助）")
-    st.info("📌 匯入模式固定為「多項選擇題（四選一）」；若原文無答案，AI 會推測並標示需教師確認。")
+with tabs[1]:
+    st.markdown("## ① 上載 / 貼上題目")
+    st.caption("支援 DOCX/TXT 或直接貼上。匯入模式固定為單選（4選1）。")
 
     cfg = api_config()
 
@@ -559,17 +546,35 @@ if mode == "📄 匯入現有題目（AI 協助）":
         st.session_state.imported_text = extract_text(f) or ""
         st.session_state.imported_data = None
 
-    st.file_uploader("上載 DOCX/TXT（自動載入）", type=["docx", "txt"], key="import_file", on_change=load_import_file_to_textbox)
+    st.file_uploader(
+        "上載 DOCX/TXT（自動載入到文字框）",
+        type=["docx", "txt"],
+        key="import_file",
+        on_change=load_import_file_to_textbox,
+    )
+
     use_ai_assist = st.checkbox("啟用 AI 協助整理（建議）", value=True, key="use_ai_assist")
     st.text_area("貼上題目內容", height=320, key="imported_text")
 
-    if st.button("✨ 整理並轉換", disabled=not (bool(st.session_state.imported_text.strip()) and (not use_ai_assist or can_call_ai(cfg))), key="btn_import_parse"):
+    st.markdown("## ② 整理並轉換")
+    st.caption("啟用 AI 協助：會自動拆出題幹/選項/答案；若原文無答案，AI 會推測並標記需教師確認。")
+
+    if st.button(
+        "✨ 整理並轉換",
+        disabled=not (bool(st.session_state.imported_text.strip()) and (not use_ai_assist or can_call_ai(cfg))),
+        key="btn_import_parse",
+    ):
         try:
             raw = st.session_state.imported_text.strip()
             with st.spinner("🧠 正在整理…"):
                 if use_ai_assist:
                     st.session_state.imported_data = assist_import_questions(
-                        cfg, raw, subject, allow_guess=True, fast_mode=fast_mode, qtype="single"
+                        cfg,
+                        raw,
+                        subject,
+                        allow_guess=True,
+                        fast_mode=fast_mode,
+                        qtype="single",
                     )
                 else:
                     st.session_state.imported_data = parse_import_questions_locally(raw)
@@ -585,17 +590,34 @@ if mode == "📄 匯入現有題目（AI 協助）":
                 st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)))
 
     if st.session_state.imported_data:
+        st.markdown("## ③ 檢視與微調")
         df = to_editor_df(st.session_state.imported_data, subject)
+
+        c1, c2 = st.columns([1, 1])
+        with c1:
+            if st.button("✅ 全選匯出", key="btn_export_all_import"):
+                df["export"] = True
+        with c2:
+            if st.button("全部取消匯出", key="btn_export_none_import"):
+                df["export"] = False
 
         edited = st.data_editor(
             df,
             use_container_width=True,
             num_rows="dynamic",
-            column_config=EDITOR_COLUMN_CONFIG,
-            key="editor_import"
+            column_config={
+                "export": st.column_config.CheckboxColumn("匯出", width="small"),
+                "correct": st.column_config.SelectboxColumn("正確答案（1-4）", options=["1","2","3","4"], width="small"),
+                "needs_review": st.column_config.CheckboxColumn("需教師確認", width="small"),
+            },
+            disabled=["subject", "qtype"],
+            key="editor_import",
         )
         selected = edited[edited["export"] == True].copy()
-        st.caption(f"✅ 已選擇匯出 {len(selected)} 題（共 {len(edited)} 題）")
+
+        st.success(f"✅ 已載入 {len(edited)} 題；已選擇匯出 {len(selected)} 題")
+
+        st.markdown("## ④ 匯出 / Google Form / 電郵分享")
 
         if st.session_state.google_creds and not selected.empty:
             if st.button("🟦 一鍵建立 Google Form Quiz", key="btn_form_import"):
