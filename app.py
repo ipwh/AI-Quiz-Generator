@@ -186,8 +186,11 @@ def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix:
 # Page config + session
 # -------------------------
 st.set_page_config(page_title="AI 題目生成器", layout="wide")
-st.title("🏫 AI 題目生成器（抗貼碼破壞版介面）")
-st.caption("UI版本：UI-REDESIGN 2026-04-19 v3 ✅（若見到此句＝Cloud 已使用最新 app.py）")
+st.markdown("""<style>
+/* Hide Streamlit header anchor/link icons */
+a.header-anchor {display: none !important;}
+</style>""", unsafe_allow_html=True)
+st.title("🏫 AI 題目生成器（支援Kahoot、Wayground、Google Forms及一鍵電郵分享）")
 
 for k, v in {
     "google_creds": None,
@@ -395,10 +398,7 @@ with tab_generate:
         value=False,
         help="當抽取到的文字太少或品質差，會把圖片/掃描PDF前幾頁交給 Grok 或其他LLM（DeepSeek欠缺OCR功能，不可用） 讀圖抽字，再用該文字出題。"
     )
-    llm_ocr_pdf_pages = st.selectbox("LLM OCR PDF頁數（只取前幾頁）", [1, 2, 3, 4, 5], index=2)
-
-    if enable_llm_ocr and (not HAS_LLM_OCR or not HAS_EXTRACT_IMAGES):
-        st.warning("⚠️ LLM OCR 功能未完整安裝：請確認 llm_service.py 已加入 xai_pick_vision_model / llm_ocr_extract_text，並且 extract.py 已加入 extract_images_for_llm_ocr。")
+    llm_ocr_pdf_pages = st.selectbox("LLM OCR PDF頁數（Token限制，最多5頁）", [1,2,3,4,5], index=2)
 
     files = st.file_uploader(
         "上載教材檔案",
