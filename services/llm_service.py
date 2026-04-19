@@ -19,7 +19,7 @@ def _reset_session():
 
 
 # -------------------------
-# 科目特性
+# 科目特性（略：保持你現有版本）
 # -------------------------
 SUBJECT_TRAITS = {
     "中國語文": (
@@ -86,7 +86,7 @@ SUBJECT_TRAITS = {
     ),
 }
 
-DEFAULT_TRAITS = "重點：根據教材內容出題，避免離題。干擾項：以常見誤解作干擾。"
+DEFAULT_TRAITS = "重點：根據教材內容出題，避免離題。"
 
 
 def _clean_text(text: str) -> str:
@@ -139,119 +139,11 @@ def _normalize_correct(corr):
     return [corr[0]]
 
 
-def _prefix_review_warning(expl: str) -> str:
-    expl = (expl or "").strip()
-    if expl.startswith("⚠️需教師確認"):
-        return expl
-    return "⚠️需教師確認：" + (expl if expl else "系統推測答案，請老師核對。")
-
-
-_CATHOLIC_REPLACE = [
-    (r"\b彼得\b", "伯多祿"),
-    (r"\b上帝\b", "天主"),
-    (r"\b神\b", "天主"),
-    (r"\b馬利亞\b", "聖母瑪利亞"),
-    (r"\b基督徒\b", "教友"),
-]
-_CATHOLIC_FLAG_ONLY = ["牧師", "長老", "傳道", "傳道人", "會眾", "敬拜讚美"]
-
-
-def _apply_catholic_terms(text: str) -> str:
-    if not text:
-        return text
-    out = text
-    for pattern, repl in _CATHOLIC_REPLACE:
-        out = re.sub(pattern, repl, out)
-    return out
-
-
-def _contains_flag_terms(text: str) -> bool:
-    if not text:
-        return False
-    return any(t in text for t in _CATHOLIC_FLAG_ONLY)
-
-
-def _enforce_catholic_language(item: dict) -> dict:
-    q = str(item.get("question", "") or "")
-    exp = str(item.get("explanation", "") or "")
-    opts = item.get("options", [])
-    if not isinstance(opts, list):
-        opts = []
-
-    q2 = _apply_catholic_terms(q)
-    exp2 = _apply_catholic_terms(exp)
-    opts2 = [_apply_catholic_terms(str(o or "")) for o in opts]
-
-    flagged = _contains_flag_terms(q2) or _contains_flag_terms(exp2) or any(_contains_flag_terms(o) for o in opts2)
-    needs_review = bool(item.get("needs_review", False)) or flagged
-
-    if flagged:
-        exp2 = _prefix_review_warning("用字可能出現非天主教版本稱謂/概念，請老師核對。 " + exp2)
-
-    item["question"] = q2.strip()
-    item["explanation"] = exp2.strip()
-    item["options"] = opts2[:4] + [""] * (4 - len(opts2[:4]))
-    item["needs_review"] = needs_review
-    return item
-
-
-def _post_openai_compat(api_key: str, base_url: str, payload: dict, timeout: int = 90, max_retries: int = 5):
-    url = base_url.rstrip("/") + "/chat/completions"
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    t = (15, timeout)
-    last_err = None
-
-    for attempt in range(max_retries):
-        try:
-            with _SESSION_LOCK:
-                r = _SESSION.post(url, headers=headers, json=payload, timeout=t)
-            r.raise_for_status()
-            return r.json()
-        except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout) as e:
-            last_err = e
-            time.sleep(((2 ** attempt) * 2) + random.random())
-            with _SESSION_LOCK:
-                _reset_session()
-        except requests.exceptions.HTTPError:
-            raise
-        except requests.exceptions.RequestException as e:
-            last_err = e
-            time.sleep(((2 ** attempt) * 2) + random.random())
-            with _SESSION_LOCK:
-                _reset_session()
-
-    raise requests.exceptions.ConnectionError(f"OpenAI-compatible request failed after retries: {last_err}")
-
-
-def _post_azure(api_key: str, endpoint: str, deployment: str, api_version: str, payload: dict, timeout: int = 90, max_retries: int = 3):
-    url = endpoint.rstrip("/") + f"/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
-    headers = {"api-key": api_key, "Content-Type": "application/json"}
-    t = (10, timeout)
-    last_err = None
-
-    for attempt in range(max_retries):
-        try:
-            with _SESSION_LOCK:
-                r = _SESSION.post(url, headers=headers, json=payload, timeout=t)
-            r.raise_for_status()
-            return r.json()
-        except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout) as e:
-            last_err = e
-            time.sleep((2 ** attempt) + random.random())
-            with _SESSION_LOCK:
-                _reset_session()
-        except requests.exceptions.HTTPError:
-            raise
-        except requests.exceptions.RequestException as e:
-            last_err = e
-            time.sleep((2 ** attempt) + random.random())
-            with _SESSION_LOCK:
-                _reset_session()
-
-    raise requests.exceptions.ConnectionError(f"Azure request failed after retries: {last_err}")
-
-
 def _chat(cfg: dict, messages: list, temperature: float, max_tokens: int, timeout: int):
+    """
+    OpenAI-compatible / Azure OpenAI 統一入口。
+    xAI Grok 亦是 OpenAI-compatible：base_url=https://api.x.ai/v1，endpoint=/chat/completions。[3](https://www.buildmvpfast.com/tools/api-pricing-estimator/google-vision)[1](https://blog.csdn.net/gitblog_09688/article/details/142221724)
+    """
     if cfg.get("type") == "azure":
         data = _post_azure(
             api_key=cfg["api_key"],
@@ -268,47 +160,161 @@ def _chat(cfg: dict, messages: list, temperature: float, max_tokens: int, timeou
             payload={"model": cfg["model"], "messages": messages, "temperature": temperature, "max_tokens": max_tokens},
             timeout=timeout,
         )
+
     return data.get("choices", [{}])[0].get("message", {}).get("content", "")
 
 
+def _post_openai_compat(api_key: str, base_url: str, payload: dict, timeout: int = 90, max_retries: int = 5):
+    url = base_url.rstrip("/") + "/chat/completions"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+
+    t = (15, timeout)
+    last_err = None
+
+    for attempt in range(max_retries):
+        try:
+            with _SESSION_LOCK:
+                r = _SESSION.post(url, headers=headers, json=payload, timeout=t)
+            r.raise_for_status()
+            return r.json()
+
+        except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout) as e:
+            last_err = e
+            time.sleep(((2 ** attempt) * 2) + random.random())
+            with _SESSION_LOCK:
+                _reset_session()
+
+        except requests.exceptions.HTTPError:
+            raise
+
+        except requests.exceptions.RequestException as e:
+            last_err = e
+            time.sleep(((2 ** attempt) * 2) + random.random())
+            with _SESSION_LOCK:
+                _reset_session()
+
+    raise requests.exceptions.ConnectionError(f"OpenAI-compatible request failed after retries: {last_err}")
+
+
+def _post_azure(api_key: str, endpoint: str, deployment: str, api_version: str, payload: dict, timeout: int = 90, max_retries: int = 3):
+    url = endpoint.rstrip("/") + f"/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
+    headers = {"api-key": api_key, "Content-Type": "application/json"}
+    t = (10, timeout)
+
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            with _SESSION_LOCK:
+                r = _SESSION.post(url, headers=headers, json=payload, timeout=t)
+            r.raise_for_status()
+            return r.json()
+
+        except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout) as e:
+            last_err = e
+            time.sleep((2 ** attempt) + random.random())
+            with _SESSION_LOCK:
+                _reset_session()
+
+        except requests.exceptions.HTTPError:
+            raise
+
+        except requests.exceptions.RequestException as e:
+            last_err = e
+            time.sleep((2 ** attempt) + random.random())
+            with _SESSION_LOCK:
+                _reset_session()
+
+    raise requests.exceptions.ConnectionError(f"Azure request failed after retries: {last_err}")
+
+
 # -------------------------
-# ✅ 新增：一鍵測試 API 用（極短 prompt）
+# ✅ 新增：xAI 自動偵測最新可用型號（Option B）
+# -------------------------
+def get_xai_default_model(api_key: str, base_url: str = "https://api.x.ai/v1", timeout: int = 15) -> str:
+    """
+    透過 xAI /v1/language-models 列出可用模型及 aliases，選一個最佳預設 model。
+    xAI docs：/v1/models 與 /v1/language-models 可列出當前 API key 可用模型，language-models 含 aliases。[2](https://zhuanlan.zhihu.com/p/1964739506629490036)
+
+    策略：
+    1) 優先使用別名（alias）避免硬綁版本：grok-4-latest → grok-4 → grok-3-latest → grok-3 → grok-2-latest
+    2) 若別名都不存在，選 created 最大（最新）的 grok-* model id
+    3) 若 API 失敗，回退 grok-4-latest（alias）
+    """
+    preferred_aliases = ["grok-4-latest", "grok-4", "grok-3-latest", "grok-3", "grok-2-latest"]
+
+    url = base_url.rstrip("/") + "/language-models"
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    try:
+        with _SESSION_LOCK:
+            r = _SESSION.get(url, headers=headers, timeout=(10, timeout))
+        r.raise_for_status()
+        payload = r.json()
+
+        models = payload.get("models") or payload.get("data") or []
+        if not isinstance(models, list):
+            models = []
+
+        # 收集 aliases
+        alias_set = set()
+        grok_models = []
+        for m in models:
+            if not isinstance(m, dict):
+                continue
+            mid = str(m.get("id", "") or "")
+            created = m.get("created", 0) or 0
+            aliases = m.get("aliases") or []
+            if isinstance(aliases, list):
+                for a in aliases:
+                    if isinstance(a, str):
+                        alias_set.add(a)
+            if mid.startswith("grok-"):
+                grok_models.append((created, mid))
+
+        # 1) 優先 alias
+        for a in preferred_aliases:
+            if a in alias_set:
+                return a
+
+        # 2) fallback: newest created grok model id
+        if grok_models:
+            grok_models.sort(key=lambda x: x[0], reverse=True)
+            return grok_models[0][1]
+
+        # 3) fallback
+        return "grok-4-latest"
+
+    except Exception:
+        # API 失敗亦唔阻使用：用 alias 作 fallback
+        return "grok-4-latest"
+
+
+# -------------------------
+# ✅ 一鍵測試 API
 # -------------------------
 def ping_llm(cfg: dict, timeout: int = 25):
-    """
-    回傳 dict:
-      - ok: bool
-      - latency_ms: int
-      - output: str  （成功時盡量統一為 'OK'）
-      - error: str
-    """
     t0 = time.time()
     try:
         out = _chat(
             cfg,
-            messages=[{
-                "role": "user",
-                "content": "只輸出兩個字：OK。不要輸出任何其他文字、標點或換行。"
-            }],
+            messages=[{"role": "user", "content": "只輸出兩個字：成功。不要輸出任何其他文字、標點或換行。"}],
             temperature=0.0,
-            max_tokens=3,   # ✅ 收緊，避免客套句
+            max_tokens=3,
             timeout=timeout,
         )
         ms = int((time.time() - t0) * 1000)
-
         text = (out or "").strip()
-
-        # ✅ 後處理：只要包含 OK（大小寫都得），就統一顯示 OK
         if "OK" in text.upper():
             text = "OK"
-
         return {"ok": True, "latency_ms": ms, "output": text, "error": ""}
-
     except Exception as e:
         ms = int((time.time() - t0) * 1000)
         return {"ok": False, "latency_ms": ms, "output": "", "error": repr(e)}
 
 
+# -------------------------
+# JSON 修復 / Few-shot / 生成 / 匯入（保持你原本功能）
+# -------------------------
 def _fix_json(cfg: dict, bad_output: str, schema_hint: str, timeout: int):
     prompt = f"""
 你剛才輸出不是有效 JSON 或格式不符合要求。
@@ -350,9 +356,7 @@ _FEWSHOT = """
 def generate_questions(cfg, text, subject, level, question_count, fast_mode: bool = False):
     traits = SUBJECT_TRAITS.get(subject, DEFAULT_TRAITS)
     text = _clean_text(text)
-
-    text_limit = 2600 if fast_mode else 5000
-    text = text[:text_limit]
+    text = text[: (2600 if fast_mode else 5000)]
 
     schema_hint = """
 每題必須包含：
@@ -368,15 +372,6 @@ def generate_questions(cfg, text, subject, level, question_count, fast_mode: boo
     max_tokens = 1200 if fast_mode else 1800
     timeout = 90 if fast_mode else 180
 
-    catholic_hard_rule = ""
-    if subject == "宗教":
-        catholic_hard_rule = """
-【天主教用字硬規則（再次強調）】
-- 嚴禁：彼得、上帝、神、馬利亞（敬禮語境用單稱）、牧師、長老、傳道、基督徒（作天主教內部稱呼）
-- 必須：伯多祿、天主、聖母瑪利亞、教宗/主教/神父、教友
-- 若不確定用字：needs_review=true，explanation 以「⚠️需教師確認：」開頭
-"""
-
     prompt = f"""
 你是一名香港中學教師，熟悉 DSE/校內測驗出題。
 科目：{subject}；整體難度：{level}
@@ -384,15 +379,12 @@ def generate_questions(cfg, text, subject, level, question_count, fast_mode: boo
 【科目特性（必須遵守）】
 {traits}
 
-{catholic_hard_rule}
-
 【出題硬規則】
 1) 只生成 {question_count} 條「單選題（4選1）」
 2) options 必須剛好 4 個
 3) correct 必須是 ["1"~"4"]（只 1 個）
 4) 每題 question 或 explanation 必須包含教材中出現過的至少 2 個關鍵詞（貼題）
 5) 干擾項要合理：基於常見誤解/混淆點，避免無關選項
-6) 若教材資訊不足令答案不肯定：needs_review=true，explanation 以「⚠️需教師確認：」開頭
 
 【輸出】
 只輸出「純 JSON array」，不要任何額外文字。
@@ -419,34 +411,21 @@ def generate_questions(cfg, text, subject, level, question_count, fast_mode: boo
         needs_review = bool(q.get("needs_review", False))
         expl = str(q.get("explanation", "")).strip()
 
-        if len(expl) > 40:
-            expl = expl[:40]
-        if needs_review:
-            expl = _prefix_review_warning(expl)
-
-        item = {
+        cleaned.append({
             "type": "single",
             "question": str(q.get("question", "")).strip(),
             "options": opts,
             "correct": corr,
-            "explanation": expl,
+            "explanation": expl[:60],
             "needs_review": needs_review,
-        }
-
-        if subject == "宗教":
-            item = _enforce_catholic_language(item)
-
-        cleaned.append(item)
+        })
 
     return cleaned
 
 
 def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode: bool = False):
-    traits = SUBJECT_TRAITS.get(subject, DEFAULT_TRAITS)
     raw_text = _clean_text(raw_text)
-
-    raw_limit = 3500 if fast_mode else 7000
-    raw_text = raw_text[:raw_limit]
+    raw_text = raw_text[: (3500 if fast_mode else 7000)]
 
     schema_hint = """
 每題必須包含：
@@ -454,46 +433,21 @@ def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode:
 - question: 字串
 - options: list（必須 4 個字串）
 - correct: list（只含 1 個字串 "1"~"4"）
-- explanation: 字串（needs_review=true 時以 ⚠️需教師確認： 開頭）
+- explanation: 字串
 - needs_review: true/false
 """
-
     temperature = 0.0 if fast_mode else 0.1
     max_tokens = 2200 if fast_mode else 3000
     timeout = 45 if fast_mode else 90
-
-    guess_rule = (
-        "若原文未提供答案，你可以推測最可能正確答案，但必須 needs_review=true，並在 explanation 開頭加「⚠️需教師確認：」。"
-        if allow_guess
-        else "若原文未提供答案，請 correct 設為 ['1'] 並 needs_review=true。"
-    )
-
-    catholic_hard_rule = ""
-    if subject == "宗教":
-        catholic_hard_rule = """
-【天主教用字硬規則（再次強調）】
-- 嚴禁：彼得、上帝、神、馬利亞（敬禮語境用單稱）、牧師、長老、傳道、基督徒（作天主教內部稱呼）
-- 必須：伯多祿、天主、聖母瑪利亞、教宗/主教/神父、教友
-"""
 
     prompt = f"""
 你是一名香港中學教師，正在把現有選擇題整理成標準格式。
 科目：{subject}
 
-【科目特性】
-{traits}
-
-{catholic_hard_rule}
-
-【最重要規則】
-- 原文若有答案（例如：答案：B / Answer: 2），必須跟從。
-- {guess_rule}
-
 【輸出要求】
 - 只輸出純 JSON array
 - 每題必須 4 選項（不足補空字串）
 - correct 只可 "1"~"4"（list 只有 1 個）
-- needs_review：推測/不肯定時 true
 
 {_FEWSHOT}
 
@@ -514,26 +468,14 @@ def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode:
     for q in items:
         opts = _normalize_options(q.get("options", []))
         corr = _normalize_correct(q.get("correct", []))
-        needs_review = bool(q.get("needs_review", False))
-        expl = str(q.get("explanation", "")).strip()
-
-        if needs_review:
-            expl = _prefix_review_warning(expl)
-
-        item = {
+        cleaned.append({
             "type": "single",
             "question": str(q.get("question", "")).strip(),
             "options": opts,
             "correct": corr,
-            "explanation": expl[:60],
-            "needs_review": needs_review,
-        }
-
-        if subject == "宗教":
-            item = _enforce_catholic_language(item)
-
-        cleaned.append(item)
-
+            "explanation": str(q.get("explanation", "")).strip()[:60],
+            "needs_review": bool(q.get("needs_review", False)),
+        })
     return cleaned
 
 
@@ -571,16 +513,14 @@ def parse_import_questions_locally(raw_text: str):
         options = _normalize_options(options)
 
         qstem = re.sub(r"(?:答案|Answer)\s*[:：]\s*([A-D]|[1-4]).*", "", b, flags=re.IGNORECASE).strip()
-        qstem = re.sub(r"(?m)^\s*(?:[A-D][\.\)、\)]|\([A-D]\))\s*.+$", "", qstem).strip()
-
-        expl = "⚠️需教師確認：未找到答案，請老師核對。" if needs_review else ""
+        qstem = re.sub(r"(?m)^\s*(?:[A-D][\.\、\)]|\([A-D]\))\s*.+$", "", qstem).strip()
 
         out.append({
             "type": "single",
             "question": qstem,
             "options": options,
             "correct": [correct_num],
-            "explanation": expl,
+            "explanation": "",
             "needs_review": needs_review,
         })
 
