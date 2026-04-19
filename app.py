@@ -507,15 +507,30 @@ if mode == "📄 匯入現有題目（AI 協助）":
     st.text_area("貼上題目內容", height=320, key="imported_text")
 
     if st.button("✨ 整理並轉換", disabled=not (bool(st.session_state.imported_text.strip()) and (not use_ai_assist or can_call_ai(cfg)))):
+    try:
+        raw = st.session_state.imported_text.strip()
+        st.info(f"✅ 已載入/貼上 {len(raw)} 字。")
+
+        with st.spinner("🧠 正在整理（可能需 10–30 秒，慢時 1–3 分鐘）…"):
+            if use_ai_assist:
+                st.session_state.imported_data = assist_import_questions(
+                    cfg, raw, subject, allow_guess=True, fast_mode=fast_mode, qtype=qtype
+                )
+            else:
+                st.session_state.imported_data = parse_import_questions_locally(raw)
+
+    except Exception as e:
+        # ✅ AI 超時/網絡問題：自動 fallback 本地拆題（至少拆出 A-D）
+        st.warning("⚠️ AI 整理暫時失敗（可能對方服務繁忙或網絡超時）。系統已改用「本地拆題」作備援，請老師核對答案。")
         try:
-            raw = st.session_state.imported_text.strip()
-            with st.spinner("🧠 正在整理…"):
-                if use_ai_assist:
-                    st.session_state.imported_data = assist_import_questions(cfg, raw, subject, allow_guess=True, fast_mode=fast_mode, qtype=qtype)
-                else:
-                    st.session_state.imported_data = parse_import_questions_locally(raw)
-        except Exception as e:
-            show_exception("⚠️ 整理失敗。", e)
+            st.session_state.imported_data = parse_import_questions_locally(st.session_state.imported_text.strip())
+        except Exception as e2:
+            show_exception("⚠️ 本地拆題亦失敗，請檢查貼上的格式。", e2)
+            st.stop()
+
+        # 把 AI 的錯誤留在技術細節
+        with st.expander("🔎 AI 失敗技術細節"):
+            st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)))
 
     if st.session_state.imported_data:
         df = to_editor_df(st.session_state.imported_data, subject)
