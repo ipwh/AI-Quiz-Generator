@@ -18,9 +18,6 @@ def _reset_session():
     _SESSION = requests.Session()
 
 
-# -------------------------
-# 科目特性（你可按校本再擴充）
-# -------------------------
 SUBJECT_TRAITS = {
     "中國語文": "重點：篇章理解、語境推斷、段落主旨、作者態度。干擾項：以偏概全、張冠李戴。",
     "英國語文": "Focus: inference, tone, vocab in context. Distractors: near-synonym traps.",
@@ -43,9 +40,6 @@ SUBJECT_TRAITS = {
 DEFAULT_TRAITS = "重點：根據教材內容出題，避免離題。"
 
 
-# -------------------------
-# 工具：清洗文字
-# -------------------------
 def _clean_text(text: str) -> str:
     if not text:
         return ""
@@ -54,9 +48,6 @@ def _clean_text(text: str) -> str:
     return text.strip()
 
 
-# -------------------------
-# 工具：抽 JSON（容錯）
-# -------------------------
 def extract_json(text: str):
     if not text:
         raise ValueError("AI 回傳內容是空的")
@@ -102,21 +93,10 @@ def _normalize_correct(corr, qtype: str):
         corr = [c for c in corr if c in {"1", "2"}]
         return [corr[0]] if corr else ["1"]
 
-    if qtype == "multiple":
-        seen = set()
-        out = []
-        for c in corr:
-            if c not in seen:
-                seen.add(c)
-                out.append(c)
-        return out[:4] if out else ["1"]
-
+    # single
     return [corr[0]] if corr else ["1"]
 
 
-# -------------------------
-# HTTP：OpenAI compatible / Azure
-# -------------------------
 def _post_openai_compat(api_key: str, base_url: str, payload: dict, timeout: int = 120, max_retries: int = 5):
     url = base_url.rstrip("/") + "/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
@@ -199,9 +179,6 @@ def _chat(cfg: dict, messages: list, temperature: float, max_tokens: int, timeou
     return data.get("choices", [{}])[0].get("message", {}).get("content", "")
 
 
-# -------------------------
-# API 測試
-# -------------------------
 def ping_llm(cfg: dict, timeout: int = 25):
     t0 = time.time()
     try:
@@ -222,9 +199,6 @@ def ping_llm(cfg: dict, timeout: int = 25):
         return {"ok": False, "latency_ms": ms, "output": "", "error": repr(e)}
 
 
-# -------------------------
-# Grok 自動偵測（供 app.py 使用）
-# -------------------------
 def get_xai_default_model(api_key: str, base_url: str = "https://api.x.ai/v1", timeout: int = 15) -> str:
     preferred_aliases = ["grok-4-latest", "grok-4", "grok-3-latest", "grok-3", "grok-2-latest"]
     url = base_url.rstrip("/") + "/language-models"
@@ -268,9 +242,6 @@ def get_xai_default_model(api_key: str, base_url: str = "https://api.x.ai/v1", t
         return "grok-4-latest"
 
 
-# -------------------------
-# JSON 修復（失敗自救）
-# -------------------------
 def _fix_json(cfg: dict, bad_output: str, schema_hint: str, timeout: int):
     prompt = (
         "你剛才輸出不是有效 JSON 或格式不符合要求。\n"
@@ -292,7 +263,7 @@ def _call_with_retries(cfg: dict, messages: list, temperature: float, max_tokens
         return extract_json(out2)
 
 
-_FEWSHOT = """
+_FEWSHOT_SINGLE = """
 [
   {
     "qtype": "single",
@@ -305,66 +276,105 @@ _FEWSHOT = """
 ]
 """
 
-
-# -------------------------
-# ✅ 生成題目（single 會偏好 (1)(2)… + A-D）
-# -------------------------
-def generate_questions(cfg, text, subject, level, question_count, fast_mode: bool = False, qtype: str = "single"):
-    traits = SUBJECT_TRAITS.get(subject, DEFAULT_TRAITS)
-    text = _clean_text(text)
-
-    text = text[: (8000 if fast_mode else 10000)]
-
-    schema_hint = """
-每題必須包含：
-- qtype: 固定 "single"
-- question: 字串
-- options: list（必須 4 個字串）
-- correct: list（只含 1 個字串 "1"~"4"）
-- explanation: 字串（極短即可）
-- needs_review: true/false
+_FEWSHOT_TF = """
+[
+  {
+    "qtype": "true_false",
+    "question": "YouTube 屬於新媒體。",
+    "options": ["對", "錯", "", ""],
+    "correct": ["1"],
+    "explanation": "（極短）",
+    "needs_review": false
+  }
+]
 """
 
-    # ✅ 本版：生成固定 single
-    qtype = "single"
 
-    temperature = 0.15 if fast_mode else 0.2
-    max_tokens = 1600 if fast_mode else 2600
-    timeout = 90 if fast_mode else 180
+def _difficulty_guidance(level_code: str) -> str:
+    if level_code == "easy":
+        return "出題偏重定義、關鍵詞辨識、直接理解；不要太多跨段推論。"
+    if level_code == "medium":
+        return "出題偏重情境應用與簡單推論；要求理解概念並應用到例子。"
+    if level_code == "hard":
+        return "出題偏重分析、比較、判斷與推理；可加入常見混淆點作干擾。"
+    return "混合難度。"
 
-    prompt = f"""
+
+def _build_prompt(subject: str, traits: str, qtype: str, level_code: str, count: int, text: str) -> str:
+    # 盡量簡潔題幹：避免「根據教材內容」套話
+    common_rules = f"""
 你是一名香港中學教師，負責出校內測驗題。
-科目：{subject}；難度：{level}
+科目：{subject}
+難度要求：{_difficulty_guidance(level_code)}
 
 【科目特性（必須遵守）】
 {traits}
 
 【題幹用語規則（必須遵守）】
-- 題目要直接、簡潔，不要使用「根據教材內容」「根據以上資料」「下列哪項最恰當（根據教材）」等套話。
+- 題目要直接、簡潔，不要使用「根據教材內容」「根據以上資料」等套話。
 - 直接寫問題即可。
-- 若要引用資料，請直接在題幹內列出資料，不要用套話引入。
+"""
 
+    if qtype == "true_false":
+        qtype_rules = """
+【題型】true_false（是非題）
+- options 固定為：["對","錯"]（其餘可留空）
+- 題幹用「一句清晰陳述句」，可判斷對/錯
+"""
+        fewshot = _FEWSHOT_TF
+    else:
+        qtype_rules = """
+【題型】single（四選一單選）
 【題幹格式偏好（盡量採用）】
 - 若教材出現多個例子/項目/分類，請用：
   題幹 + (1)(2)(3)(4) 的資料列點
 - A-D 選項用「只有（…）」/「以上皆是」等組合判斷。
+"""
+        fewshot = _FEWSHOT_SINGLE
 
-【出題硬規則】
-1) 只生成 {question_count} 條「4選1 單選題」
-2) options 必須剛好 4 個
-3) correct 必須是 ["1"~"4"]（只 1 個）
-4) 每題題幹或選項必須包含教材出現過的至少 2 個關鍵詞（貼題）
-5) 若教材資訊不足：needs_review=true（但仍要給出最可能答案）
+    schema = f"""
+【輸出要求】
+- 只輸出純 JSON array，不要任何額外文字。
+- 只生成 {count} 題
+- qtype 固定為 "{qtype}"
+- correct 必須是 ["1"~"4"]（只 1 個；true_false 只用 1 或 2）
+- 每題題幹或選項包含教材出現過的至少 2 個關鍵詞（貼題）
+- 若教材資訊不足：needs_review=true，但仍要給出最可能答案
+"""
 
-【輸出】
-只輸出純 JSON array，不要任何額外文字。
+    return f"""{common_rules}
+{qtype_rules}
+{schema}
 
 【格式示例】
-{_FEWSHOT}
+{fewshot}
 
 【教材內容】
 {text}
 """
+
+
+def _generate_batch(cfg, text, subject, level_code, count, fast_mode, qtype):
+    if count <= 0:
+        return []
+    traits = SUBJECT_TRAITS.get(subject, DEFAULT_TRAITS)
+
+    temperature = 0.15 if fast_mode else 0.2
+    # true/false token 可更少
+    max_tokens = 900 if qtype == "true_false" else (1400 if fast_mode else 2200)
+    timeout = 90 if fast_mode else 180
+
+    schema_hint = """
+每題必須包含：
+- qtype
+- question
+- options
+- correct
+- explanation
+- needs_review
+"""
+
+    prompt = _build_prompt(subject, traits, qtype, level_code, count, text)
 
     items = _call_with_retries(
         cfg,
@@ -377,11 +387,15 @@ def generate_questions(cfg, text, subject, level, question_count, fast_mode: boo
 
     cleaned = []
     for q in items:
-        opts = _normalize_options(q.get("options", []), "single")
-        corr = _normalize_correct(q.get("correct", []), "single")
+        qt = str(q.get("qtype", qtype)).strip() or qtype
+        if qt not in {"single", "true_false"}:
+            qt = qtype
+
+        opts = _normalize_options(q.get("options", []), qt)
+        corr = _normalize_correct(q.get("correct", []), qt)
 
         cleaned.append({
-            "qtype": "single",
+            "qtype": qt,
             "question": str(q.get("question", "")).strip(),
             "options": opts,
             "correct": corr,
@@ -392,56 +406,72 @@ def generate_questions(cfg, text, subject, level, question_count, fast_mode: boo
     return cleaned
 
 
-# -------------------------
-# ✅ 匯入整理（固定 single + 無答案時必推測）
-# -------------------------
+def generate_questions(cfg, text, subject, level, question_count, fast_mode: bool = False, qtype: str = "single"):
+    """
+    支援 qtype: single / true_false
+    支援 level: easy / medium / hard / mixed（mixed 會分三批生成再混合）
+    """
+    text = _clean_text(text)
+    text = text[: (8000 if fast_mode else 10000)]
+
+    if qtype not in {"single", "true_false"}:
+        qtype = "single"
+
+    if level == "mixed":
+        n = int(question_count)
+        n_easy = max(1, round(n * 0.4))
+        n_med = max(1, round(n * 0.4))
+        n_hard = max(1, n - n_easy - n_med)
+
+        batch = []
+        batch += _generate_batch(cfg, text, subject, "easy", n_easy, fast_mode, qtype)
+        batch += _generate_batch(cfg, text, subject, "medium", n_med, fast_mode, qtype)
+        batch += _generate_batch(cfg, text, subject, "hard", n_hard, fast_mode, qtype)
+
+        random.shuffle(batch)
+        return batch[:n]
+
+    return _generate_batch(cfg, text, subject, level, int(question_count), fast_mode, qtype)
+
+
+# ---- 匯入：固定 single（保持你現狀，不改動行為）----
 def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode: bool = False, qtype: str = "single"):
-    # ✅ 匯入固定 single
     qtype = "single"
-
-    traits = SUBJECT_TRAITS.get(subject, DEFAULT_TRAITS)
-    raw_text = _clean_text(raw_text)
-
-    raw_text = raw_text[: (8000 if fast_mode else 10000)]
+    raw_text = _clean_text(raw_text)[: (8000 if fast_mode else 10000)]
 
     schema_hint = """
 每題必須包含：
-- qtype: 固定 "single"
-- question: 字串
-- options: list（必須 4 個字串）
-- correct: list（只含 1 個 "1"~"4"）
-- explanation: 字串（若推測答案：必須以「⚠️需教師確認：」開頭）
-- needs_review: true/false
+- qtype 固定 single
+- question
+- options（4個）
+- correct（1個）
+- explanation
+- needs_review
 """
 
     guess_rule = (
-        "若原文未提供答案，你必須推測最可能正確答案，但必須 needs_review=true，"
-        "並在 explanation 開頭加「⚠️需教師確認：」說明是推測。"
+        "若原文未提供答案，你必須推測最可能正確答案，但 needs_review=true，explanation 以「⚠️需教師確認：」開頭。"
         if allow_guess
-        else "若原文未提供答案，correct 設為 ['1'] 並 needs_review=true，explanation 以「⚠️需教師確認：」開頭。"
+        else "若原文未提供答案，correct=['1'] 並 needs_review=true，explanation 以「⚠️需教師確認：」開頭。"
     )
 
     temperature = 0.0 if fast_mode else 0.1
     max_tokens = 1600 if fast_mode else 2400
-    timeout = 120 if fast_mode else 180  # ✅ 提高，避免 DeepSeek 超時
+    timeout = 120 if fast_mode else 180
 
     prompt = f"""
 你是一名香港中學教師，正在把現有題目整理成標準格式。
 科目：{subject}
 目標題型：single（4選1）
 
-【科目特性（參考）】
-{traits}
-
 【最重要規則】
 - 原文若有答案（例如：答案：B / Answer: 2），必須跟從。
 - {guess_rule}
-- 無論如何，每題都必須填 correct（不可留空）。
+- 每題都必須填 correct（不可留空）。
 
-【輸出要求】
-- 只輸出純 JSON array，不要任何額外文字。
-- 每題必須有 4 個選項（不足補空字串）。
-- correct 必須是 ["1"~"4"]（只 1 個）。
+【輸出】
+只輸出純 JSON array，不要任何額外文字。
+每題 options 必須 4 個，correct 必須 ["1"~"4"]（只 1 個）。
 
 【原始文字】
 {raw_text}
@@ -460,10 +490,8 @@ def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode:
     for q in items:
         opts = _normalize_options(q.get("options", []), "single")
         corr = _normalize_correct(q.get("correct", []), "single")
-
         expl = str(q.get("explanation", "")).strip()
         needs_review = bool(q.get("needs_review", False))
-
         if needs_review and not expl.startswith("⚠️需教師確認："):
             expl = "⚠️需教師確認：" + (expl if expl else "系統推測答案，請老師核對。")
 
@@ -479,18 +507,13 @@ def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode:
     return cleaned
 
 
-# -------------------------
-# ✅ 本地拆題（支援 A-D + 題幹含(1)(2)…）
-# -------------------------
 def parse_import_questions_locally(raw_text: str):
     raw_text = _clean_text(raw_text)
     if not raw_text:
         return []
 
     parts = re.split(r"(?:\n(?=\s*(?:\d+\s*[\.、]|Q\d+|第\s*\d+\s*題)))", raw_text, flags=re.IGNORECASE)
-    blocks = [p.strip() for p in parts if p.strip()]
-    if not blocks:
-        blocks = [raw_text]
+    blocks = [p.strip() for p in parts if p.strip()] or [raw_text]
 
     opt_pat = re.compile(r"(?m)^\s*(?:\(?([A-D])\)?)[\.\)、\):：]\s*(.+?)\s*$")
     ans_pat = re.compile(r"(?:答案|Answer)\s*[:：]\s*([A-D]|[1-4])", flags=re.IGNORECASE)
@@ -504,16 +527,12 @@ def parse_import_questions_locally(raw_text: str):
 
         opts = {"A": "", "B": "", "C": "", "D": ""}
         for m in opt_pat.finditer(text):
-            letter = m.group(1).upper()
-            content = m.group(2).strip()
-            opts[letter] = content
+            opts[m.group(1).upper()] = m.group(2).strip()
 
-        options = [opts["A"], opts["B"], opts["C"], opts["D"]]
-        options = _normalize_options(options, "single")
+        options = _normalize_options([opts["A"], opts["B"], opts["C"], opts["D"]], "single")
 
         qstem = opt_pat.sub("", text)
-        qstem = ans_pat.sub("", qstem)
-        qstem = qstem.strip()
+        qstem = ans_pat.sub("", qstem).strip()
 
         needs_review = False
         correct_num = "1"
