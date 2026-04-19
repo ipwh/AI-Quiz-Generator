@@ -334,92 +334,6 @@ _FEWSHOT_STRONG = r"""
 # ✅ 生成題目（single 會偏好 (1)(2)… + A-D）
 # -------------------------
 def generate_questions(cfg, text, subject, level, question_count, fast_mode: bool = False, qtype: str = "single"):
-    traits = SUBJECT_TRAITS.get(subject, DEFAULT_TRAITS)
-    text = _clean_text(text)
-
-    text = text[: (8000 if fast_mode else 10000)]
-
-    schema_hint = """
-每題必須包含：
-- qtype: 固定 "single"
-- question: 字串
-- options: list（必須 4 個字串）
-- correct: list（只含 1 個字串 "1"~"4"）
-- explanation: 字串（極短即可）
-- needs_review: true/false
-"""
-
-    # ✅ 本版：生成固定 single
-    qtype = "single"
-
-    temperature = 0.15 if fast_mode else 0.2
-    max_tokens = 1600 if fast_mode else 2600
-    timeout = 90 if fast_mode else 180
-
-    prompt = f"""
-你是一名香港中學教師，負責出校內測驗題。
-科目：{subject}；難度：{level}
-
-【科目特性（必須遵守）】
-{traits}
-
-【題幹用語規則（必須遵守）】
-- 題目要直接、簡潔，不要使用「根據教材內容」「根據以上資料」「下列哪項最恰當（根據教材）」等套話。
-- 直接寫問題即可。
-- 若要引用資料，請直接在題幹內列出資料，不要用套話引入。
-
-【題幹格式偏好（盡量採用）】
-- 若教材出現多個例子/項目/分類，請用：
-  題幹 + (1)(2)(3)(4) 的資料列點
-- A-D 選項用「只有（…）」/「以上皆是」等組合判斷。
-
-【出題硬規則】
-1) 只生成 {question_count} 條「4選1 單選題」
-2) options 必須剛好 4 個
-3) correct 必須是 ["1"~"4"]（只 1 個）
-4) 每題題幹或選項必須包含教材出現過的至少 2 個關鍵詞（貼題）
-5) 若教材資訊不足：needs_review=true（但仍要給出最可能答案）
-
-【輸出】
-只輸出純 JSON array，不要任何額外文字。
-
-【格式示例】
-{_FEWSHOT_STRONG}
-
-【教材內容】
-{text}
-"""
-
-    items = _call_with_retries(
-        cfg,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=temperature,
-        max_tokens=max_tokens,
-        timeout=timeout,
-        schema_hint=schema_hint,
-    )
-
-    cleaned = []
-    for q in items:
-        opts = _normalize_options(q.get("options", []), "single")
-        corr = _normalize_correct(q.get("correct", []), "single")
-
-        cleaned.append({
-            "qtype": "single",
-            "question": str(q.get("question", "")).strip(),
-            "options": opts,
-            "correct": corr,
-            "explanation": str(q.get("explanation", "")).strip()[:60],
-            "needs_review": bool(q.get("needs_review", False)),
-        })
-
-    return cleaned
-
-
-# -------------------------
-# ✅ 匯入整理（固定 single + 無答案時必推測）
-# -------------------------
-def generate_questions(cfg, text, subject, level, question_count, fast_mode: bool = False, qtype: str = "single"):
     """
     單選（single）生成：
     - 強制格式配額：至少 75% 直接問答；最多 25% (1)-(4) 組合題
@@ -623,16 +537,16 @@ def generate_questions(cfg, text, subject, level, question_count, fast_mode: boo
         n_med = max(1, round(n * 0.4))
         n_hard = max(1, n - n_easy - n_med)
 
-        a = fill_to_count("easy", n_easy, mode="direct")
-        b = fill_to_count("medium", n_med, mode="direct")
-        c = fill_to_count("hard", n_hard, mode="direct")
+        a = fill_to_count("easy", n_easy, mode="mixed")
+        b = fill_to_count("medium", n_med, mode="mixed")
+        c = fill_to_count("hard", n_hard, mode="mixed")
 
         out = a + b + c
         random.shuffle(out)
         out = out[:n]
     else:
         # Stage A：先生成 direct_target（強制 direct）
-        direct_part = fill_to_count(level, direct_target, mode="direct")
+        direct_part = fill_to_count(level, direct_target, mode="mixed")
 
         # Stage B：再生成剩餘（mixed 模式，但仍限制比例）
         remaining = n - len(direct_part)
@@ -653,7 +567,7 @@ def generate_questions(cfg, text, subject, level, question_count, fast_mode: boo
     combo_idx = [i for i, it in enumerate(out) if is_combo_style(it["question"], it["options"])]
     if len(combo_idx) > combo_max:
         need = len(combo_idx) - combo_max
-        direct_more = fill_to_count("medium" if level == "mixed" else level, need, mode="direct")
+        direct_more = fill_to_count("medium" if level == "mixed" else level, need, mode="mixed")
         for k, idx in enumerate(combo_idx[:need]):
             if k < len(direct_more):
                 out[idx] = direct_more[k]
