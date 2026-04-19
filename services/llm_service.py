@@ -424,40 +424,58 @@ def generate_questions(cfg, text, subject, level, question_count, fast_mode: boo
 
 
 def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode: bool = False, qtype: str = "single"):
+    traits = SUBJECT_TRAITS.get(subject, DEFAULT_TRAITS)
     raw_text = _clean_text(raw_text)
-    raw_text = raw_text[: (8000 if fast_mode else 10000)]
+
+    raw_limit = 8000 if fast_mode else 10000
+    raw_text = raw_text[:raw_limit]
 
     schema_hint = """
 每題必須包含：
 - qtype: "single" / "multiple" / "true_false"
 - question: 字串
-- options: list（4 個字串；true_false 可只用前 2 個）
-- correct: list（single/true_false 1 個；multiple 可多個）
-- explanation: 字串
+- options: list（single/multiple 必須 4 個；true_false 可只用前 2 個）
+- correct:
+   - single/true_false: list（只含 1 個 "1"~"4"；true_false 只用 1 或 2）
+   - multiple: list（可多於 1 個，元素為 "1"~"4"）
+- explanation: 字串（若推測答案：必須以「⚠️需教師確認：」開頭）
 - needs_review: true/false
 """
 
     guess_rule = (
-        "若原文未提供答案，你可以推測最可能正確答案，但必須 needs_review=true。"
+        "若原文未提供答案，你必須推測最可能正確答案，但必須 needs_review=true，"
+        "並在 explanation 開頭加「⚠️需教師確認：」說明是推測。"
         if allow_guess
-        else "若原文未提供答案，請 correct 設為 ['1'] 並 needs_review=true。"
+        else "若原文未提供答案，請 correct 設為 ['1'] 並 needs_review=true，explanation 以「⚠️需教師確認：」開頭。"
     )
 
     temperature = 0.0 if fast_mode else 0.1
-    max_tokens = 2200 if fast_mode else 3200
+    max_tokens = 2400 if fast_mode else 3400
     timeout = 45 if fast_mode else 90
+
+    qtype_rule = (
+        "目標題型為 single（4選1）。" if qtype == "single" else
+        "目標題型為 multiple（4選多選，可多於1個正確答案）。" if qtype == "multiple" else
+        "目標題型為 true_false（是非題，options 必須是 ['對','錯']）。"
+    )
 
     prompt = f"""
 你是一名香港中學教師，正在把現有題目整理成標準格式。
 科目：{subject}
-目標題型：{qtype}
+{qtype_rule}
 
-【規則】
-- 原文若有答案，必須跟從。
+【科目特性（參考）】
+{traits}
+
+【最重要規則】
+- 原文若有答案（例如：答案：B / Answer: 2），必須跟從。
 - {guess_rule}
+- 無論如何，每題都必須填 correct（不可留空）。
 
-【輸出】
-只輸出純 JSON array，不要任何額外文字。
+【輸出要求】
+- 只輸出純 JSON array，不要任何額外文字。
+- options 不足要補空字串到 4 個（true_false 可只用前 2 個，其餘補空）。
+- correct 必須以 "1"~"4" 表示（list）。
 
 【原始文字】
 {raw_text}
@@ -477,16 +495,26 @@ def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode:
         qt = str(q.get("qtype", qtype)).strip() or qtype
         if qt not in {"single", "multiple", "true_false"}:
             qt = qtype
+
         opts = _normalize_options(q.get("options", []), qt)
         corr = _normalize_correct(q.get("correct", []), qt)
+
+        expl = str(q.get("explanation", "")).strip()
+        needs_review = bool(q.get("needs_review", False))
+
+        # ✅ 如果模型推測但冇寫警告，幫佢補上
+        if needs_review and not expl.startswith("⚠️需教師確認："):
+            expl = "⚠️需教師確認：" + (expl if expl else "系統推測答案，請老師核對。")
+
         cleaned.append({
             "qtype": qt,
             "question": str(q.get("question", "")).strip(),
             "options": opts,
             "correct": corr,
-            "explanation": str(q.get("explanation", "")).strip()[:80],
-            "needs_review": bool(q.get("needs_review", False)),
+            "explanation": expl[:120],
+            "needs_review": needs_review,
         })
+
     return cleaned
 
 
