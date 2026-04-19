@@ -422,7 +422,8 @@ def _strip_boilerplate_question(q: str) -> str:
     return s
 
 
-def _difficulty_guidance(level_code: str) -> str:def _difficulty_guidance(level_code: str level_code == "easy":
+def _difficulty_guidance(level_code: str) -> str:
+    if level_code == "easy":
         return (
             "【Easy 基礎】\n"
             "- 題目重點：定義/關鍵詞辨識/直接理解。\n"
@@ -448,7 +449,6 @@ def _difficulty_guidance(level_code: str) -> str:def _difficulty_guidance(level_
         "- 必須同時包含 easy/medium/hard 三類題目（比例由系統分配）。\n"
         "- 題幹形式也要混合（直接問答為主，少量使用(1)-(4)資料題）。"
     )
-
 
 def _build_prompt(subject: str, traits: str, qtype: str, level_code: str, count: int, text: str) -> str:
     banned = "教材、教材中、根據教材、根據以上資料、文中提及、上文提到、資料顯示、教材中出現、教材中提及"
