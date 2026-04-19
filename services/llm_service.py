@@ -660,3 +660,134 @@ def generate_questions(cfg, text, subject, level, question_count, fast_mode: boo
 
     # 最終保險：回傳正確題數
     return out[:n]
+# =========================
+# ✅ Restore import helpers (used by app.py)
+# - assist_import_questions
+# - parse_import_questions_locally
+# =========================
+
+def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode: bool = False, qtype: str = "single"):
+    """
+    匯入題目整理：固定 single（4選1）
+    - 若原文有答案：跟從
+    - 若無答案：allow_guess=True 時推測，但 needs_review=true + explanation 以「⚠️需教師確認：」開頭
+    """
+    qtype = "single"
+    traits = SUBJECT_TRAITS.get(subject, DEFAULT_TRAITS)
+    raw_text = _clean_text(raw_text)
+    raw_text = raw_text[: (8000 if fast_mode else 10000)]
+
+    guess_rule = (
+        "若原文未提供答案，你必須推測最可能正確答案，但 needs_review=true，explanation 以「⚠️需教師確認：」開頭。"
+        if allow_guess
+        else "若原文未提供答案，correct=['1'] 並 needs_review=true，explanation 以「⚠️需教師確認：」開頭。"
+    )
+
+    temperature = 0.0 if fast_mode else 0.1
+    max_tokens = 1600 if fast_mode else 2400
+    timeout = 120 if fast_mode else 180
+
+    prompt = f"""
+你是一名香港中學教師，正在把現有題目整理成標準格式。
+科目：{subject}
+目標題型：single（4選1）
+
+【科目特性（參考）】
+{traits}
+
+【最重要規則】
+- 原文若有答案（例如：答案：B / Answer: 2），必須跟從。
+- {guess_rule}
+- 無論如何，每題都必須填 correct（不可留空）。
+
+【輸出要求】
+- 只輸出純 JSON array，不要任何額外文字。
+- 每題必須有 4 個選項（不足補空字串）。
+- correct 必須是 ["1"~"4"]（只 1 個）。
+
+【原始文字】
+{raw_text}
+"""
+
+    items = _call_with_retries(
+        cfg,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout=timeout,
+        schema_hint="JSON array",
+    )
+
+    cleaned = []
+    for q in items or []:
+        opts = _normalize_options(q.get("options", []), "single")
+        corr = _normalize_correct(q.get("correct", []), "single")
+        expl = str(q.get("explanation", "")).strip()
+        needs_review = bool(q.get("needs_review", False))
+
+        # 若 needs_review=true，確保 explanation 有提示字樣
+        if needs_review and not expl.startswith("⚠️需教師確認："):
+            expl = "⚠️需教師確認：" + (expl if expl else "系統推測答案，請老師核對。")
+
+        cleaned.append({
+            "qtype": "single",
+            "question": str(q.get("question", "")).strip(),
+            "options": opts,
+            "correct": corr,
+            "explanation": expl[:120],
+            "needs_review": needs_review,
+        })
+
+    return cleaned
+
+
+def parse_import_questions_locally(raw_text: str):
+    """
+    本地拆題備援：支援 A-D 選項 & (答案: A/B/1/2/3/4)
+    """
+    raw_text = _clean_text(raw_text)
+    if not raw_text:
+        return []
+
+    # 按題號粗分（可容錯）
+    parts = re.split(r"(?:\n(?=\s*(?:\d+\s*[\.、]|Q\d+|第\s*\d+\s*題)))", raw_text, flags=re.IGNORECASE)
+    blocks = [p.strip() for p in parts if p.strip()] or [raw_text]
+
+    opt_pat = re.compile(r"(?m)^\s*(?:\(?([A-D])\)?)[\.\)、\):：]\s*(.+?)\s*$")
+    ans_pat = re.compile(r"(?:答案|Answer)\s*[:：]\s*([A-D]|[1-4])", flags=re.IGNORECASE)
+
+    out = []
+    for b in blocks:
+        text = b.strip()
+
+        m_ans = ans_pat.search(text)
+        ans = m_ans.group(1).upper() if m_ans else None
+
+        opts = {"A": "", "B": "", "C": "", "D": ""}
+        for m in opt_pat.finditer(text):
+            opts[m.group(1).upper()] = m.group(2).strip()
+
+        options = _normalize_options([opts["A"], opts["B"], opts["C"], opts["D"]], "single")
+
+        qstem = opt_pat.sub("", text)
+        qstem = ans_pat.sub("", qstem).strip()
+
+        needs_review = False
+        correct_num = "1"
+        if ans:
+            correct_num = ans if ans.isdigit() else str(ord(ans) - ord("A") + 1)
+        else:
+            needs_review = True
+
+        expl = "⚠️需教師確認：未找到答案，請老師核對。" if needs_review else ""
+
+        out.append({
+            "qtype": "single",
+            "question": qstem,
+            "options": options,
+            "correct": [correct_num],
+            "explanation": expl,
+            "needs_review": needs_review,
+        })
+
+    return out
