@@ -507,7 +507,7 @@ if mode == "📄 匯入現有題目（AI 協助）":
     st.text_area("貼上題目內容", height=320, key="imported_text")
 
     if st.button("✨ 整理並轉換", disabled=not (bool(st.session_state.imported_text.strip()) and (not use_ai_assist or can_call_ai(cfg)))):
-    try:
+        try:
         raw = st.session_state.imported_text.strip()
         st.info(f"✅ 已載入/貼上 {len(raw)} 字。")
 
