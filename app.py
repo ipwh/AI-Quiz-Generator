@@ -394,7 +394,7 @@ with tab_generate:
     st.caption("支援 PDF/DOCX/TXT/PPTX/XLSX。系統會抽取文字後交給 AI 出題。")
 
     enable_llm_ocr = st.checkbox(
-        "🖼️ 啟用 LLM 讀圖 OCR（適合掃描/截圖/圖表/幾何；較慢）",
+        "🖼️ 啟用 LLM 讀圖 OCR（適合掃描/截圖/圖表/幾何；較慢；要啟用 Grok 或其他LLM（DeepSeek欠缺OCR功能，不可用））",
         value=False,
         help="當抽取到的文字太少或品質差，會把圖片/掃描PDF前幾頁交給 Grok 或其他LLM（DeepSeek欠缺OCR功能，不可用） 讀圖抽字，再用該文字出題。"
     )
