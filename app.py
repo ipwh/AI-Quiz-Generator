@@ -190,7 +190,7 @@ st.markdown("""<style>
 /* Hide Streamlit header anchor/link icons */
 a.header-anchor {display: none !important;}
 </style>""", unsafe_allow_html=True)
-st.title("🏫 AI 題目生成器（新版介面）")
+st.title("🏫 AI 題目生成器（支援Kahoot、Wayground、Google Forms及一鍵電郵分享）")
 
 for k, v in {
     "google_creds": None,
