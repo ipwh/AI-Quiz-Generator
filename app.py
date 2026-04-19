@@ -270,6 +270,18 @@ mode = st.sidebar.radio(
     key="mode"
 )
 
+# ✅ 題型（只影響生成；匯入固定 single）
+if mode == "🪄 AI 生成新題目":
+    qtype = st.sidebar.selectbox(
+        "🧩 題型",
+        ["單選 (single)", "是非 (true_false)"],
+        key="qtype_generate"
+    )
+    qtype_map = {"單選 (single)": "single", "是非 (true_false)": "true_false"}
+    qtype = qtype_map[qtype]
+else:
+    qtype = "single"
+    
 subject = st.sidebar.selectbox(
     "📘 科目",
     ["中國語文","英國語文","數學","公民與社會發展","科學","公民、經濟及社會","物理","化學","生物","地理","歷史","中國歷史","宗教",
@@ -421,8 +433,7 @@ if mode == "🪄 AI 生成新題目":
             else:
                 with st.spinner("🤖 正在呼叫 AI，請稍候 10–30 秒…"):
                     st.session_state.generated_data = generate_questions(
-                        cfg, used_text, subject, level_code, question_count, fast_mode=fast_mode, qtype="single"
-                    )
+                        cfg, used_text, subject, level_code, question_count, fast_mode=fast_mode, qtype=qtype)
                 cache[key] = st.session_state.generated_data
                 save_cache(cache)
 
