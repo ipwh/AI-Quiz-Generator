@@ -60,7 +60,7 @@ def to_editor_df(data, subject: str):
             {
                 "export": True,
                 "subject": subject,
-                "qtype": "single",  # ✅ 固定 single
+                "qtype": q.get("qtype", "single"),  # ✅ 不再強行覆蓋，保留 true_false
                 "question": q.get("question", ""),
                 "option_1": opts[0],
                 "option_2": opts[1],
@@ -115,35 +115,23 @@ def share_file_to_emails(creds, file_id: str, emails: list, role: str = "reader"
         ).execute()
 
 
-# -------------------------
-# Streamlit Config
-# -------------------------
 st.set_page_config(page_title="AI 題目生成器", layout="wide")
 st.title("🏫 AI 題目生成器（Kahoot / Wayground / Google Form｜一鍵電郵分享匯出檔）")
 
 # session init
-if "google_creds" not in st.session_state:
-    st.session_state.google_creds = None
-
-if "generated_data" not in st.session_state:
-    st.session_state.generated_data = None
-if "imported_data" not in st.session_state:
-    st.session_state.imported_data = None
-if "imported_text" not in st.session_state:
-    st.session_state.imported_text = ""
-
-if "mark_idx" not in st.session_state:
-    st.session_state.mark_idx = set()
-
-if "edited_generate_df" not in st.session_state:
-    st.session_state.edited_generate_df = None
-if "edited_import_df" not in st.session_state:
-    st.session_state.edited_import_df = None
-
-if "form_result_generate" not in st.session_state:
-    st.session_state.form_result_generate = None
-if "form_result_import" not in st.session_state:
-    st.session_state.form_result_import = None
+for k, v in {
+    "google_creds": None,
+    "generated_data": None,
+    "imported_data": None,
+    "imported_text": "",
+    "mark_idx": set(),
+    "edited_generate_df": None,
+    "edited_import_df": None,
+    "form_result_generate": None,
+    "form_result_import": None,
+}.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
 
 # OAuth callback
 params = st.query_params
@@ -176,17 +164,16 @@ else:
             st.rerun()
     else:
         st.sidebar.link_button("🔐 連接 Google（登入）", get_auth_url())
-        st.sidebar.caption("提示：請以學校電郵登入（例如：xxx@pochiu.edu.hk）")
+        st.sidebar.caption("提示：請以學校電郵登入，方便統一管理與分享。")
 
 st.sidebar.divider()
 
-# Sidebar: AI API config
+# Sidebar: AI config
 fast_mode = st.sidebar.checkbox(
     "⚡ 快速模式",
     value=True,
-    help="較快、較保守：會用較短的AI輸出與較短超時；適合日常快速出題。"
+    help="較快、較保守：生成速度更快但題目變化較少；關閉後較慢但更豐富。"
 )
-st.sidebar.caption("快速模式：速度較快但題目較保守；關閉後較慢但可生成更豐富/更有變化的題目。")
 st.sidebar.header("🔌 AI API 設定")
 
 preset = st.sidebar.selectbox(
@@ -263,25 +250,13 @@ if st.sidebar.button("🧪 一鍵測試 API（回覆 OK）", key="btn_ping_api")
 
 st.sidebar.divider()
 
-# Sidebar: mode / subject / difficulty
+# Sidebar: mode/subject/difficulty
 mode = st.sidebar.radio(
     "📂 試題來源模式",
     ["🪄 AI 生成新題目", "📄 匯入現有題目（AI 協助）"],
     key="mode"
 )
 
-# ✅ 題型（只影響生成；匯入固定 single）
-if mode == "🪄 AI 生成新題目":
-    qtype = st.sidebar.selectbox(
-        "🧩 題型",
-        ["單選 (single)", "是非 (true_false)"],
-        key="qtype_generate"
-    )
-    qtype_map = {"單選 (single)": "single", "是非 (true_false)": "true_false"}
-    qtype = qtype_map[qtype]
-else:
-    qtype = "single"
-    
 subject = st.sidebar.selectbox(
     "📘 科目",
     ["中國語文","英國語文","數學","公民與社會發展","科學","公民、經濟及社會","物理","化學","生物","地理","歷史","中國歷史","宗教",
@@ -303,13 +278,24 @@ level_map = {
 }
 level_code = level_map[level_label]
 
-# Editor config（qtype 不再提供選擇）
+# ✅ 題型選擇：把 single 顯示改為「多項選擇題（四選一）」
+if mode == "🪄 AI 生成新題目":
+    qtype_label = st.sidebar.selectbox(
+        "🧩 題型",
+        ["多項選擇題（四選一）", "是非題（對 / 錯）"],
+        key="qtype_generate"
+    )
+    qtype = "single" if qtype_label == "多項選擇題（四選一）" else "true_false"
+else:
+    qtype = "single"  # 匯入固定 single
+
+# Editor config
 EDITOR_COLUMN_CONFIG = {
     "export": st.column_config.CheckboxColumn("匯出", help="勾選：匯出/建Form/分享檔案", width="small"),
-    "correct": st.column_config.SelectboxColumn("正確答案（1-4）", options=["1","2","3","4"], width="small"),
+    "qtype": st.column_config.TextColumn("題型", width="small"),
+    "correct": st.column_config.TextColumn("答案", help="single：1-4；是非題：1=對、2=錯", width="small"),
     "needs_review": st.column_config.CheckboxColumn("需教師確認", width="small"),
 }
-
 
 def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix: str):
     if selected_df is None or selected_df.empty:
@@ -374,10 +360,10 @@ def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix:
 
 
 # =========================
-# Mode 1: Generate (固定 single)
+# Mode 1: Generate
 # =========================
 if mode == "🪄 AI 生成新題目":
-    st.subheader("🪄 AI 生成新題目（固定單選 4 選 1）")
+    st.subheader("🪄 AI 生成新題目")
 
     question_count = st.sidebar.selectbox("🧮 題目數目", [5, 8, 10, 12, 15, 20], index=2, key="question_count")
     cfg = api_config()
@@ -393,36 +379,14 @@ if mode == "🪄 AI 生成新題目":
     if files:
         with st.spinner("📄 正在擷取文字…"):
             raw_text = "".join(extract_text(f) for f in files)
-        st.info(f"✅ 已擷取 {len(raw_text)} 字（可用重點段落標記加強貼題）")
-
-        with st.expander("⭐ 重點段落標記（勾選後優先送入AI）", expanded=False):
-            paras = split_paragraphs(raw_text)
-            st.caption(f"段落數：{len(paras)}（以空行分段）")
-
-            c1, c2 = st.columns(2)
-            with c1:
-                if st.button("✅ 全選重點段落", key="btn_mark_all"):
-                    st.session_state.mark_idx = set(range(len(paras)))
-            with c2:
-                if st.button("⛔ 全不選", key="btn_mark_none"):
-                    st.session_state.mark_idx = set()
-
-            for i, p in enumerate(paras[:80]):
-                checked = i in st.session_state.mark_idx
-                new_checked = st.checkbox(f"第 {i+1} 段", value=checked, key=f"para_g_{i}")
-                if new_checked:
-                    st.session_state.mark_idx.add(i)
-                else:
-                    st.session_state.mark_idx.discard(i)
-                st.write(p[:200] + ("…" if len(p) > 200 else ""))
+        st.info(f"✅ 已擷取 {len(raw_text)} 字")
 
     limit = 8000 if fast_mode else 10000
-    qtype = "single"
 
     if st.button("生成題目", disabled=not (can_call_ai(cfg) and bool(raw_text)), key="btn_generate"):
         try:
-            used_text = build_text_with_highlights(raw_text, st.session_state.mark_idx, limit)
-            st.info(f"✅ 送入 AI：{len(used_text)} 字（上限 {limit}）｜難度：{level_label}")
+            used_text = raw_text[:limit]
+            st.info(f"✅ 送入 AI：{len(used_text)} 字（上限 {limit}）｜題型：{qtype_label}｜難度：{level_label}")
 
             cache = load_cache()
             key = stable_key(used_text, subject, level_code, question_count, fast_mode, preset, model, base_url, qtype)
@@ -433,7 +397,8 @@ if mode == "🪄 AI 生成新題目":
             else:
                 with st.spinner("🤖 正在呼叫 AI，請稍候 10–30 秒…"):
                     st.session_state.generated_data = generate_questions(
-                        cfg, used_text, subject, level_code, question_count, fast_mode=fast_mode, qtype=qtype)
+                        cfg, used_text, subject, level_code, question_count, fast_mode=fast_mode, qtype=qtype
+                    )
                 cache[key] = st.session_state.generated_data
                 save_cache(cache)
 
@@ -446,25 +411,16 @@ if mode == "🪄 AI 生成新題目":
     if st.session_state.generated_data:
         df = to_editor_df(st.session_state.generated_data, subject)
 
-        c1, c2, c3 = st.columns([1, 1, 3])
-        with c1:
-            if st.button("✅ 全選匯出", key="btn_export_all_generate"):
-                df["export"] = True
-        with c2:
-            if st.button("全部取消匯出", key="btn_export_none_generate"):
-                df["export"] = False
-
         edited = st.data_editor(
             df,
             use_container_width=True,
             num_rows="dynamic",
             column_config=EDITOR_COLUMN_CONFIG,
-            disabled=["qtype", "subject"],
             key="editor_generate"
         )
-
         st.session_state.edited_generate_df = edited
         selected = edited[edited["export"] == True].copy()
+
         st.caption(f"✅ 已選擇匯出 {len(selected)} 題（共 {len(edited)} 題）")
 
         if st.session_state.google_creds and not selected.empty:
@@ -490,10 +446,9 @@ if mode == "🪄 AI 生成新題目":
 # =========================
 if mode == "📄 匯入現有題目（AI 協助）":
     st.subheader("📄 匯入現有題目（AI 協助）")
-    st.info("📌 匯入模式固定為「單選 single（4選1）」；若原文無答案，AI 會推測並標示需教師確認。")
+    st.info("📌 匯入模式固定為「多項選擇題（四選一）」；若原文無答案，AI 會推測並標示需教師確認。")
 
     cfg = api_config()
-    import_qtype = "single"
 
     def load_import_file_to_textbox():
         f = st.session_state.get("import_file")
@@ -509,20 +464,16 @@ if mode == "📄 匯入現有題目（AI 協助）":
     if st.button("✨ 整理並轉換", disabled=not (bool(st.session_state.imported_text.strip()) and (not use_ai_assist or can_call_ai(cfg))), key="btn_import_parse"):
         try:
             raw = st.session_state.imported_text.strip()
-            st.info(f"✅ 已載入/貼上 {len(raw)} 字。")
-
-            with st.spinner("🧠 正在整理（可能需 10–30 秒，慢時 1–3 分鐘）…"):
+            with st.spinner("🧠 正在整理…"):
                 if use_ai_assist:
                     st.session_state.imported_data = assist_import_questions(
-                        cfg, raw, subject, allow_guess=True, fast_mode=fast_mode, qtype=import_qtype
+                        cfg, raw, subject, allow_guess=True, fast_mode=fast_mode, qtype="single"
                     )
                 else:
                     st.session_state.imported_data = parse_import_questions_locally(raw)
-
             st.session_state.form_result_import = None
-
         except Exception as e:
-            st.warning("⚠️ AI 整理暫時失敗（可能服務繁忙或網絡超時）。系統已改用本地拆題作備援，請老師核對答案。")
+            st.warning("⚠️ AI 整理失敗，改用本地拆題作備援，請老師核對答案。")
             try:
                 st.session_state.imported_data = parse_import_questions_locally(st.session_state.imported_text.strip())
             except Exception as e2:
@@ -534,23 +485,13 @@ if mode == "📄 匯入現有題目（AI 協助）":
     if st.session_state.imported_data:
         df = to_editor_df(st.session_state.imported_data, subject)
 
-        c1, c2, c3 = st.columns([1, 1, 3])
-        with c1:
-            if st.button("✅ 全選匯出", key="btn_export_all_import"):
-                df["export"] = True
-        with c2:
-            if st.button("全部取消匯出", key="btn_export_none_import"):
-                df["export"] = False
-
         edited = st.data_editor(
             df,
             use_container_width=True,
             num_rows="dynamic",
             column_config=EDITOR_COLUMN_CONFIG,
-            disabled=["qtype", "subject"],
             key="editor_import"
         )
-
         st.session_state.edited_import_df = edited
         selected = edited[edited["export"] == True].copy()
         st.caption(f"✅ 已選擇匯出 {len(selected)} 題（共 {len(edited)} 題）")
