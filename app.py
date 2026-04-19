@@ -29,9 +29,6 @@ from services.google_oauth import (
 from services.google_forms_api import create_quiz_form
 
 
-# -------------------------
-# Helpers
-# -------------------------
 def stable_key(*parts) -> str:
     raw = "||".join("" if p is None else str(p) for p in parts)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -63,7 +60,7 @@ def to_editor_df(data, subject: str):
             {
                 "export": True,
                 "subject": subject,
-                "qtype": q.get("qtype", "single"),
+                "qtype": "single",  # ✅ 固定 single
                 "question": q.get("question", ""),
                 "option_1": opts[0],
                 "option_2": opts[1],
@@ -85,7 +82,6 @@ def build_text_with_highlights(raw_text: str, marked_idx: set, limit: int):
     paras = split_paragraphs(raw_text)
     highlights = [paras[i] for i in range(len(paras)) if i in marked_idx]
     others = [paras[i] for i in range(len(paras)) if i not in marked_idx]
-
     out = ""
     if highlights:
         out += "【重點段落（老師標記）】\n" + "\n\n".join(highlights) + "\n\n"
@@ -98,10 +94,6 @@ def drive_service(creds):
 
 
 def upload_bytes_to_drive(creds, filename: str, mimetype: str, data_bytes: bytes) -> dict:
-    """
-    上載檔案到登入者的 Drive（drive.file scope 可用）。上載使用 MediaIoBaseUpload。[2](https://github.com/googleapis/google-api-python-client/blob/main/docs/media.md)[3](https://googleapis.github.io/google-api-python-client/docs/dyn/drive_v3.files.html)
-    回傳：{id, webViewLink}
-    """
     service = drive_service(creds)
     media = MediaIoBaseUpload(io.BytesIO(data_bytes), mimetype=mimetype, resumable=False)
     meta = {"name": filename}
@@ -110,9 +102,6 @@ def upload_bytes_to_drive(creds, filename: str, mimetype: str, data_bytes: bytes
 
 
 def share_file_to_emails(creds, file_id: str, emails: list, role: str = "reader"):
-    """
-    透過 Drive permissions.create 分享檔案並寄通知 email（sendNotificationEmail）。[1](https://developers.google.com/workspace/drive/api/reference/rest/v3/permissions/create)[4](https://googleapis.github.io/google-api-python-client/docs/dyn/drive_v3.permissions.html)
-    """
     service = drive_service(creds)
     for email in emails:
         email = str(email).strip()
@@ -146,25 +135,17 @@ if "imported_text" not in st.session_state:
 if "mark_idx" not in st.session_state:
     st.session_state.mark_idx = set()
 
-# ✅ 保存 editor 結果，避免 rerun 後按鈕消失
 if "edited_generate_df" not in st.session_state:
     st.session_state.edited_generate_df = None
 if "edited_import_df" not in st.session_state:
     st.session_state.edited_import_df = None
 
-# ✅ 保存 Google Form 結果
 if "form_result_generate" not in st.session_state:
     st.session_state.form_result_generate = None
 if "form_result_import" not in st.session_state:
     st.session_state.form_result_import = None
 
-# ✅ 保存分享結果
-if "share_result" not in st.session_state:
-    st.session_state.share_result = None
-
-# -------------------------
-# OAuth callback (code/state)
-# -------------------------
+# OAuth callback
 params = st.query_params
 if oauth_is_configured() and "code" in params and not st.session_state.google_creds:
     try:
@@ -174,10 +155,8 @@ if oauth_is_configured() and "code" in params and not st.session_state.google_cr
             code = code[0]
         if isinstance(state, list):
             state = state[0]
-
         creds = exchange_code_for_credentials(code=code, returned_state=state)
         st.session_state.google_creds = credentials_to_dict(creds)
-
         st.query_params.clear()
         st.rerun()
     except Exception as e:
@@ -185,9 +164,7 @@ if oauth_is_configured() and "code" in params and not st.session_state.google_cr
         show_exception("Google 登入失敗。請重新按『連接 Google（登入）』一次。", e)
         st.stop()
 
-# -------------------------
 # Sidebar: Google connect
-# -------------------------
 st.sidebar.header("🟦 Google 連接（Forms / Drive 分享）")
 if not oauth_is_configured():
     st.sidebar.warning("⚠️ 尚未設定 Google OAuth（Secrets: google_oauth_client + APP_URL）")
@@ -203,9 +180,7 @@ else:
 
 st.sidebar.divider()
 
-# -------------------------
 # Sidebar: AI API config
-# -------------------------
 fast_mode = st.sidebar.checkbox("⚡ 快速模式", value=True)
 st.sidebar.header("🔌 AI API 設定")
 
@@ -265,9 +240,7 @@ def can_call_ai(cfg: dict):
         return bool(cfg.get("endpoint")) and bool(cfg.get("deployment"))
     return bool(cfg.get("base_url")) and bool(cfg.get("model"))
 
-# -------------------------
 # Sidebar: API test
-# -------------------------
 st.sidebar.divider()
 st.sidebar.header("🧪 API 連線測試")
 cfg_test = api_config()
@@ -285,10 +258,7 @@ if st.sidebar.button("🧪 一鍵測試 API（回覆 OK）", key="btn_ping_api")
 
 st.sidebar.divider()
 
-# -------------------------
-# Sidebar: mode / subject / qtype / difficulty
-# ✅ mode 必須有 key，避免 rerun 後跳回第一項
-# -------------------------
+# Sidebar: mode / subject / difficulty
 mode = st.sidebar.radio(
     "📂 試題來源模式",
     ["🪄 AI 生成新題目", "📄 匯入現有題目（AI 協助）"],
@@ -302,12 +272,6 @@ subject = st.sidebar.selectbox(
     key="subject"
 )
 
-# 題型（生成用；匯入固定 single）
-qtype_label = st.sidebar.selectbox("🧩 題型（只影響生成）", ["單選 (single)", "多選 (multiple)", "是非 (true_false)"], key="qtype_label")
-qtype_map = {"單選 (single)": "single", "多選 (multiple)": "multiple", "是非 (true_false)": "true_false"}
-qtype = qtype_map[qtype_label]
-
-# 難度（中文清晰）
 level_label = st.sidebar.radio(
     "🎯 難度",
     ["基礎（理解與記憶）", "標準（應用與理解）", "進階（分析與思考）", "混合（課堂活動建議）"],
@@ -322,47 +286,34 @@ level_map = {
 }
 level_code = level_map[level_label]
 
-# Editor config
+# Editor config（qtype 不再提供選擇）
 EDITOR_COLUMN_CONFIG = {
     "export": st.column_config.CheckboxColumn("匯出", help="勾選：匯出/建Form/分享檔案", width="small"),
-    "qtype": st.column_config.SelectboxColumn("題型", options=["single", "multiple", "true_false"], width="small"),
-    "correct": st.column_config.TextColumn("正確答案", help="single/true_false：1；multiple：1,3（逗號分隔）", width="small"),
+    "correct": st.column_config.SelectboxColumn("正確答案（1-4）", options=["1","2","3","4"], width="small"),
     "needs_review": st.column_config.CheckboxColumn("需教師確認", width="small"),
 }
 
 
-# -------------------------
-# Export + Share panel (email)
-# -------------------------
 def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix: str):
-    """
-    prefix 用來區分生成/匯入（避免 key 撞名）
-    """
     if selected_df is None or selected_df.empty:
         st.warning("⚠️ 尚未選擇任何題目（請勾選『匯出』欄）。")
         return
 
-    # 匯出檔案 bytes
     kahoot_bytes = export_kahoot(selected_df)
     docx_bytes = export_wayground_docx(selected_df, subject_name)
 
     c1, c2 = st.columns(2)
     with c1:
-        st.download_button("⬇️ Kahoot Excel（已選）", kahoot_bytes, "kahoot.xlsx", key=f"dl_kahoot_{prefix}")
+        st.download_button("⬇️ Kahoot Excel", kahoot_bytes, "kahoot.xlsx", key=f"dl_kahoot_{prefix}")
     with c2:
-        st.download_button("⬇️ Wayground DOCX（已選）", docx_bytes, "wayground.docx", key=f"dl_docx_{prefix}")
+        st.download_button("⬇️ Wayground DOCX", docx_bytes, "wayground.docx", key=f"dl_docx_{prefix}")
 
-    # 一鍵電郵分享：透過 Google Drive 上載並分享（會寄通知 email）[1](https://developers.google.com/workspace/drive/api/reference/rest/v3/permissions/create)
     st.markdown("### 📧 一鍵電郵分享匯出檔（需要先登入 Google）")
     if not st.session_state.google_creds:
         st.info("請先在左側登入 Google，才可用電郵分享檔案。")
         return
 
-    emails_text = st.text_input(
-        "收件人電郵（多個用逗號分隔）",
-        value="",
-        key=f"emails_{prefix}"
-    )
+    emails_text = st.text_input("收件人電郵（多個用逗號分隔）", value="", key=f"emails_{prefix}")
     emails = [e.strip() for e in emails_text.split(",") if e.strip()]
 
     share_col1, share_col2 = st.columns(2)
@@ -406,10 +357,10 @@ def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix:
 
 
 # =========================
-# Mode 1: Generate
+# Mode 1: Generate (固定 single)
 # =========================
 if mode == "🪄 AI 生成新題目":
-    st.subheader("🪄 AI 生成新題目")
+    st.subheader("🪄 AI 生成新題目（固定單選 4 選 1）")
 
     question_count = st.sidebar.selectbox("🧮 題目數目", [5, 8, 10, 12, 15, 20], index=2, key="question_count")
     cfg = api_config()
@@ -449,11 +400,12 @@ if mode == "🪄 AI 生成新題目":
                 st.write(p[:200] + ("…" if len(p) > 200 else ""))
 
     limit = 8000 if fast_mode else 10000
+    qtype = "single"
 
     if st.button("生成題目", disabled=not (can_call_ai(cfg) and bool(raw_text)), key="btn_generate"):
         try:
             used_text = build_text_with_highlights(raw_text, st.session_state.mark_idx, limit)
-            st.info(f"✅ 送入 AI：{len(used_text)} 字（上限 {limit}）｜題型：{qtype}｜難度：{level_label}")
+            st.info(f"✅ 送入 AI：{len(used_text)} 字（上限 {limit}）｜難度：{level_label}")
 
             cache = load_cache()
             key = stable_key(used_text, subject, level_code, question_count, fast_mode, preset, model, base_url, qtype)
@@ -464,19 +416,17 @@ if mode == "🪄 AI 生成新題目":
             else:
                 with st.spinner("🤖 正在呼叫 AI，請稍候 10–30 秒…"):
                     st.session_state.generated_data = generate_questions(
-                        cfg, used_text, subject, level_code, question_count, fast_mode=fast_mode, qtype=qtype
+                        cfg, used_text, subject, level_code, question_count, fast_mode=fast_mode, qtype="single"
                     )
                 cache[key] = st.session_state.generated_data
                 save_cache(cache)
 
-            # 清除舊的 form_result，避免顯示上次結果
             st.session_state.form_result_generate = None
 
         except Exception as e:
             show_exception("⚠️ 生成題目失敗。", e)
             st.stop()
 
-    # ✅ 只要有 generated_data，就永遠顯示 editor + 匯出按鈕
     if st.session_state.generated_data:
         df = to_editor_df(st.session_state.generated_data, subject)
 
@@ -485,7 +435,7 @@ if mode == "🪄 AI 生成新題目":
             if st.button("✅ 全選匯出", key="btn_export_all_generate"):
                 df["export"] = True
         with c2:
-            if st.button("⛔ 全不選匯出", key="btn_export_none_generate"):
+            if st.button("全部取消匯出", key="btn_export_none_generate"):
                 df["export"] = False
 
         edited = st.data_editor(
@@ -493,19 +443,16 @@ if mode == "🪄 AI 生成新題目":
             use_container_width=True,
             num_rows="dynamic",
             column_config=EDITOR_COLUMN_CONFIG,
-            disabled=[],
+            disabled=["qtype", "subject"],
             key="editor_generate"
         )
 
-        # ✅ 保存到 session_state（避免 rerun 後消失）
         st.session_state.edited_generate_df = edited
         selected = edited[edited["export"] == True].copy()
-
         st.caption(f"✅ 已選擇匯出 {len(selected)} 題（共 {len(edited)} 題）")
 
-        # Google Form
         if st.session_state.google_creds and not selected.empty:
-            if st.button("🟦 一鍵建立 Google Form Quiz（已選）", key="btn_form_generate"):
+            if st.button("🟦 一鍵建立 Google Form Quiz", key="btn_form_generate"):
                 try:
                     with st.spinner("🟦 正在建立 Google Form…"):
                         creds = credentials_from_dict(st.session_state.google_creds)
@@ -519,21 +466,18 @@ if mode == "🪄 AI 生成新題目":
             st.write("編輯連結：", st.session_state.form_result_generate.get("editUrl"))
             st.write("發佈連結：", st.session_state.form_result_generate.get("responderUrl") or "（未提供 responderUri）")
 
-        # Export + Email share
         export_and_share_panel(selected, subject, prefix="generate")
 
 
 # =========================
-# Mode 2: Import (AI assist)
+# Mode 2: Import (固定 single)
 # =========================
 if mode == "📄 匯入現有題目（AI 協助）":
     st.subheader("📄 匯入現有題目（AI 協助）")
-
-    # ✅ 你要求：匯入固定 single
     st.info("📌 匯入模式固定為「單選 single（4選1）」；若原文無答案，AI 會推測並標示需教師確認。")
-    import_qtype = "single"
 
     cfg = api_config()
+    import_qtype = "single"
 
     def load_import_file_to_textbox():
         f = st.session_state.get("import_file")
@@ -544,7 +488,6 @@ if mode == "📄 匯入現有題目（AI 協助）":
 
     st.file_uploader("上載 DOCX/TXT（自動載入）", type=["docx", "txt"], key="import_file", on_change=load_import_file_to_textbox)
     use_ai_assist = st.checkbox("啟用 AI 協助整理（建議）", value=True, key="use_ai_assist")
-
     st.text_area("貼上題目內容", height=320, key="imported_text")
 
     if st.button("✨ 整理並轉換", disabled=not (bool(st.session_state.imported_text.strip()) and (not use_ai_assist or can_call_ai(cfg))), key="btn_import_parse"):
@@ -563,7 +506,6 @@ if mode == "📄 匯入現有題目（AI 協助）":
             st.session_state.form_result_import = None
 
         except Exception as e:
-            # ✅ AI 超時/網絡：fallback 本地拆題，保持 app 可用
             st.warning("⚠️ AI 整理暫時失敗（可能服務繁忙或網絡超時）。系統已改用本地拆題作備援，請老師核對答案。")
             try:
                 st.session_state.imported_data = parse_import_questions_locally(st.session_state.imported_text.strip())
@@ -581,7 +523,7 @@ if mode == "📄 匯入現有題目（AI 協助）":
             if st.button("✅ 全選匯出", key="btn_export_all_import"):
                 df["export"] = True
         with c2:
-            if st.button("⛔ 全不選匯出", key="btn_export_none_import"):
+            if st.button("全部取消匯出", key="btn_export_none_import"):
                 df["export"] = False
 
         edited = st.data_editor(
@@ -589,18 +531,16 @@ if mode == "📄 匯入現有題目（AI 協助）":
             use_container_width=True,
             num_rows="dynamic",
             column_config=EDITOR_COLUMN_CONFIG,
-            disabled=[],
+            disabled=["qtype", "subject"],
             key="editor_import"
         )
 
         st.session_state.edited_import_df = edited
         selected = edited[edited["export"] == True].copy()
-
         st.caption(f"✅ 已選擇匯出 {len(selected)} 題（共 {len(edited)} 題）")
 
-        # Google Form
         if st.session_state.google_creds and not selected.empty:
-            if st.button("🟦 一鍵建立 Google Form Quiz（已選）", key="btn_form_import"):
+            if st.button("🟦 一鍵建立 Google Form Quiz", key="btn_form_import"):
                 try:
                     with st.spinner("🟦 正在建立 Google Form…"):
                         creds = credentials_from_dict(st.session_state.google_creds)
@@ -614,5 +554,4 @@ if mode == "📄 匯入現有題目（AI 協助）":
             st.write("編輯連結：", st.session_state.form_result_import.get("editUrl"))
             st.write("發佈連結：", st.session_state.form_result_import.get("responderUrl") or "（未提供 responderUri）")
 
-        # Export + Email share
         export_and_share_panel(selected, subject, prefix="import")
