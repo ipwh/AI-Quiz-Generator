@@ -422,7 +422,7 @@ def _strip_boilerplate_question(q: str) -> str:
     return s
 
 
-ddef _difficulty_guidance(level_code: str) -> str:def _difficulty_guidance(level_code: str level_code == "easy":
+def _difficulty_guidance(level_code: str) -> str:def _difficulty_guidance(level_code: str level_code == "easy":
         return (
             "【Easy 基礎】\n"
             "- 題目重點：定義/關鍵詞辨識/直接理解。\n"
