@@ -200,3 +200,44 @@ def extract_payload(
 # 兼容舊接口：只回傳文字
 def extract_text(file, enable_ocr: bool = False, ocr_lang: str = "chi_tra+chi_sim+eng") -> str:
     return extract_payload(file, enable_ocr=enable_ocr, ocr_lang=ocr_lang, enable_vision=False).get("text", "")
+
+import base64
+
+try:
+    import fitz  # PyMuPDF
+    _HAS_PYMUPDF = True
+except Exception:
+    _HAS_PYMUPDF = False
+
+
+def _bytes_to_data_url(b: bytes, mime: str) -> str:
+    return f"data:{mime};base64,{base64.b64encode(b).decode('utf-8')}"
+
+
+def extract_images_for_llm_ocr(file, pdf_max_pages: int = 3, pdf_zoom: float = 2.0):
+    """
+    將圖片 / 掃描PDF（前N頁）轉成 data URL（base64）供多模態 LLM 讀圖用。
+    - 圖片：回傳 [data:image/...]
+    - PDF：回傳前 pdf_max_pages 頁渲染成 png 的 dataURL（需要 PyMuPDF）
+    """
+    name = getattr(file, "name", "")
+    ext = name.split(".")[-1].lower()
+    data = file.getvalue()
+
+    # image
+    if ext in {"png", "jpg", "jpeg"}:
+        mime = "image/png" if ext == "png" else "image/jpeg"
+        return [_bytes_to_data_url(data, mime)]
+
+    # pdf -> images
+    if ext == "pdf" and _HAS_PYMUPDF:
+        out = []
+        with fitz.open(stream=data, filetype="pdf") as doc:
+            n = min(len(doc), max_pages := max(1, int(pdf_max_pages)))
+            mat = fitz.Matrix(float(pdf_zoom), float(pdf_zoom))
+            for i in range(n):
+                pix = doc[i].get_pixmap(matrix=mat, alpha=False)
+                out.append(_bytes_to_data_url(pix.tobytes("png"), "image/png"))
+        return out
+
+    return []
