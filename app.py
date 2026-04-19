@@ -438,8 +438,9 @@ with tab_generate:
 
             cache = load_cache()
             PROMPT_VERSION = "fmtquota_v1"
+            qtype = "single"
             key = stable_key(used_text, subject, level_code, question_count, fast_mode, preset, model, base_url, qtype, PROMPT_VERSION)
-
+            
             if key in cache:
                 st.success("✅ 已從快取讀取（節省時間與額度）")
                 st.session_state.generated_data = cache[key]
