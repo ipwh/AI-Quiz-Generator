@@ -19,7 +19,7 @@ def _reset_session():
 
 
 # -------------------------
-# 科目特性（略：保持你現有版本）
+# 科目特性
 # -------------------------
 SUBJECT_TRAITS = {
     "中國語文": (
@@ -89,6 +89,7 @@ SUBJECT_TRAITS = {
 DEFAULT_TRAITS = "重點：根據教材內容出題，避免離題。"
 
 
+
 def _clean_text(text: str) -> str:
     if not text:
         return ""
@@ -100,7 +101,6 @@ def _clean_text(text: str) -> str:
 def extract_json(text: str):
     if not text:
         raise ValueError("AI 回傳內容是空的")
-
     t = text.strip()
     t = re.sub(r"^```json", "", t, flags=re.IGNORECASE).strip()
     t = re.sub(r"^```", "", t, flags=re.IGNORECASE).strip()
@@ -118,7 +118,11 @@ def extract_json(text: str):
     raise ValueError("無法從 AI 回傳解析 JSON（可能回傳了非 JSON 內容）")
 
 
-def _normalize_options(opts):
+def _normalize_options(opts, qtype: str):
+    # true_false 固定兩個選項
+    if qtype == "true_false":
+        return ["對", "錯", "", ""]
+
     if not isinstance(opts, list):
         opts = []
     opts = [str(x).strip() for x in opts][:4]
@@ -127,23 +131,93 @@ def _normalize_options(opts):
     return opts
 
 
-def _normalize_correct(corr):
+def _normalize_correct(corr, qtype: str):
+    # corr 期望 list[str]，內容為 "1"~"4"
     if isinstance(corr, str):
-        corr = [corr]
+        # 允許 "1,3" 類型
+        parts = [p.strip() for p in corr.split(",") if p.strip()]
+        corr = parts
     if not isinstance(corr, list):
         corr = []
-    corr = [str(x).strip() for x in corr if str(x).strip().isdigit()]
+    corr = [str(x).strip() for x in corr]
     corr = [c for c in corr if c in {"1", "2", "3", "4"}]
-    if not corr:
-        corr = ["1"]
-    return [corr[0]]
+
+    if qtype == "true_false":
+        # 只允許 1 或 2
+        corr = [c for c in corr if c in {"1", "2"}]
+        return [corr[0]] if corr else ["1"]
+
+    if qtype == "multiple":
+        # 多選：至少 1 個，最多 4 個，去重保序
+        seen = set()
+        out = []
+        for c in corr:
+            if c not in seen:
+                seen.add(c)
+                out.append(c)
+        return out[:4] if out else ["1"]
+
+    # single
+    return [corr[0]] if corr else ["1"]
+
+
+def _post_openai_compat(api_key: str, base_url: str, payload: dict, timeout: int = 90, max_retries: int = 5):
+    url = base_url.rstrip("/") + "/chat/completions"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    t = (15, timeout)
+    last_err = None
+
+    for attempt in range(max_retries):
+        try:
+            with _SESSION_LOCK:
+                r = _SESSION.post(url, headers=headers, json=payload, timeout=t)
+            r.raise_for_status()
+            return r.json()
+        except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout) as e:
+            last_err = e
+            time.sleep(((2 ** attempt) * 2) + random.random())
+            with _SESSION_LOCK:
+                _reset_session()
+        except requests.exceptions.HTTPError:
+            raise
+        except requests.exceptions.RequestException as e:
+            last_err = e
+            time.sleep(((2 ** attempt) * 2) + random.random())
+            with _SESSION_LOCK:
+                _reset_session()
+
+    raise requests.exceptions.ConnectionError(f"OpenAI-compatible request failed after retries: {last_err}")
+
+
+def _post_azure(api_key: str, endpoint: str, deployment: str, api_version: str, payload: dict, timeout: int = 90, max_retries: int = 3):
+    url = endpoint.rstrip("/") + f"/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
+    headers = {"api-key": api_key, "Content-Type": "application/json"}
+    t = (10, timeout)
+    last_err = None
+
+    for attempt in range(max_retries):
+        try:
+            with _SESSION_LOCK:
+                r = _SESSION.post(url, headers=headers, json=payload, timeout=t)
+            r.raise_for_status()
+            return r.json()
+        except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout) as e:
+            last_err = e
+            time.sleep((2 ** attempt) + random.random())
+            with _SESSION_LOCK:
+                _reset_session()
+        except requests.exceptions.HTTPError:
+            raise
+        except requests.exceptions.RequestException as e:
+            last_err = e
+            time.sleep((2 ** attempt) + random.random())
+            with _SESSION_LOCK:
+                _reset_session()
+
+    raise requests.exceptions.ConnectionError(f"Azure request failed after retries: {last_err}")
 
 
 def _chat(cfg: dict, messages: list, temperature: float, max_tokens: int, timeout: int):
-    """
-    OpenAI-compatible / Azure OpenAI 統一入口。
-    xAI Grok 亦是 OpenAI-compatible：base_url=https://api.x.ai/v1，endpoint=/chat/completions。[3](https://www.buildmvpfast.com/tools/api-pricing-estimator/google-vision)[1](https://blog.csdn.net/gitblog_09688/article/details/142221724)
-    """
     if cfg.get("type") == "azure":
         data = _post_azure(
             api_key=cfg["api_key"],
@@ -164,198 +238,12 @@ def _chat(cfg: dict, messages: list, temperature: float, max_tokens: int, timeou
     return data.get("choices", [{}])[0].get("message", {}).get("content", "")
 
 
-def _post_openai_compat(api_key: str, base_url: str, payload: dict, timeout: int = 90, max_retries: int = 5):
-    url = base_url.rstrip("/") + "/chat/completions"
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-
-    t = (15, timeout)
-    last_err = None
-
-    for attempt in range(max_retries):
-        try:
-            with _SESSION_LOCK:
-                r = _SESSION.post(url, headers=headers, json=payload, timeout=t)
-            r.raise_for_status()
-            return r.json()
-
-        except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout) as e:
-            last_err = e
-            time.sleep(((2 ** attempt) * 2) + random.random())
-            with _SESSION_LOCK:
-                _reset_session()
-
-        except requests.exceptions.HTTPError:
-            raise
-
-        except requests.exceptions.RequestException as e:
-            last_err = e
-            time.sleep(((2 ** attempt) * 2) + random.random())
-            with _SESSION_LOCK:
-                _reset_session()
-
-    raise requests.exceptions.ConnectionError(f"OpenAI-compatible request failed after retries: {last_err}")
-
-
-def _post_azure(api_key: str, endpoint: str, deployment: str, api_version: str, payload: dict, timeout: int = 90, max_retries: int = 3):
-    url = endpoint.rstrip("/") + f"/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
-    headers = {"api-key": api_key, "Content-Type": "application/json"}
-    t = (10, timeout)
-
-    last_err = None
-    for attempt in range(max_retries):
-        try:
-            with _SESSION_LOCK:
-                r = _SESSION.post(url, headers=headers, json=payload, timeout=t)
-            r.raise_for_status()
-            return r.json()
-
-        except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout) as e:
-            last_err = e
-            time.sleep((2 ** attempt) + random.random())
-            with _SESSION_LOCK:
-                _reset_session()
-
-        except requests.exceptions.HTTPError:
-            raise
-
-        except requests.exceptions.RequestException as e:
-            last_err = e
-            time.sleep((2 ** attempt) + random.random())
-            with _SESSION_LOCK:
-                _reset_session()
-
-    raise requests.exceptions.ConnectionError(f"Azure request failed after retries: {last_err}")
-
-
-# -------------------------
-# ✅ 新增：xAI 自動偵測最新可用型號（Option B）
-# -------------------------
-def get_xai_default_model(api_key: str, base_url: str = "https://api.x.ai/v1", timeout: int = 15) -> str:
-    """
-    透過 xAI /v1/language-models 列出可用模型及 aliases，選一個最佳預設 model。
-    xAI docs：/v1/models 與 /v1/language-models 可列出當前 API key 可用模型，language-models 含 aliases。[2](https://zhuanlan.zhihu.com/p/1964739506629490036)
-
-    策略：
-    1) 優先使用別名（alias）避免硬綁版本：grok-4-latest → grok-4 → grok-3-latest → grok-3 → grok-2-latest
-    2) 若別名都不存在，選 created 最大（最新）的 grok-* model id
-    3) 若 API 失敗，回退 grok-4-latest（alias）
-    """
-    preferred_aliases = ["grok-4-latest", "grok-4", "grok-3-latest", "grok-3", "grok-2-latest"]
-
-    url = base_url.rstrip("/") + "/language-models"
-    headers = {"Authorization": f"Bearer {api_key}"}
-
-    try:
-        with _SESSION_LOCK:
-            r = _SESSION.get(url, headers=headers, timeout=(10, timeout))
-        r.raise_for_status()
-        payload = r.json()
-
-        models = payload.get("models") or payload.get("data") or []
-        if not isinstance(models, list):
-            models = []
-
-        # 收集 aliases
-        alias_set = set()
-        grok_models = []
-        for m in models:
-            if not isinstance(m, dict):
-                continue
-            mid = str(m.get("id", "") or "")
-            created = m.get("created", 0) or 0
-            aliases = m.get("aliases") or []
-            if isinstance(aliases, list):
-                for a in aliases:
-                    if isinstance(a, str):
-                        alias_set.add(a)
-            if mid.startswith("grok-"):
-                grok_models.append((created, mid))
-
-        # 1) 優先 alias
-        for a in preferred_aliases:
-            if a in alias_set:
-                return a
-
-        # 2) fallback: newest created grok model id
-        if grok_models:
-            grok_models.sort(key=lambda x: x[0], reverse=True)
-            return grok_models[0][1]
-
-        # 3) fallback
-        return "grok-4-latest"
-
-    except Exception:
-        # API 失敗亦唔阻使用：用 alias 作 fallback
-        return "grok-4-latest"
-
-
-# -------------------------
-# ✅ 一鍵測試 API
-# -------------------------
-def get_xai_default_model(api_key: str, base_url: str = "https://api.x.ai/v1", timeout: int = 15) -> str:
-    """
-    透過 xAI /v1/language-models 列出你個 API key 可用的模型及 aliases，並自動選擇最合適的預設 model。
-    xAI Docs：/v1/language-models 會列出 chat 模型並提供 aliases（適合做自動選型）。[1](https://zhuanlan.zhihu.com/p/1964739506629490036)
-
-    策略：
-    1) 優先用 alias（避免硬綁版本）：grok-4-latest → grok-4 → grok-3-latest → grok-3 → grok-2-latest
-    2) 若 alias 都冇，選 created 最大（最新）的 grok-* model id
-    3) 若查詢失敗，回退 grok-4-latest（alias）
-    """
-    preferred_aliases = ["grok-4-latest", "grok-4", "grok-3-latest", "grok-3", "grok-2-latest"]
-
-    url = base_url.rstrip("/") + "/language-models"
-    headers = {"Authorization": f"Bearer {api_key}"}
-
-    try:
-        with _SESSION_LOCK:
-            r = _SESSION.get(url, headers=headers, timeout=(10, timeout))
-        r.raise_for_status()
-        payload = r.json()
-
-        # xAI docs 指出 /v1/language-models 回傳 models array（含 aliases / created 等）[1](https://zhuanlan.zhihu.com/p/1964739506629490036)
-        models = payload.get("models") or payload.get("data") or []
-        if not isinstance(models, list):
-            models = []
-
-        alias_set = set()
-        grok_models = []
-
-        for m in models:
-            if not isinstance(m, dict):
-                continue
-            mid = str(m.get("id", "") or "")
-            created = m.get("created", 0) or 0
-            aliases = m.get("aliases") or []
-            if isinstance(aliases, list):
-                for a in aliases:
-                    if isinstance(a, str):
-                        alias_set.add(a)
-            if mid.startswith("grok-"):
-                grok_models.append((created, mid))
-
-        # 1) 優先 alias（最穩，等同「自動最新」）[1](https://zhuanlan.zhihu.com/p/1964739506629490036)
-        for a in preferred_aliases:
-            if a in alias_set:
-                return a
-
-        # 2) fallback：挑 created 最新的 grok-* id
-        if grok_models:
-            grok_models.sort(key=lambda x: x[0], reverse=True)
-            return grok_models[0][1]
-
-        # 3) 最後 fallback
-        return "grok-4-latest"
-
-    except Exception:
-        return "grok-4-latest"
-    
 def ping_llm(cfg: dict, timeout: int = 25):
     t0 = time.time()
     try:
         out = _chat(
             cfg,
-            messages=[{"role": "user", "content": "只輸出兩個字：成功。不要輸出任何其他文字、標點或換行。"}],
+            messages=[{"role": "user", "content": "只輸出兩個字：OK。不要輸出任何其他文字、標點或換行。"}],
             temperature=0.0,
             max_tokens=3,
             timeout=timeout,
@@ -370,20 +258,61 @@ def ping_llm(cfg: dict, timeout: int = 25):
         return {"ok": False, "latency_ms": ms, "output": "", "error": repr(e)}
 
 
-# -------------------------
-# JSON 修復 / Few-shot / 生成 / 匯入（保持你原本功能）
-# -------------------------
+def get_xai_default_model(api_key: str, base_url: str = "https://api.x.ai/v1", timeout: int = 15) -> str:
+    """
+    xAI /v1/language-models 會列出 chat 模型並包含 aliases，可用作自動選型。[1](https://zhuanlan.zhihu.com/p/1964739506629490036)
+    """
+    preferred_aliases = ["grok-4-latest", "grok-4", "grok-3-latest", "grok-3", "grok-2-latest"]
+    url = base_url.rstrip("/") + "/language-models"
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    try:
+        with _SESSION_LOCK:
+            r = _SESSION.get(url, headers=headers, timeout=(10, timeout))
+        r.raise_for_status()
+        payload = r.json()
+
+        models = payload.get("models") or payload.get("data") or []
+        if not isinstance(models, list):
+            models = []
+
+        alias_set = set()
+        grok_models = []
+        for m in models:
+            if not isinstance(m, dict):
+                continue
+            mid = str(m.get("id", "") or "")
+            created = m.get("created", 0) or 0
+            aliases = m.get("aliases") or []
+            if isinstance(aliases, list):
+                for a in aliases:
+                    if isinstance(a, str):
+                        alias_set.add(a)
+            if mid.startswith("grok-"):
+                grok_models.append((created, mid))
+
+        for a in preferred_aliases:
+            if a in alias_set:
+                return a
+
+        if grok_models:
+            grok_models.sort(key=lambda x: x[0], reverse=True)
+            return grok_models[0][1]
+
+        return "grok-4-latest"
+    except Exception:
+        return "grok-4-latest"
+
+
 def _fix_json(cfg: dict, bad_output: str, schema_hint: str, timeout: int):
-    prompt = f"""
-你剛才輸出不是有效 JSON 或格式不符合要求。
-請只回覆「純 JSON array」，不要任何解釋文字。
-
-必須符合此 schema：
-{schema_hint}
-
-以下是你剛才的輸出（供修正）：
-{bad_output}
-"""
+    prompt = (
+        "你剛才輸出不是有效 JSON 或格式不符合要求。\n"
+        "請只回覆「純 JSON array」，不要任何解釋文字。\n\n"
+        "必須符合此 schema：\n"
+        f"{schema_hint}\n\n"
+        "以下是你剛才的輸出（供修正）：\n"
+        f"{bad_output}\n"
+    )
     return _chat(cfg, [{"role": "user", "content": prompt}], temperature=0, max_tokens=2500, timeout=timeout)
 
 
@@ -397,10 +326,9 @@ def _call_with_retries(cfg: dict, messages: list, temperature: float, max_tokens
 
 
 _FEWSHOT = """
-示例（只示範格式，不要照抄內容）：
 [
   {
-    "type": "single",
+    "qtype": "single",
     "question": "（示例）根據教材內容，下列哪一項最恰當？",
     "options": ["選項一", "選項二", "選項三", "選項四"],
     "correct": ["2"],
@@ -411,23 +339,34 @@ _FEWSHOT = """
 """
 
 
-def generate_questions(cfg, text, subject, level, question_count, fast_mode: bool = False):
+def generate_questions(cfg, text, subject, level, question_count, fast_mode: bool = False, qtype: str = "single"):
     traits = SUBJECT_TRAITS.get(subject, DEFAULT_TRAITS)
     text = _clean_text(text)
-    text = text[: (2600 if fast_mode else 5000)]
+
+    text = text[: (8000 if fast_mode else 10000)]
 
     schema_hint = """
 每題必須包含：
-- type: 固定 "single"
+- qtype: "single" / "multiple" / "true_false"
 - question: 字串
-- options: list（必須 4 個字串）
-- correct: list（只含 1 個字串 "1"~"4"）
-- explanation: 字串（建議極短，不超過 20 字）
+- options: list（single/multiple 必須 4 個字串；true_false 可只用前 2 個）
+- correct:
+   - single/true_false: list（只含 1 個字串 "1"~"4"；true_false 只用 1 或 2）
+   - multiple: list（可多於 1 個，元素為 "1"~"4"）
+- explanation: 字串（建議極短）
 - needs_review: true/false
 """
 
+    qtype_rule = ""
+    if qtype == "single":
+        qtype_rule = "題型固定為 single（四選一單選）。"
+    elif qtype == "multiple":
+        qtype_rule = "題型固定為 multiple（四選多選），correct 可以有多個答案。"
+    else:
+        qtype_rule = "題型固定為 true_false（是非題），options 必須是 ['對','錯']（其餘可留空）。"
+
     temperature = 0.15 if fast_mode else 0.2
-    max_tokens = 1200 if fast_mode else 1800
+    max_tokens = 1400 if fast_mode else 2200
     timeout = 90 if fast_mode else 180
 
     prompt = f"""
@@ -437,16 +376,17 @@ def generate_questions(cfg, text, subject, level, question_count, fast_mode: boo
 【科目特性（必須遵守）】
 {traits}
 
+【題型】
+{qtype_rule}
+
 【出題硬規則】
-1) 只生成 {question_count} 條「單選題（4選1）」
-2) options 必須剛好 4 個
-3) correct 必須是 ["1"~"4"]（只 1 個）
-4) 每題 question 或 explanation 必須包含教材中出現過的至少 2 個關鍵詞（貼題）
-5) 干擾項要合理：基於常見誤解/混淆點，避免無關選項
+1) 只生成 {question_count} 條
+2) 必須輸出純 JSON array，不要任何額外文字
+3) 每題至少包含教材中出現過的 2 個關鍵詞
+4) 干擾項要合理（常見誤解）
+5) 不足以肯定答案：needs_review=true
 
-【輸出】
-只輸出「純 JSON array」，不要任何額外文字。
-
+【輸出格式示例】
 {_FEWSHOT}
 
 【教材內容】
@@ -464,50 +404,60 @@ def generate_questions(cfg, text, subject, level, question_count, fast_mode: boo
 
     cleaned = []
     for q in items:
-        opts = _normalize_options(q.get("options", []))
-        corr = _normalize_correct(q.get("correct", []))
-        needs_review = bool(q.get("needs_review", False))
-        expl = str(q.get("explanation", "")).strip()
+        qt = str(q.get("qtype", qtype)).strip() or qtype
+        if qt not in {"single", "multiple", "true_false"}:
+            qt = qtype
+
+        opts = _normalize_options(q.get("options", []), qt)
+        corr = _normalize_correct(q.get("correct", []), qt)
 
         cleaned.append({
-            "type": "single",
+            "qtype": qt,
             "question": str(q.get("question", "")).strip(),
             "options": opts,
             "correct": corr,
-            "explanation": expl[:60],
-            "needs_review": needs_review,
+            "explanation": str(q.get("explanation", "")).strip()[:80],
+            "needs_review": bool(q.get("needs_review", False)),
         })
 
     return cleaned
 
 
-def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode: bool = False):
+def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode: bool = False, qtype: str = "single"):
     raw_text = _clean_text(raw_text)
-    raw_text = raw_text[: (3500 if fast_mode else 7000)]
+    raw_text = raw_text[: (8000 if fast_mode else 10000)]
 
     schema_hint = """
 每題必須包含：
-- type: 固定 "single"
+- qtype: "single" / "multiple" / "true_false"
 - question: 字串
-- options: list（必須 4 個字串）
-- correct: list（只含 1 個字串 "1"~"4"）
+- options: list（4 個字串；true_false 可只用前 2 個）
+- correct: list（single/true_false 1 個；multiple 可多個）
 - explanation: 字串
 - needs_review: true/false
 """
+
+    guess_rule = (
+        "若原文未提供答案，你可以推測最可能正確答案，但必須 needs_review=true。"
+        if allow_guess
+        else "若原文未提供答案，請 correct 設為 ['1'] 並 needs_review=true。"
+    )
+
     temperature = 0.0 if fast_mode else 0.1
-    max_tokens = 2200 if fast_mode else 3000
+    max_tokens = 2200 if fast_mode else 3200
     timeout = 45 if fast_mode else 90
 
     prompt = f"""
-你是一名香港中學教師，正在把現有選擇題整理成標準格式。
+你是一名香港中學教師，正在把現有題目整理成標準格式。
 科目：{subject}
+目標題型：{qtype}
 
-【輸出要求】
-- 只輸出純 JSON array
-- 每題必須 4 選項（不足補空字串）
-- correct 只可 "1"~"4"（list 只有 1 個）
+【規則】
+- 原文若有答案，必須跟從。
+- {guess_rule}
 
-{_FEWSHOT}
+【輸出】
+只輸出純 JSON array，不要任何額外文字。
 
 【原始文字】
 {raw_text}
@@ -524,14 +474,17 @@ def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode:
 
     cleaned = []
     for q in items:
-        opts = _normalize_options(q.get("options", []))
-        corr = _normalize_correct(q.get("correct", []))
+        qt = str(q.get("qtype", qtype)).strip() or qtype
+        if qt not in {"single", "multiple", "true_false"}:
+            qt = qtype
+        opts = _normalize_options(q.get("options", []), qt)
+        corr = _normalize_correct(q.get("correct", []), qt)
         cleaned.append({
-            "type": "single",
+            "qtype": qt,
             "question": str(q.get("question", "")).strip(),
             "options": opts,
             "correct": corr,
-            "explanation": str(q.get("explanation", "")).strip()[:60],
+            "explanation": str(q.get("explanation", "")).strip()[:80],
             "needs_review": bool(q.get("needs_review", False)),
         })
     return cleaned
@@ -541,45 +494,24 @@ def parse_import_questions_locally(raw_text: str):
     raw_text = _clean_text(raw_text)
     if not raw_text:
         return []
-
     parts = re.split(r"(?:\n(?=\s*(?:\d+\s*[\.、]|Q\d+|第\s*\d+\s*題)))", raw_text, flags=re.IGNORECASE)
     blocks = [p.strip() for p in parts if p.strip()]
     out = []
-
     for b in blocks:
         m_ans = re.search(r"(?:答案|Answer)\s*[:：]\s*([A-D]|[1-4])", b, flags=re.IGNORECASE)
         ans = m_ans.group(1).upper() if m_ans else None
         correct_num = "1"
         needs_review = False
-
         if ans:
             correct_num = ans if ans.isdigit() else str(ord(ans) - ord("A") + 1)
         else:
             needs_review = True
-
-        optA = re.search(r"(?:\n|\r|\A)\s*(?:A[\.\)、\)]|\(A\))\s*(.+)", b)
-        optB = re.search(r"(?:\n|\r|\A)\s*(?:B[\.\)、\)]|\(B\))\s*(.+)", b)
-        optC = re.search(r"(?:\n|\r|\A)\s*(?:C[\.\)、\)]|\(C\))\s*(.+)", b)
-        optD = re.search(r"(?:\n|\r|\A)\s*(?:D[\.\)、\)]|\(D\))\s*(.+)", b)
-
-        options = [
-            optA.group(1).strip() if optA else "",
-            optB.group(1).strip() if optB else "",
-            optC.group(1).strip() if optC else "",
-            optD.group(1).strip() if optD else "",
-        ]
-        options = _normalize_options(options)
-
-        qstem = re.sub(r"(?:答案|Answer)\s*[:：]\s*([A-D]|[1-4]).*", "", b, flags=re.IGNORECASE).strip()
-        qstem = re.sub(r"(?m)^\s*(?:[A-D][\.\、\)]|\([A-D]\))\s*.+$", "", qstem).strip()
-
         out.append({
-            "type": "single",
-            "question": qstem,
-            "options": options,
+            "qtype": "single",
+            "question": b,
+            "options": ["", "", "", ""],
             "correct": [correct_num],
             "explanation": "",
             "needs_review": needs_review,
         })
-
     return out

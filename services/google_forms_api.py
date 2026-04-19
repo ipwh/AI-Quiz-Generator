@@ -3,11 +3,6 @@ from googleapiclient.errors import HttpError
 
 
 def create_quiz_form(creds, title: str, df):
-    """
-    Google Forms API 建立 Quiz 表單：
-    1) create form
-    2) batchUpdate：設定 isQuiz + 逐題 createItem
-    """
     service = build("forms", "v1", credentials=creds, cache_discovery=False)
 
     try:
@@ -28,35 +23,56 @@ def create_quiz_form(creds, title: str, df):
             if not q:
                 continue
 
-            options_raw = [
-                str(row.get("option_1", "")).strip(),
-                str(row.get("option_2", "")).strip(),
-                str(row.get("option_3", "")).strip(),
-                str(row.get("option_4", "")).strip(),
-            ]
-            options = [o for o in options_raw if o]
-            if len(options) < 2:
-                options = [options_raw[0] or "（選項A）", "（選項B）"]
+            qtype = str(row.get("qtype", "single")).strip()
+            if qtype not in {"single", "multiple", "true_false"}:
+                qtype = "single"
 
-            correct = str(row.get("correct", "1")).strip()
-            if correct not in {"1", "2", "3", "4"}:
-                correct = "1"
-            correct_index = int(correct) - 1
-
-            if 0 <= correct_index < len(options_raw) and options_raw[correct_index].strip():
-                correct_value = options_raw[correct_index].strip()
+            if qtype == "true_false":
+                options = ["對", "錯"]
             else:
-                correct_value = options[0]
+                options_raw = [
+                    str(row.get("option_1", "")).strip(),
+                    str(row.get("option_2", "")).strip(),
+                    str(row.get("option_3", "")).strip(),
+                    str(row.get("option_4", "")).strip(),
+                ]
+                options = [o for o in options_raw if o]
+                if len(options) < 2:
+                    options = [options_raw[0] or "（選項A）", "（選項B）"]
+
+            # correct 支援 "1,3" 或 list
+            corr = row.get("correct", "1")
+            if isinstance(corr, list):
+                corr_list = [str(x).strip() for x in corr]
+            else:
+                corr_list = [x.strip() for x in str(corr).split(",") if x.strip()]
+
+            # correct index -> value（只取有效）
+            corr_vals = []
+            for c in corr_list:
+                if c not in {"1", "2", "3", "4"}:
+                    continue
+                i = int(c) - 1
+                if 0 <= i < len(options):
+                    v = options[i].strip()
+                    if v and v not in corr_vals:
+                        corr_vals.append(v)
+
+            if not corr_vals:
+                corr_vals = [options[0]]
 
             explanation = str(row.get("explanation", "")).strip()
 
+            # choiceQuestion type
+            if qtype == "multiple":
+                choice_type = "CHECKBOX"
+            else:
+                choice_type = "RADIO"
+
             grading = {
                 "pointValue": 1,
-                "correctAnswers": {"answers": [{"value": correct_value}]},
+                "correctAnswers": {"answers": [{"value": v} for v in corr_vals]},
             }
-
-            # ✅ 修正：自動評分多項選擇題不能用 generalFeedback
-            # 要用 whenRight / whenWrong 提供回饋 [5](https://developers.google.cn/workspace/forms/api/guides/setup-grading?hl=en)[4](https://googleapis.dev/dotnet/Google.Apis.Forms.v1/latest/api/Google.Apis.Forms.v1.Data.Grading.html)
             if explanation:
                 grading["whenRight"] = {"text": explanation}
                 grading["whenWrong"] = {"text": explanation}
@@ -69,7 +85,7 @@ def create_quiz_form(creds, title: str, df):
                             "question": {
                                 "required": True,
                                 "choiceQuestion": {
-                                    "type": "RADIO",
+                                    "type": choice_type,
                                     "options": [{"value": o} for o in options],
                                     "shuffle": False,
                                 },
@@ -85,14 +101,12 @@ def create_quiz_form(creds, title: str, df):
             idx += 1
 
         service.forms().batchUpdate(formId=form_id, body={"requests": requests}).execute()
-
         info = service.forms().get(formId=form_id).execute()
-        responder_url = info.get("responderUri")  # 可能存在也可能沒有 [9](https://developers.google.com/workspace/forms/api/reference/rest/v1/forms)
 
         return {
             "formId": form_id,
             "editUrl": f"https://docs.google.com/forms/d/{form_id}/edit",
-            "responderUrl": responder_url,
+            "responderUrl": info.get("responderUri"),
         }
 
     except HttpError as e:
