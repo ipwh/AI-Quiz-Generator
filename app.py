@@ -308,6 +308,9 @@ st.sidebar.divider()
 # Sidebar：模式/科目/題型/難度
 # -------------------------
 mode = st.sidebar.radio("📂 試題來源模式", ["🪄 AI 生成新題目", "📄 匯入現有題目（AI 協助）", "📚 題庫（共享）"])
+# ✅ 匯入固定 single（老師不需選題型）
+qtype = "single"
+st.info("📌 匯入模式已固定為「單選 single」（4選1）。如原題其實是多選，請在表格內手動改題型及答案。")
 subject = st.sidebar.selectbox(
     "📘 科目",
     ["中國語文","英國語文","數學","公民與社會發展","科學","公民、經濟及社會","物理","化學","生物","地理","歷史","中國歷史","宗教",
@@ -514,7 +517,7 @@ if st.button("✨ 整理並轉換", disabled=not (bool(st.session_state.imported
         with st.spinner("🧠 正在整理（可能需 10–30 秒，慢時 1–3 分鐘）…"):
             if use_ai_assist:
                 st.session_state.imported_data = assist_import_questions(
-                    cfg, raw, subject, allow_guess=True, fast_mode=fast_mode, qtype=qtype
+                    cfg, raw, subject, allow_guess=True, fast_mode=fast_mode, qtype="single"
                 )
             else:
                 st.session_state.imported_data = parse_import_questions_locally(raw)
