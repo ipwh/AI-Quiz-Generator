@@ -18,6 +18,9 @@ def _reset_session():
     _SESSION = requests.Session()
 
 
+# -------------------------
+# 科目特性（你可按校本再擴充）
+# -------------------------
 SUBJECT_TRAITS = {
     "中國語文": "重點：篇章理解、語境推斷、段落主旨、作者態度。干擾項：以偏概全、張冠李戴。",
     "英國語文": "Focus: inference, tone, vocab in context. Distractors: near-synonym traps.",
@@ -37,9 +40,12 @@ SUBJECT_TRAITS = {
     "旅遊與款待": "重點：行業體系、承載力、服務質素、可持續。",
     "宗教": "天主教用字：天主、伯多祿、聖母瑪利亞、教宗/主教/神父、教友。",
 }
-DEFAULT_TRAITS = "重點：根據提供內容出題，避免離題。"
+DEFAULT_TRAITS = "重點：根據教材內容出題，避免離題。"
 
 
+# -------------------------
+# 工具：清洗文字
+# -------------------------
 def _clean_text(text: str) -> str:
     if not text:
         return ""
@@ -48,6 +54,9 @@ def _clean_text(text: str) -> str:
     return text.strip()
 
 
+# -------------------------
+# 工具：抽 JSON（容錯）
+# -------------------------
 def extract_json(text: str):
     if not text:
         raise ValueError("AI 回傳內容是空的")
@@ -93,9 +102,21 @@ def _normalize_correct(corr, qtype: str):
         corr = [c for c in corr if c in {"1", "2"}]
         return [corr[0]] if corr else ["1"]
 
+    if qtype == "multiple":
+        seen = set()
+        out = []
+        for c in corr:
+            if c not in seen:
+                seen.add(c)
+                out.append(c)
+        return out[:4] if out else ["1"]
+
     return [corr[0]] if corr else ["1"]
 
 
+# -------------------------
+# HTTP：OpenAI compatible / Azure
+# -------------------------
 def _post_openai_compat(api_key: str, base_url: str, payload: dict, timeout: int = 120, max_retries: int = 5):
     url = base_url.rstrip("/") + "/chat/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
@@ -108,13 +129,16 @@ def _post_openai_compat(api_key: str, base_url: str, payload: dict, timeout: int
                 r = _SESSION.post(url, headers=headers, json=payload, timeout=t)
             r.raise_for_status()
             return r.json()
+
         except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout) as e:
             last_err = e
             time.sleep(((2 ** attempt) * 2) + random.random())
             with _SESSION_LOCK:
                 _reset_session()
+
         except requests.exceptions.HTTPError:
             raise
+
         except requests.exceptions.RequestException as e:
             last_err = e
             time.sleep(((2 ** attempt) * 2) + random.random())
@@ -136,13 +160,16 @@ def _post_azure(api_key: str, endpoint: str, deployment: str, api_version: str, 
                 r = _SESSION.post(url, headers=headers, json=payload, timeout=t)
             r.raise_for_status()
             return r.json()
+
         except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout) as e:
             last_err = e
             time.sleep((2 ** attempt) + random.random())
             with _SESSION_LOCK:
                 _reset_session()
+
         except requests.exceptions.HTTPError:
             raise
+
         except requests.exceptions.RequestException as e:
             last_err = e
             time.sleep((2 ** attempt) + random.random())
@@ -172,6 +199,9 @@ def _chat(cfg: dict, messages: list, temperature: float, max_tokens: int, timeou
     return data.get("choices", [{}])[0].get("message", {}).get("content", "")
 
 
+# -------------------------
+# API 測試
+# -------------------------
 def ping_llm(cfg: dict, timeout: int = 25):
     t0 = time.time()
     try:
@@ -192,18 +222,24 @@ def ping_llm(cfg: dict, timeout: int = 25):
         return {"ok": False, "latency_ms": ms, "output": "", "error": repr(e)}
 
 
+# -------------------------
+# Grok 自動偵測（供 app.py 使用）
+# -------------------------
 def get_xai_default_model(api_key: str, base_url: str = "https://api.x.ai/v1", timeout: int = 15) -> str:
     preferred_aliases = ["grok-4-latest", "grok-4", "grok-3-latest", "grok-3", "grok-2-latest"]
     url = base_url.rstrip("/") + "/language-models"
     headers = {"Authorization": f"Bearer {api_key}"}
+
     try:
         with _SESSION_LOCK:
             r = _SESSION.get(url, headers=headers, timeout=(10, timeout))
         r.raise_for_status()
         payload = r.json()
+
         models = payload.get("models") or payload.get("data") or []
         if not isinstance(models, list):
             models = []
+
         alias_set = set()
         grok_models = []
         for m in models:
@@ -218,168 +254,23 @@ def get_xai_default_model(api_key: str, base_url: str = "https://api.x.ai/v1", t
                         alias_set.add(a)
             if mid.startswith("grok-"):
                 grok_models.append((created, mid))
+
         for a in preferred_aliases:
             if a in alias_set:
                 return a
+
         if grok_models:
             grok_models.sort(key=lambda x: x[0], reverse=True)
             return grok_models[0][1]
+
         return "grok-4-latest"
     except Exception:
         return "grok-4-latest"
-import requests
-
-def xai_pick_vision_model(api_key: str, base_url: str = "https://api.x.ai/v1", timeout: int = 15) -> str | None:
-    """
-    從 xAI /v1/language-models 中挑一個支援 image 的模型。
-    /v1/language-models 會列出可用語言模型，並包含 input_modalities / aliases 等資訊。[3](https://cameledge.com/post/llm/mcq)
-    回傳 model id 或 alias；若找不到則回傳 None。
-    """
-    url = base_url.rstrip("/") + "/language-models"
-    headers = {"Authorization": f"Bearer {api_key}"}
-
-    try:
-        with _SESSION_LOCK:
-            r = _SESSION.get(url, headers=headers, timeout=(10, timeout))
-        r.raise_for_status()
-        payload = r.json()
-
-        models = payload.get("models") or payload.get("data") or []
-        if not isinstance(models, list):
-            return None
-
-        # 先嘗試用 alias（較穩），再用 id
-        # 只要 input_modalities 包含 "image" 就視作 vision model
-        candidates = []
-        for m in models:
-            if not isinstance(m, dict):
-                continue
-            input_mods = m.get("input_modalities") or []
-            if isinstance(input_mods, list) and "image" in input_mods:
-                created = m.get("created", 0) or 0
-                mid = str(m.get("id", "") or "")
-                aliases = m.get("aliases") or []
-                # 優先用 alias 中帶 latest 的（如果有）
-                alias_latest = None
-                if isinstance(aliases, list):
-                    for a in aliases:
-                        if isinstance(a, str) and a.endswith("-latest"):
-                            alias_latest = a
-                            break
-                candidates.append((created, alias_latest or mid))
-
-        if not candidates:
-            return None
-
-        # 取 created 最新的一個
-        candidates.sort(key=lambda x: x[0], reverse=True)
-        return candidates[0][1]
-
-    except Exception:
-        return None
 
 
-def generate_questions_from_images(cfg: dict, images_data_urls: list[str], subject: str, level: str,
-                                   question_count: int, fast_mode: bool = False, qtype: str = "single"):
-    """
-    Vision fallback：直接把圖片交給多模態 LLM（Grok）讀圖出題。
-    xAI chat completions /v1/chat/completions 支援 text/image chat prompts。[1](https://www.aidoczh.com/streamlit/develop/concepts/connections/secrets-management.html)[2](https://blog.csdn.net/gitblog_00250/article/details/142274805)
-    """
-    if qtype not in {"single", "true_false"}:
-        qtype = "single"
-
-    traits = SUBJECT_TRAITS.get(subject, DEFAULT_TRAITS)
-
-    banned = "教材、教材中、根據教材、根據以上資料、文中提及、上文提到、資料顯示"
-    if qtype == "true_false":
-        qtype_rules = """
-【題型】是非題（true_false）
-- options 固定為：["對","錯"]（其餘留空）
-- 題幹必須是一句可判斷對/錯的陳述句（避免問句）
-- correct 只可 ["1"] 或 ["2"]
-"""
-        fewshot = """
-[
-  {"qtype":"true_false","question":"光合作用會產生氧氣。","options":["對","錯","",""],"correct":["1"],"explanation":"","needs_review":false}
-]
-"""
-    else:
-        qtype_rules = """
-【題型】多項選擇題（四選一 single）
-- options 必須 4 個
-- correct 必須 ["1"~"4"]（只 1 個）
-"""
-        fewshot = """
-[
-  {"qtype":"single","question":"以下哪一項正確？","options":["A","B","C","D"],"correct":["2"],"explanation":"","needs_review":false}
-]
-"""
-
-    prompt_text = f"""
-你是一名香港中學教師，負責出校內測驗題。
-科目：{subject}；難度：{level}
-
-【科目特性（必須遵守）】
-{traits}
-
-【題幹規則（必須遵守）】
-- 題幹要直接、簡潔。
-- 禁止出現：{banned}
-- 不要用「根據…」開頭。
-
-{qtype_rules}
-
-【輸出要求】
-- 只輸出純 JSON array，不要任何額外文字。
-- 只生成 {question_count} 題
-- qtype 固定為 "{qtype}"
-- 若圖片資訊不完整：needs_review=true，但仍要給出最可能答案
-
-【格式示例】
-{fewshot}
-
-請根據以下圖片內容出題（你需要先理解圖片文字/圖表/題目內容，再輸出題目JSON）。
-"""
-
-    # OpenAI-compatible 多模態 message content（text + image_url）
-    content = [{"type": "text", "text": prompt_text}]
-    for url in images_data_urls:
-        content.append({"type": "image_url", "image_url": {"url": url}})
-
-    temperature = 0.1 if fast_mode else 0.2
-    max_tokens = 1600 if fast_mode else 2600
-    timeout = 120 if fast_mode else 180
-
-    out = _chat(
-        cfg,
-        messages=[{"role": "user", "content": content}],
-        temperature=temperature,
-        max_tokens=max_tokens,
-        timeout=timeout,
-    )
-
-    items = extract_json(out)
-
-    cleaned = []
-    for q in items:
-        qt = qtype  # 強制題型
-        opts = _normalize_options(q.get("options", []), qt)
-        corr = _normalize_correct(q.get("correct", []), qt)
-
-        question = str(q.get("question", "")).strip()
-        question = _strip_boilerplate_question(question)  # 你之前已有
-
-        cleaned.append({
-            "qtype": qt,
-            "question": question,
-            "options": opts,
-            "correct": corr,
-            "explanation": str(q.get("explanation", "")).strip()[:60],
-            "needs_review": bool(q.get("needs_review", False)),
-        })
-
-    return cleaned
-
+# -------------------------
+# JSON 修復（失敗自救）
+# -------------------------
 def _fix_json(cfg: dict, bad_output: str, schema_hint: str, timeout: int):
     prompt = (
         "你剛才輸出不是有效 JSON 或格式不符合要求。\n"
@@ -401,141 +292,83 @@ def _call_with_retries(cfg: dict, messages: list, temperature: float, max_tokens
         return extract_json(out2)
 
 
-def _strip_boilerplate_question(q: str) -> str:
-    """刪走題幹開頭常見套話（雙保險）。"""
-    if not q:
-        return q
-    s = q.strip()
 
-    # 刪除各種「根據/教材/文中/資料」開頭的套話（只針對開頭）
-    patterns = [
-        r"^(根據|依據|參考).{0,12}(教材|內容|資料|文本|上文|文中).{0,12}，?",
-        r"^(教材|內容|資料|文本|上文|文中).{0,12}(提及|出現|指出|提到).{0,12}，?",
-        r"^根據.{0,12}，?",
-        r"^以下.{0,12}(教材|內容|資料|文本).{0,12}，?",
-    ]
-    for p in patterns:
-        s = re.sub(p, "", s).strip()
-
-    # 再清一次開頭逗號/冒號
-    s = re.sub(r"^[,，:：\-\s]+", "", s).strip()
-    return s
+_FEWSHOT = """
+[
+  {
+    "qtype": "single",
+    "question": "下列哪一項不是媒體資訊帶來的效益？",
+    "options": ["A 選項", "B 選項", "C 選項", "D 選項"],
+    "correct": ["1"],
+    "explanation": "",
+    "needs_review": false
+  },
+  {
+    "qtype": "single",
+    "question": "哪些屬於新媒體？
+(1) 商業電台
+(2) 實體報章
+(3) 明報網上版
+(4) YouTube",
+    "options": ["只有（1）和（2）", "只有（3）和（4）", "只有（1）、（3）和（4）", "以上皆是"],
+    "correct": ["2"],
+    "explanation": "",
+    "needs_review": false
+  }
+]
+"""
 
 
 def _difficulty_guidance(level_code: str) -> str:
     if level_code == "easy":
         return (
-            "【Easy 基礎】\n"
-            "- 題目重點：定義/關鍵詞辨識/直接理解。\n"
-            "- 不可：跨段推論、多步推理、計算鏈。\n"
-            "- 干擾項：明顯錯或典型誤解，但不要太接近正確答案。"
+            "【Easy 基礎】
+"
+            "- 題目重點：定義/關鍵詞辨識/直接理解。
+"
+            "- 不可：跨段推論、多步推理。
+"
+            "- 干擾項：較明顯錯或典型誤解。"
         )
     if level_code == "medium":
         return (
-            "【Medium 標準】\n"
-            "- 題目重點：情境應用、把概念套落例子、一步推論。\n"
-            "- 可：用短情境（1~2句）要求判斷。\n"
-            "- 干擾項：接近正確但在概念/條件上差一點（常見混淆）。"
+            "【Medium 標準】
+"
+            "- 題目重點：情境應用、一步推論。
+"
+            "- 干擾項：接近正確但在條件/概念上差一點。"
         )
     if level_code == "hard":
         return (
-            "【Hard 進階】\n"
-            "- 題目重點：分析/比較/判斷（至少2步推理）。\n"
-            "- 可：對立概念辨析、因果判斷、限制條件推論。\n"
-            "- 干擾項：非常接近、以常見混淆點設陷（例如因果倒置/忽略限制）。"
+            "【Hard 進階】
+"
+            "- 題目重點：分析/比較/判斷（至少2步推理）。
+"
+            "- 干擾項：非常接近、以常見混淆點設陷。"
         )
     return (
-        "【Mixed 混合】\n"
-        "- 必須同時包含 easy/medium/hard 三類題目（比例由系統分配）。\n"
-        "- 題幹形式也要混合（直接問答為主，少量使用(1)-(4)資料題）。"
+        "【Mixed 混合】
+"
+        "- 必須同時包含 easy/medium/hard 三類題目（比例由系統分配）。"
     )
 
-def _build_prompt(subject: str, traits: str, qtype: str, level_code: str, count: int, text: str) -> str:
-    banned = "教材、教材中、根據教材、根據以上資料、文中提及、上文提到、資料顯示、教材中出現、教材中提及"
-    difficulty_spec = _difficulty_guidance(level_code)
 
-    common = f"""
-你是一名香港中學教師，負責出校內測驗題。
-科目：{subject}
-
-【難度規格（必須嚴格遵守）】
-{difficulty_spec}
-
-【科目特性（必須遵守）】
-{traits}
-
-【題幹規則（必須遵守）】
-- 題幹要直接、簡潔。
-- 禁止出現：{banned}
-- 不要用「根據…」開頭句式。
-"""
-
-    if qtype == "true_false":
-        qtype_rules = f"""
-【題型】是非題（true_false）
-- options 固定為：["對","錯"]（其餘留空）
-- 題幹必須是一句可判斷對/錯的陳述句（避免問句）
-"""
-        schema = f"""
-【輸出要求】
-- 只輸出純 JSON array
-- 只生成 {count} 題
-- qtype 固定為 "true_false"
-- options 必須是 ["對","錯","",""]
-- correct 只可 ["1"] 或 ["2"]
-"""
-        fewshot = """
-[
-  {"qtype":"true_false","question":"YouTube 屬於新媒體。","options":["對","錯","",""],"correct":["1"],"explanation":"","needs_review":false}
-]
-"""
-    else:
-        # ✅ 版式配額：直接問答為主，限制 (1)-(4) 組合題比例
-        max_list = max(1, round(count * 0.3))
-        min_direct = count - max_list
-
-        qtype_rules = f"""
-【題型】多項選擇題（四選一 single）
-【版式配額（必須遵守）】
-- 至少 {min_direct} 題必須使用「直接問答」：題幹 + A~D（四個純選項，不要(1)~(4)組合題）。
-- 最多 {max_list} 題可使用「資料題」：題幹 + (1)~(4) + A~D（選項是(1)~(4)組合）。
-- 請把兩種版式混合，不要集中使用同一模板。
-"""
-        schema = f"""
-【輸出要求】
-- 只輸出純 JSON array
-- 只生成 {count} 題
-- qtype 固定為 "single"
-- options 必須剛好 4 個
-- correct 必須是 ["1"~"4"]（只 1 個）
-"""
-        fewshot = """
-[
-  {"qtype":"single","question":"下列哪一項不是媒體資訊帶來的效益？","options":["A選項","B選項","C選項","D選項"],"correct":["1"],"explanation":"","needs_review":false}
-]
-"""
-
-    extra = """
-【貼題要求】
-- 題幹或選項必須包含提供內容中出現過的至少 2 個關鍵詞。
-- 若資訊不足：needs_review=true，但仍要給出最可能答案。
-"""
-
-    return f"""{common}
-{qtype_rules}
-{schema}
-{extra}
-
-【格式示例】
-{fewshot}
-
-【提供內容】
-{text}
-"""
+def _strip_boilerplate(question: str) -> str:
+    if not question:
+        return ""
+    s = question.strip()
+    patterns = [
+        r"^(根據|依據|參考).{0,12}(教材|內容|資料|文本|上文|文中).{0,12}[，,：:]*",
+        r"^(教材|內容|資料|文本|上文|文中).{0,12}(提及|出現|指出|提到).{0,12}[，,：:]*",
+        r"^根據.{0,12}[，,：:]*",
+    ]
+    for p in patterns:
+        s = re.sub(p, "", s).strip()
+    s = re.sub(r"^[,，:：\-\s]+", "", s).strip()
+    return s
 
 
 def _is_list_combo_style(q: str, options: list) -> bool:
-    # 粗略判斷：題幹含 (1) 且選項含「只有（」/「以上皆是」/「（1）」等組合語
     if not q:
         return False
     q_has = ("(1)" in q) or ("（1）" in q)
@@ -544,17 +377,70 @@ def _is_list_combo_style(q: str, options: list) -> bool:
     return q_has and opt_has
 
 
-def _generate_batch(cfg, text, subject, level_code, count, fast_mode, qtype):
-    if count <= 0:
-        return []
+def _dedupe(items: list) -> list:
+    seen = set()
+    out = []
+    for it in items:
+        q = (it.get("question") or "").strip()
+        key = re.sub(r"\s+", " ", q).lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(it)
+    return out
 
+
+def _build_prompt(subject: str, traits: str, level_code: str, count: int, text: str) -> str:
+    banned = "教材、教材中、教材內、教材出現、教材提及、根據教材、根據以上資料、文中提及、上文提到、資料顯示"
+    max_list = max(1, round(count * 0.3))
+    min_direct = count - max_list
+
+    return f"""
+你是一名香港中學教師，負責出校內測驗題。
+科目：{subject}
+
+【難度規格（必須嚴格遵守）】
+{_difficulty_guidance(level_code)}
+
+【科目特性（必須遵守）】
+{traits}
+
+【題幹規則（必須遵守）】
+- 題幹要直接、簡潔。
+- 禁止出現：{banned}
+- 不要用「根據…」開頭句式。
+
+【題型】多項選擇題（四選一 single）
+【版式配額（必須遵守）】
+- 至少 {min_direct} 題必須使用「直接問答」：題幹 + A~D（四個純選項，不要(1)~(4)組合題）。
+- 最多 {max_list} 題可使用「資料題」：題幹 + (1)~(4) + A~D（選項是(1)~(4)組合）。
+
+【出題硬規則】
+1) 只生成 {count} 題
+2) options 必須剛好 4 個
+3) correct 必須是 ["1"~"4"]（只 1 個）
+4) 題幹或選項必須包含提供內容中出現過的至少 2 個關鍵詞（貼題）
+5) 若資訊不足：needs_review=true，但仍要給出最可能答案
+
+【輸出】
+只輸出純 JSON array，不要任何額外文字。
+
+【格式示例】
+{_FEWSHOT}
+
+【提供內容】
+{text}
+"""
+
+
+def _generate_once(cfg, subject: str, level_code: str, count: int, text: str, fast_mode: bool) -> list:
     traits = SUBJECT_TRAITS.get(subject, DEFAULT_TRAITS)
+    temperature = 0.12 if fast_mode else 0.2
+    max_tokens = 1400 if fast_mode else 2200
+    timeout = 120 if fast_mode else 180
 
-    temperature = 0.15 if fast_mode else 0.2
-    max_tokens = 900 if qtype == "true_false" else (1400 if fast_mode else 2200)
-    timeout = 90 if fast_mode else 180
+    prompt = _build_prompt(subject, traits, level_code, count, text)
 
-    prompt = _build_prompt(subject, traits, qtype, level_code, count, text)
     items = _call_with_retries(
         cfg,
         messages=[{"role": "user", "content": prompt}],
@@ -565,14 +451,14 @@ def _generate_batch(cfg, text, subject, level_code, count, fast_mode, qtype):
     )
 
     cleaned = []
-    for q in items:
-        qt = qtype
-        opts = _normalize_options(q.get("options", []), qt)
-        corr = _normalize_correct(q.get("correct", []), qt)
-        question = _strip_boilerplate_question(str(q.get("question", "")).strip())
-
+    for q in items or []:
+        opts = _normalize_options(q.get("options", []), "single")
+        corr = _normalize_correct(q.get("correct", []), "single")
+        question = _strip_boilerplate(str(q.get("question", "")).strip())
+        if not question:
+            continue
         cleaned.append({
-            "qtype": qt,
+            "qtype": "single",
             "question": question,
             "options": opts,
             "correct": corr,
@@ -580,198 +466,129 @@ def _generate_batch(cfg, text, subject, level_code, count, fast_mode, qtype):
             "needs_review": bool(q.get("needs_review", False)),
         })
 
-    # ✅ single 題：再做一次「版式比例」檢查，必要時補回直接問答題
-    if qtype == "single" and count >= 4:
-        max_list = max(1, round(count * 0.3))
-        list_idx = [i for i, it in enumerate(cleaned) if _is_list_combo_style(it["question"], it["options"])]
-        if len(list_idx) > max_list:
-            need = len(list_idx) - max_list
+    return _dedupe(cleaned)
 
-            # 用「直接問答」補題：在 prompt 加一句硬性要求只出直接問答
-            direct_prompt = prompt + "\n\n【補充強制】接下來只可用「直接問答」版式：題幹 + A~D（禁止(1)~(4)列表/組合題）。\n"
-            more = _call_with_retries(
-                cfg,
-                messages=[{"role": "user", "content": direct_prompt}],
-                temperature=temperature,
-                max_tokens=max_tokens,
-                timeout=timeout,
-                schema_hint="JSON array",
-            )
 
-            direct_items = []
-            for q2 in more:
-                opts2 = _normalize_options(q2.get("options", []), "single")
-                corr2 = _normalize_correct(q2.get("correct", []), "single")
-                question2 = _strip_boilerplate_question(str(q2.get("question", "")).strip())
-                direct_items.append({
-                    "qtype": "single",
-                    "question": question2,
-                    "options": opts2,
-                    "correct": corr2,
-                    "explanation": str(q2.get("explanation", "")).strip()[:60],
-                    "needs_review": bool(q2.get("needs_review", False)),
-                })
+def _fill_to_count(cfg, subject: str, level_code: str, target: int, text: str, fast_mode: bool) -> list:
+    out = _generate_once(cfg, subject, level_code, target, text, fast_mode)
 
-            # 替換超標的組合題（只替換 need 題）
-            replace_targets = list_idx[:need]
-            for k, idx in enumerate(replace_targets):
-                if k < len(direct_items):
-                    cleaned[idx] = direct_items[k]
+    rounds = 0
+    while len(out) < target and rounds < 3:
+        missing = target - len(out)
+        existing = "
+".join([f"- {it['question']}" for it in out[:25]])
+        prompt_suffix = f"
 
-    return cleaned
+【補充】請再生成 {missing} 題，不可與以下題目重複：
+{existing}
+"
+        more = _generate_once(cfg, subject, level_code, missing, text + prompt_suffix, fast_mode)
+        out = _dedupe(out + more)
+        rounds += 1
+
+    if len(out) < target:
+        raise ValueError(f"AI 只生成了 {len(out)}/{target} 題（已多次重試）。請重試或減少題目數目。")
+
+    return out[:target]
 
 
 def generate_questions(cfg, text, subject, level, question_count, fast_mode: bool = False, qtype: str = "single"):
+    """確保回傳題目數量 = question_count；mixed 會分層生成再混合。"""
     text = _clean_text(text)
     text = text[: (8000 if fast_mode else 10000)]
 
-    if qtype not in {"single", "true_false"}:
-        qtype = "single"
+    n = int(question_count)
 
     if level == "mixed":
-        n = int(question_count)
         n_easy = max(1, round(n * 0.4))
         n_med = max(1, round(n * 0.4))
         n_hard = max(1, n - n_easy - n_med)
 
-        batch = []
-        batch += _generate_batch(cfg, text, subject, "easy", n_easy, fast_mode, qtype)
-        batch += _generate_batch(cfg, text, subject, "medium", n_med, fast_mode, qtype)
-        batch += _generate_batch(cfg, text, subject, "hard", n_hard, fast_mode, qtype)
+        a = _fill_to_count(cfg, subject, "easy", n_easy, text, fast_mode)
+        b = _fill_to_count(cfg, subject, "medium", n_med, text, fast_mode)
+        c = _fill_to_count(cfg, subject, "hard", n_hard, text, fast_mode)
 
-        random.shuffle(batch)
-        return batch[:n]
+        merged = a + b + c
+        random.shuffle(merged)
+        merged = merged[:n]
 
-    return _generate_batch(cfg, text, subject, level, int(question_count), fast_mode, qtype)
-def generate_questions_from_images(cfg, images_data_urls, subject, level, question_count, fast_mode: bool = False, qtype: str = "single"):
-    """
-    Vision fallback：直接把圖片交給多模態 LLM，要求它讀圖並輸出題目 JSON。
-    images_data_urls: ["data:image/png;base64,...", ...]
-    """
-    if qtype not in {"single", "true_false"}:
-        qtype = "single"
+        if len(merged) < n:
+            merged = _dedupe(merged + _fill_to_count(cfg, subject, "medium", n - len(merged), text, fast_mode))
+            merged = merged[:n]
+
+        # 版式保險：控制(1)-(4)組合題比例
+        max_list = max(1, round(n * 0.3))
+        list_idx = [i for i, it in enumerate(merged) if _is_list_combo_style(it["question"], it["options"])]
+        if len(list_idx) > max_list:
+            need = len(list_idx) - max_list
+            direct_more = _fill_to_count(cfg, subject, "medium", need, text + "
+
+【補充強制】只可用直接問答版式（禁止(1)~(4)組合題）。", fast_mode)
+            for k, idx in enumerate(list_idx[:need]):
+                merged[idx] = direct_more[k]
+
+        return merged
+
+    out = _fill_to_count(cfg, subject, level, n, text, fast_mode)
+
+    max_list = max(1, round(n * 0.3))
+    list_idx = [i for i, it in enumerate(out) if _is_list_combo_style(it["question"], it["options"])]
+    if len(list_idx) > max_list:
+        need = len(list_idx) - max_list
+        direct_more = _fill_to_count(cfg, subject, level, need, text + "
+
+【補充強制】只可用直接問答版式（禁止(1)~(4)組合題）。", fast_mode)
+        for k, idx in enumerate(list_idx[:need]):
+            out[idx] = direct_more[k]
+
+    return out
+def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode: bool = False, qtype: str = "single"):
+    # ✅ 匯入固定 single
+    qtype = "single"
 
     traits = SUBJECT_TRAITS.get(subject, DEFAULT_TRAITS)
+    raw_text = _clean_text(raw_text)
 
-    # 針對你要求：題幹簡潔，禁用「教材/根據」套話
-    banned = "教材、教材中、教材內、教材出現、教材提及、根據教材、根據以上資料、文中提及、上文提到、資料顯示"
+    raw_text = raw_text[: (8000 if fast_mode else 10000)]
 
-    if qtype == "true_false":
-        qtype_rules = """
-【題型】是非題（true_false）
-- options 固定為：["對","錯"]（其餘留空）
-- 題幹必須是一句可判斷對/錯的陳述句（避免問句）
-- correct 只可 ["1"] 或 ["2"]
-"""
-        fewshot = """
-[
-  {"qtype":"true_false","question":"物體在真空中不受空氣阻力影響。","options":["對","錯","",""],"correct":["1"],"explanation":"","needs_review":false}
-]
-"""
-    else:
-        qtype_rules = """
-【題型】多項選擇題（四選一 single）
-- options 必須 4 個
-- correct 必須 ["1"~"4"]（只 1 個）
-"""
-        fewshot = """
-[
-  {"qtype":"single","question":"以下哪一項最符合題目？","options":["A","B","C","D"],"correct":["2"],"explanation":"","needs_review":false}
-]
+    schema_hint = """
+每題必須包含：
+- qtype: 固定 "single"
+- question: 字串
+- options: list（必須 4 個字串）
+- correct: list（只含 1 個 "1"~"4"）
+- explanation: 字串（若推測答案：必須以「⚠️需教師確認：」開頭）
+- needs_review: true/false
 """
 
-    schema = f"""
-【輸出要求】
-- 只輸出純 JSON array，不要任何額外文字
-- 只生成 {question_count} 題
-- qtype 固定為 "{qtype}"
-- 題幹要直接、簡潔，禁止出現：{banned}
-- 若圖片資訊不完整：needs_review=true，但仍要給出最可能答案
-"""
-
-    prompt_text = f"""
-你是一名香港中學教師，負責出校內測驗題。
-科目：{subject}；難度：{level}
-
-【科目特性（必須遵守）】
-{traits}
-
-【題幹規則】
-- 題幹要直接、簡潔，不要使用「根據…」「教材…」等套話。
-
-{qtype_rules}
-{schema}
-
-【格式示例】
-{fewshot}
-
-現在請根據以下圖片內容出題（你需要先理解圖片文字/圖表/題目內容，然後輸出題目JSON）。
-"""
-
-    # 組合多模態 messages（OpenAI-compatible image_url）
-    content = [{"type": "text", "text": prompt_text}]
-    for url in images_data_urls:
-        content.append({"type": "image_url", "image_url": {"url": url}})
-
-    temperature = 0.1 if fast_mode else 0.2
-    max_tokens = 1600 if fast_mode else 2600
-    timeout = 120 if fast_mode else 180
-
-    out = _chat(
-        cfg,
-        messages=[{"role": "user", "content": content}],
-        temperature=temperature,
-        max_tokens=max_tokens,
-        timeout=timeout,
+    guess_rule = (
+        "若原文未提供答案，你必須推測最可能正確答案，但必須 needs_review=true，"
+        "並在 explanation 開頭加「⚠️需教師確認：」說明是推測。"
+        if allow_guess
+        else "若原文未提供答案，correct 設為 ['1'] 並 needs_review=true，explanation 以「⚠️需教師確認：」開頭。"
     )
-
-    items = extract_json(out)
-
-    cleaned = []
-    for q in items:
-        qt = qtype  # 強制用選定題型
-        opts = _normalize_options(q.get("options", []), qt)
-        corr = _normalize_correct(q.get("correct", []), qt)
-
-        question = str(q.get("question", "")).strip()
-        # 再次保險：刪除開頭套話
-        question = _strip_boilerplate_question(question)
-
-        cleaned.append({
-            "qtype": qt,
-            "question": question,
-            "options": opts,
-            "correct": corr,
-            "explanation": str(q.get("explanation", "")).strip()[:60],
-            "needs_review": bool(q.get("needs_review", False)),
-        })
-
-    return cleaned
-
-# ---- 匯入：固定 single（保持現狀）----
-def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode: bool = False, qtype: str = "single"):
-    qtype = "single"
-    raw_text = _clean_text(raw_text)[: (8000 if fast_mode else 10000)]
-
-    guess_rule = "若原文未提供答案，你必須推測最可能正確答案，但 needs_review=true，explanation 以「⚠️需教師確認：」開頭。"
 
     temperature = 0.0 if fast_mode else 0.1
     max_tokens = 1600 if fast_mode else 2400
-    timeout = 120 if fast_mode else 180
+    timeout = 120 if fast_mode else 180  # ✅ 提高，避免 DeepSeek 超時
 
     prompt = f"""
 你是一名香港中學教師，正在把現有題目整理成標準格式。
 科目：{subject}
 目標題型：single（4選1）
 
-【規則】
-- 原文若有答案必須跟從。
-- {guess_rule}
-- 每題都必須填 correct（不可留空）。
+【科目特性（參考）】
+{traits}
 
-【輸出】
-只輸出純 JSON array，不要任何額外文字。
-每題 options 必須 4 個，correct 必須 ["1"~"4"]（只 1 個）。
+【最重要規則】
+- 原文若有答案（例如：答案：B / Answer: 2），必須跟從。
+- {guess_rule}
+- 無論如何，每題都必須填 correct（不可留空）。
+
+【輸出要求】
+- 只輸出純 JSON array，不要任何額外文字。
+- 每題必須有 4 個選項（不足補空字串）。
+- correct 必須是 ["1"~"4"]（只 1 個）。
 
 【原始文字】
 {raw_text}
@@ -783,7 +600,7 @@ def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode:
         temperature=temperature,
         max_tokens=max_tokens,
         timeout=timeout,
-        schema_hint="JSON array",
+        schema_hint=schema_hint,
     )
 
     cleaned = []
@@ -793,12 +610,13 @@ def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode:
 
         expl = str(q.get("explanation", "")).strip()
         needs_review = bool(q.get("needs_review", False))
+
         if needs_review and not expl.startswith("⚠️需教師確認："):
             expl = "⚠️需教師確認：" + (expl if expl else "系統推測答案，請老師核對。")
 
         cleaned.append({
             "qtype": "single",
-            "question": _strip_boilerplate_question(str(q.get("question", "")).strip()),
+            "question": str(q.get("question", "")).strip(),
             "options": opts,
             "correct": corr,
             "explanation": expl[:120],
@@ -808,13 +626,18 @@ def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode:
     return cleaned
 
 
+# -------------------------
+# ✅ 本地拆題（支援 A-D + 題幹含(1)(2)…）
+# -------------------------
 def parse_import_questions_locally(raw_text: str):
     raw_text = _clean_text(raw_text)
     if not raw_text:
         return []
 
     parts = re.split(r"(?:\n(?=\s*(?:\d+\s*[\.、]|Q\d+|第\s*\d+\s*題)))", raw_text, flags=re.IGNORECASE)
-    blocks = [p.strip() for p in parts if p.strip()] or [raw_text]
+    blocks = [p.strip() for p in parts if p.strip()]
+    if not blocks:
+        blocks = [raw_text]
 
     opt_pat = re.compile(r"(?m)^\s*(?:\(?([A-D])\)?)[\.\)、\):：]\s*(.+?)\s*$")
     ans_pat = re.compile(r"(?:答案|Answer)\s*[:：]\s*([A-D]|[1-4])", flags=re.IGNORECASE)
@@ -828,12 +651,16 @@ def parse_import_questions_locally(raw_text: str):
 
         opts = {"A": "", "B": "", "C": "", "D": ""}
         for m in opt_pat.finditer(text):
-            opts[m.group(1).upper()] = m.group(2).strip()
+            letter = m.group(1).upper()
+            content = m.group(2).strip()
+            opts[letter] = content
 
-        options = _normalize_options([opts["A"], opts["B"], opts["C"], opts["D"]], "single")
+        options = [opts["A"], opts["B"], opts["C"], opts["D"]]
+        options = _normalize_options(options, "single")
 
         qstem = opt_pat.sub("", text)
-        qstem = ans_pat.sub("", qstem).strip()
+        qstem = ans_pat.sub("", qstem)
+        qstem = qstem.strip()
 
         needs_review = False
         correct_num = "1"
@@ -846,7 +673,7 @@ def parse_import_questions_locally(raw_text: str):
 
         out.append({
             "qtype": "single",
-            "question": _strip_boilerplate_question(qstem),
+            "question": qstem,
             "options": options,
             "correct": [correct_num],
             "explanation": expl,
