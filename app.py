@@ -176,7 +176,7 @@ else:
             st.rerun()
     else:
         st.sidebar.link_button("🔐 連接 Google（登入）", get_auth_url())
-        st.sidebar.caption(""提示：請以學校電郵登入（例如：xxx@pochiu.edu.hk）")
+        st.sidebar.caption("提示：請以學校電郵登入（例如：xxx@pochiu.edu.hk）")
 
 st.sidebar.divider()
 
