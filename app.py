@@ -165,7 +165,7 @@ if oauth_is_configured() and "code" in params and not st.session_state.google_cr
         st.stop()
 
 # Sidebar: Google connect
-st.sidebar.header("🟦 Google 連接（Forms / Drive 分享）")
+st.sidebar.header("🟦 Google 連接（Google Forms / Google Drive 一鍵分享檔案）")
 if not oauth_is_configured():
     st.sidebar.warning("⚠️ 尚未設定 Google OAuth（Secrets: google_oauth_client + APP_URL）")
 else:
@@ -176,12 +176,17 @@ else:
             st.rerun()
     else:
         st.sidebar.link_button("🔐 連接 Google（登入）", get_auth_url())
-        st.sidebar.caption("登入後可：建立 Google Form + 用電郵分享匯出檔")
+        st.sidebar.caption(""提示：請以學校電郵登入（例如：xxx@pochiu.edu.hk）")
 
 st.sidebar.divider()
 
 # Sidebar: AI API config
-fast_mode = st.sidebar.checkbox("⚡ 快速模式", value=True)
+fast_mode = st.sidebar.checkbox(
+    "⚡ 快速模式",
+    value=True,
+    help="較快、較保守：會用較短的AI輸出與較短超時；適合日常快速出題。"
+)
+st.sidebar.caption("快速模式：速度較快但題目較保守；關閉後較慢但可生成更豐富/更有變化的題目。")
 st.sidebar.header("🔌 AI API 設定")
 
 preset = st.sidebar.selectbox(
