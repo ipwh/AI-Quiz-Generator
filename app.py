@@ -186,8 +186,11 @@ def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix:
 # Page config + session
 # -------------------------
 st.set_page_config(page_title="AI 題目生成器", layout="wide")
+st.markdown("""<style>
+/* Hide Streamlit header anchor/link icons */
+a.header-anchor {display: none !important;}
+</style>""", unsafe_allow_html=True)
 st.title("🏫 AI 題目生成器（新版介面）")
-st.caption("UI版本：UI-REDESIGN 2026-04-19 v1 ✅（見到呢句＝你已成功換到新版）")
 
 for k, v in {
     "google_creds": None,
@@ -395,7 +398,7 @@ with tab_generate:
         value=False,
         help="當抽取到的文字太少或品質差，會把圖片/掃描PDF前幾頁交給 Grok 或其他LLM（DeepSeek欠缺OCR功能，不可用） 讀圖抽字，再用該文字出題。"
     )
-    llm_ocr_pdf_pages = st.selectbox("LLM OCR PDF頁數（只取前幾頁）", [1,2,3,4,5], index=2)
+    llm_ocr_pdf_pages = st.selectbox("LLM OCR PDF頁數（Token限制，最多5頁）", [1,2,3,4,5], index=2)
 
     files = st.file_uploader(
         "上載教材檔案",
