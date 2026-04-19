@@ -8,6 +8,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
 from services.llm_service import (
+    xai_pick_vision_model, llm_ocr_extract_text,
     generate_questions,
     assist_import_questions,
     parse_import_questions_locally,
@@ -16,6 +17,7 @@ from services.llm_service import (
 )
 from services.cache_service import load_cache, save_cache
 from extractors.extract import extract_text
+from extractors.extract import extract_images_for_llm_ocr
 from exporters.export_kahoot import export_kahoot
 from exporters.export_wayground_docx import export_wayground_docx
 from services.google_oauth import (
@@ -388,6 +390,13 @@ with tab_generate:
     st.markdown("## ① 上載教材")
     st.caption("支援 PDF/DOCX/TXT/PPTX/XLSX。系統會抽取文字後交給 AI 出題。")
 
+enable_llm_ocr = st.checkbox(
+    "🖼️ 啟用 LLM 讀圖 OCR（適合掃描/截圖/圖表/幾何；較慢）",
+    value=False,
+    help="當抽取到的文字太少或品質差，會把圖片/掃描PDF前幾頁交給 Grok 或其他LLM（DeepSeek欠缺OCR功能，不可用） 讀圖抽字，再用該文字出題。"
+)
+llm_ocr_pdf_pages = st.selectbox("LLM OCR PDF頁數（只取前幾頁）", [1,2,3,4,5], index=2)
+
     files = st.file_uploader(
         "上載教材檔案",
         accept_multiple_files=True,
@@ -399,6 +408,34 @@ with tab_generate:
     if files:
         with st.spinner("📄 正在擷取文字…"):
             raw_text = "".join(extract_text(f) for f in files)
+
+# 若啟用 LLM OCR，且抽到文字太少，則用 Grok 讀圖補字
+if enable_llm_ocr and can_call_ai(cfg):
+    # 門檻：你可調（例如 <200 字）
+    if len(raw_text.strip()) < 200:
+        if preset == "Grok (xAI)":
+            vision_model = xai_pick_vision_model(api_key, base_url)
+            if vision_model:
+                cfg2 = dict(cfg)
+                cfg2["model"] = vision_model
+            else:
+                st.warning("⚠️ 找不到支援圖片輸入的 Grok 型號，LLM OCR 已略過。")
+                cfg2 = None
+        else:
+            # 其他供應商只有多模態模型才行（否則略過）
+            cfg2 = cfg
+
+        if cfg2:
+            images = []
+            for f in files:
+                images.extend(extract_images_for_llm_ocr(f, pdf_max_pages=llm_ocr_pdf_pages, pdf_zoom=2.0))
+
+            if images:
+                with st.spinner("🖼️ 正在用 LLM 讀圖抽取文字…"):
+                    ocr_text = llm_ocr_extract_text(cfg2, images, lang_hint="zh-Hant", fast_mode=fast_mode)
+                if ocr_text and len(ocr_text) > len(raw_text):
+                    raw_text = (ocr_text + "\n\n" + raw_text).strip()
+``
         st.info(f"✅ 已擷取 {len(raw_text)} 字")
 
         st.markdown("## ② 重點段落標記（可選）")
