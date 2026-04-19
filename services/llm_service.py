@@ -227,7 +227,158 @@ def get_xai_default_model(api_key: str, base_url: str = "https://api.x.ai/v1", t
         return "grok-4-latest"
     except Exception:
         return "grok-4-latest"
+import requests
 
+def xai_pick_vision_model(api_key: str, base_url: str = "https://api.x.ai/v1", timeout: int = 15) -> str | None:
+    """
+    從 xAI /v1/language-models 中挑一個支援 image 的模型。
+    /v1/language-models 會列出可用語言模型，並包含 input_modalities / aliases 等資訊。[3](https://cameledge.com/post/llm/mcq)
+    回傳 model id 或 alias；若找不到則回傳 None。
+    """
+    url = base_url.rstrip("/") + "/language-models"
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    try:
+        with _SESSION_LOCK:
+            r = _SESSION.get(url, headers=headers, timeout=(10, timeout))
+        r.raise_for_status()
+        payload = r.json()
+
+        models = payload.get("models") or payload.get("data") or []
+        if not isinstance(models, list):
+            return None
+
+        # 先嘗試用 alias（較穩），再用 id
+        # 只要 input_modalities 包含 "image" 就視作 vision model
+        candidates = []
+        for m in models:
+            if not isinstance(m, dict):
+                continue
+            input_mods = m.get("input_modalities") or []
+            if isinstance(input_mods, list) and "image" in input_mods:
+                created = m.get("created", 0) or 0
+                mid = str(m.get("id", "") or "")
+                aliases = m.get("aliases") or []
+                # 優先用 alias 中帶 latest 的（如果有）
+                alias_latest = None
+                if isinstance(aliases, list):
+                    for a in aliases:
+                        if isinstance(a, str) and a.endswith("-latest"):
+                            alias_latest = a
+                            break
+                candidates.append((created, alias_latest or mid))
+
+        if not candidates:
+            return None
+
+        # 取 created 最新的一個
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        return candidates[0][1]
+
+    except Exception:
+        return None
+
+
+def generate_questions_from_images(cfg: dict, images_data_urls: list[str], subject: str, level: str,
+                                   question_count: int, fast_mode: bool = False, qtype: str = "single"):
+    """
+    Vision fallback：直接把圖片交給多模態 LLM（Grok）讀圖出題。
+    xAI chat completions /v1/chat/completions 支援 text/image chat prompts。[1](https://www.aidoczh.com/streamlit/develop/concepts/connections/secrets-management.html)[2](https://blog.csdn.net/gitblog_00250/article/details/142274805)
+    """
+    if qtype not in {"single", "true_false"}:
+        qtype = "single"
+
+    traits = SUBJECT_TRAITS.get(subject, DEFAULT_TRAITS)
+
+    banned = "教材、教材中、根據教材、根據以上資料、文中提及、上文提到、資料顯示"
+    if qtype == "true_false":
+        qtype_rules = """
+【題型】是非題（true_false）
+- options 固定為：["對","錯"]（其餘留空）
+- 題幹必須是一句可判斷對/錯的陳述句（避免問句）
+- correct 只可 ["1"] 或 ["2"]
+"""
+        fewshot = """
+[
+  {"qtype":"true_false","question":"光合作用會產生氧氣。","options":["對","錯","",""],"correct":["1"],"explanation":"","needs_review":false}
+]
+"""
+    else:
+        qtype_rules = """
+【題型】多項選擇題（四選一 single）
+- options 必須 4 個
+- correct 必須 ["1"~"4"]（只 1 個）
+"""
+        fewshot = """
+[
+  {"qtype":"single","question":"以下哪一項正確？","options":["A","B","C","D"],"correct":["2"],"explanation":"","needs_review":false}
+]
+"""
+
+    prompt_text = f"""
+你是一名香港中學教師，負責出校內測驗題。
+科目：{subject}；難度：{level}
+
+【科目特性（必須遵守）】
+{traits}
+
+【題幹規則（必須遵守）】
+- 題幹要直接、簡潔。
+- 禁止出現：{banned}
+- 不要用「根據…」開頭。
+
+{qtype_rules}
+
+【輸出要求】
+- 只輸出純 JSON array，不要任何額外文字。
+- 只生成 {question_count} 題
+- qtype 固定為 "{qtype}"
+- 若圖片資訊不完整：needs_review=true，但仍要給出最可能答案
+
+【格式示例】
+{fewshot}
+
+請根據以下圖片內容出題（你需要先理解圖片文字/圖表/題目內容，再輸出題目JSON）。
+"""
+
+    # OpenAI-compatible 多模態 message content（text + image_url）
+    content = [{"type": "text", "text": prompt_text}]
+    for url in images_data_urls:
+        content.append({"type": "image_url", "image_url": {"url": url}})
+
+    temperature = 0.1 if fast_mode else 0.2
+    max_tokens = 1600 if fast_mode else 2600
+    timeout = 120 if fast_mode else 180
+
+    out = _chat(
+        cfg,
+        messages=[{"role": "user", "content": content}],
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout=timeout,
+    )
+
+    items = extract_json(out)
+
+    cleaned = []
+    for q in items:
+        qt = qtype  # 強制題型
+        opts = _normalize_options(q.get("options", []), qt)
+        corr = _normalize_correct(q.get("correct", []), qt)
+
+        question = str(q.get("question", "")).strip()
+        question = _strip_boilerplate_question(question)  # 你之前已有
+
+        cleaned.append({
+            "qtype": qt,
+            "question": question,
+            "options": opts,
+            "correct": corr,
+            "explanation": str(q.get("explanation", "")).strip()[:60],
+            "needs_review": bool(q.get("needs_review", False)),
+        })
+
+    return cleaned
 
 def _fix_json(cfg: dict, bad_output: str, schema_hint: str, timeout: int):
     prompt = (
