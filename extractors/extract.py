@@ -1,9 +1,12 @@
 import io
 import re
-import baseimport base64
+import base64
+import fitz  # PyMuPDF
+import docx
 import openpyxl
 from pptx import Presentation
 
+# OCR (optional)
 try:
     import pytesseract
     from PIL import Image, ImageOps
@@ -21,7 +24,9 @@ def _clean_text(s: str) -> str:
 
 
 def _text_quality_score(s: str) -> float:
-    """粗略 OCR 品質分數：可讀字符比例（中英數）/總長度。"""
+    """
+    粗略 OCR 品質分數：可讀字符比例（中英數）/總長度
+    """
     if not s:
         return 0.0
     total = len(s)
@@ -77,12 +82,13 @@ def _extract_pptx_text(data: bytes) -> str:
 
 
 def _preprocess_image_for_ocr(img: Image.Image) -> Image.Image:
+    # 灰階 + 自動對比（保守處理）
     img = img.convert("L")
     img = ImageOps.autocontrast(img)
     return img
 
 
-def _ocr_image_bytes(image_bytes: bytes, lang: str) -> str:
+def _ocr_image_bytes(image_bytes: bytes, lang: str = "chi_tra+chi_sim+eng") -> str:
     if not OCR_AVAILABLE:
         return ""
     try:
@@ -90,6 +96,7 @@ def _ocr_image_bytes(image_bytes: bytes, lang: str) -> str:
         img = _preprocess_image_for_ocr(img)
         text = pytesseract.image_to_string(img, lang=lang)
         text = _clean_text(text)
+        # 品質過低就回傳空，避免垃圾 OCR 影響出題
         if _text_quality_score(text) < 0.25:
             return ""
         return text
@@ -104,7 +111,7 @@ def _image_bytes_to_data_url(image_bytes: bytes, mime: str) -> str:
 
 def _pdf_pages_to_images_data_url(data: bytes, max_pages: int = 3, zoom: float = 2.0):
     """
-    Render 前 max_pages 頁做 Vision fallback（避免成本/超時爆炸）
+    Vision fallback 用：只取前 max_pages 頁（避免成本/超時）
     """
     imgs = []
     with fitz.open(stream=data, filetype="pdf") as doc:
@@ -126,10 +133,7 @@ def extract_payload(
 ) -> dict:
     """
     回傳：
-      { "text": str, "images": [data_url, ...], "meta": {...} }
-
-    - text: 抽取文字（OCR / 原生）
-    - images: 供 Vision fallback 的圖片 data URLs（base64）
+      { "text": str, "images": [data_url,...], "meta": {...} }
     """
     ext = file.name.split(".")[-1].lower()
     data = file.getvalue()
@@ -141,15 +145,14 @@ def extract_payload(
             text = _extract_pdf_text(data)
             out["text"] = text
 
-            # 若 text 太少 → 可能掃描 PDF：OCR 或 Vision
+            # 掃描 PDF：抽字太少 → OCR / Vision
             if len(text) < 50:
                 if enable_ocr:
-                    # OCR 全頁（依你要求不限制頁數）：逐頁 OCR 可能慢，但由上層提示頁數
                     if OCR_AVAILABLE:
                         parts = []
                         with fitz.open(stream=data, filetype="pdf") as doc:
-                            mat = fitz.Matrix(2.5, 2.5)
-                            for i in range(len(doc)):
+                            mat = fitz.Matrix(2.5, 2.5)  # OCR 更清晰
+                            for i in range(len(doc)):     # OCR 不限制頁數（依你要求）
                                 pix = doc[i].get_pixmap(matrix=mat, alpha=False)
                                 t = _ocr_image_bytes(pix.tobytes("png"), lang=ocr_lang)
                                 if t:
@@ -158,7 +161,6 @@ def extract_payload(
                     else:
                         out["text"] = ""
 
-                # Vision fallback：只取前 N 頁 images
                 if enable_vision:
                     try:
                         out["images"] = _pdf_pages_to_images_data_url(data, max_pages=vision_pdf_max_pages, zoom=2.0)
@@ -198,4 +200,3 @@ def extract_payload(
 # 兼容舊接口：只回傳文字
 def extract_text(file, enable_ocr: bool = False, ocr_lang: str = "chi_tra+chi_sim+eng") -> str:
     return extract_payload(file, enable_ocr=enable_ocr, ocr_lang=ocr_lang, enable_vision=False).get("text", "")
-import fitz  # PyMuPDF
