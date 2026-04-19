@@ -791,3 +791,44 @@ def parse_import_questions_locally(raw_text: str):
         })
 
     return out
+
+def xai_pick_vision_model(api_key: str, base_url: str = "https://api.x.ai/v1", timeout: int = 15) -> str | None:
+    """
+    從 /v1/language-models 挑一個 input_modalities 含 image 的 Grok 模型。[3](https://www.aidoczh.com/streamlit/develop/concepts/connections/secrets-management.html)
+    """
+    url = base_url.rstrip("/") + "/language-models"
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    try:
+        with _SESSION_LOCK:
+            r = _SESSION.get(url, headers=headers, timeout=(10, timeout))
+        r.raise_for_status()
+        payload = r.json()
+        models = payload.get("models") or payload.get("data") or []
+        if not isinstance(models, list):
+            return None
+
+        candidates = []
+        for m in models:
+            if not isinstance(m, dict):
+                continue
+            input_mods = m.get("input_modalities") or []
+            if isinstance(input_mods, list) and "image" in input_mods:
+                created = m.get("created", 0) or 0
+                mid = str(m.get("id", "") or "")
+                aliases = m.get("aliases") or []
+                alias_latest = None
+                if isinstance(aliases, list):
+                    for a in aliases:
+                        if isinstance(a, str) and a.endswith("-latest"):
+                            alias_latest = a
+                            break
+                candidates.append((created, alias_latest or mid))
+
+        if not candidates:
+            return None
+
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        return candidates[0][1]
+    except Exception:
+        return None
