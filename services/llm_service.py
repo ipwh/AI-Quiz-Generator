@@ -422,30 +422,52 @@ def _strip_boilerplate_question(q: str) -> str:
     return s
 
 
-def _difficulty_guidance(level_code: str) -> str:
-    if level_code == "easy":
-        return "偏重定義、關鍵詞辨識、直接理解；避免跨段推論。"
+ddef _difficulty_guidance(level_code: str) -> str:def _difficulty_guidance(level_code: str level_code == "easy":
+        return (
+            "【Easy 基礎】\n"
+            "- 題目重點：定義/關鍵詞辨識/直接理解。\n"
+            "- 不可：跨段推論、多步推理、計算鏈。\n"
+            "- 干擾項：明顯錯或典型誤解，但不要太接近正確答案。"
+        )
     if level_code == "medium":
-        return "偏重情境應用與簡單推論；需理解概念並應用到例子。"
+        return (
+            "【Medium 標準】\n"
+            "- 題目重點：情境應用、把概念套落例子、一步推論。\n"
+            "- 可：用短情境（1~2句）要求判斷。\n"
+            "- 干擾項：接近正確但在概念/條件上差一點（常見混淆）。"
+        )
     if level_code == "hard":
-        return "偏重分析、比較、判斷與推理；可加入常見混淆作干擾。"
-    return "混合難度：必須同時包含基礎/標準/進階題。"
+        return (
+            "【Hard 進階】\n"
+            "- 題目重點：分析/比較/判斷（至少2步推理）。\n"
+            "- 可：對立概念辨析、因果判斷、限制條件推論。\n"
+            "- 干擾項：非常接近、以常見混淆點設陷（例如因果倒置/忽略限制）。"
+        )
+    return (
+        "【Mixed 混合】\n"
+        "- 必須同時包含 easy/medium/hard 三類題目（比例由系統分配）。\n"
+        "- 題幹形式也要混合（直接問答為主，少量使用(1)-(4)資料題）。"
+    )
 
 
 def _build_prompt(subject: str, traits: str, qtype: str, level_code: str, count: int, text: str) -> str:
-    banned = "教材、教材中、教材內、教材出現、教材提及、根據教材、根據以上資料、根據下列資料、文中提及、上文提到、資料顯示、根據內容"
+    banned = "教材、教材中、根據教材、根據以上資料、文中提及、上文提到、資料顯示、教材中出現、教材中提及"
+    difficulty_spec = _difficulty_guidance(level_code)
+
     common = f"""
 你是一名香港中學教師，負責出校內測驗題。
 科目：{subject}
-難度要求：{_difficulty_guidance(level_code)}
+
+【難度規格（必須嚴格遵守）】
+{difficulty_spec}
 
 【科目特性（必須遵守）】
 {traits}
 
 【題幹規則（必須遵守）】
 - 題幹要直接、簡潔。
-- 禁止出現以下套話或類似句式：{banned}
-- 不要寫「根據…」開頭的句式，直接問問題/直接寫陳述句。
+- 禁止出現：{banned}
+- 不要用「根據…」開頭句式。
 """
 
     if qtype == "true_false":
@@ -468,11 +490,16 @@ def _build_prompt(subject: str, traits: str, qtype: str, level_code: str, count:
 ]
 """
     else:
-        qtype_rules = """
+        # ✅ 版式配額：直接問答為主，限制 (1)-(4) 組合題比例
+        max_list = max(1, round(count * 0.3))
+        min_direct = count - max_list
+
+        qtype_rules = f"""
 【題型】多項選擇題（四選一 single）
-【題幹格式偏好（盡量採用）】
-- 若內容出現多個例子/項目/分類，請用題幹 + (1)(2)(3)(4) 列點
-- A-D 選項用「只有（…）」/「以上皆是」等組合判斷
+【版式配額（必須遵守）】
+- 至少 {min_direct} 題必須使用「直接問答」：題幹 + A~D（四個純選項，不要(1)~(4)組合題）。
+- 最多 {max_list} 題可使用「資料題」：題幹 + (1)~(4) + A~D（選項是(1)~(4)組合）。
+- 請把兩種版式混合，不要集中使用同一模板。
 """
         schema = f"""
 【輸出要求】
@@ -484,14 +511,13 @@ def _build_prompt(subject: str, traits: str, qtype: str, level_code: str, count:
 """
         fewshot = """
 [
-  {"qtype":"single","question":"哪些屬於新媒體？\\n(1) 商業電台\\n(2) 實體報章\\n(3) 明報網上版\\n(4) YouTube",
-   "options":["只有（1）和（2）","只有（3）和（4）","只有（1）、（3）和（4）","以上皆是"],"correct":["2"],"explanation":"","needs_review":false}
+  {"qtype":"single","question":"下列哪一項不是媒體資訊帶來的效益？","options":["A選項","B選項","C選項","D選項"],"correct":["1"],"explanation":"","needs_review":false}
 ]
 """
 
     extra = """
 【貼題要求】
-- 題幹或選項必須包含內容中出現過的至少 2 個關鍵詞（貼題）。
+- 題幹或選項必須包含提供內容中出現過的至少 2 個關鍵詞。
 - 若資訊不足：needs_review=true，但仍要給出最可能答案。
 """
 
@@ -508,35 +534,41 @@ def _build_prompt(subject: str, traits: str, qtype: str, level_code: str, count:
 """
 
 
+def _is_list_combo_style(q: str, options: list) -> bool:
+    # 粗略判斷：題幹含 (1) 且選項含「只有（」/「以上皆是」/「（1）」等組合語
+    if not q:
+        return False
+    q_has = ("(1)" in q) or ("（1）" in q)
+    opt_text = " ".join([str(o) for o in (options or [])])
+    opt_has = ("只有" in opt_text) or ("以上皆是" in opt_text) or ("（1）" in opt_text) or ("(1)" in opt_text)
+    return q_has and opt_has
+
+
 def _generate_batch(cfg, text, subject, level_code, count, fast_mode, qtype):
     if count <= 0:
         return []
+
     traits = SUBJECT_TRAITS.get(subject, DEFAULT_TRAITS)
 
     temperature = 0.15 if fast_mode else 0.2
     max_tokens = 900 if qtype == "true_false" else (1400 if fast_mode else 2200)
     timeout = 90 if fast_mode else 180
 
-    schema_hint = "JSON array"
-
     prompt = _build_prompt(subject, traits, qtype, level_code, count, text)
-
     items = _call_with_retries(
         cfg,
         messages=[{"role": "user", "content": prompt}],
         temperature=temperature,
         max_tokens=max_tokens,
         timeout=timeout,
-        schema_hint=schema_hint,
+        schema_hint="JSON array",
     )
 
     cleaned = []
     for q in items:
-        qt = qtype  # 強制使用呼叫方題型
-
+        qt = qtype
         opts = _normalize_options(q.get("options", []), qt)
         corr = _normalize_correct(q.get("correct", []), qt)
-
         question = _strip_boilerplate_question(str(q.get("question", "")).strip())
 
         cleaned.append({
@@ -547,6 +579,44 @@ def _generate_batch(cfg, text, subject, level_code, count, fast_mode, qtype):
             "explanation": str(q.get("explanation", "")).strip()[:60],
             "needs_review": bool(q.get("needs_review", False)),
         })
+
+    # ✅ single 題：再做一次「版式比例」檢查，必要時補回直接問答題
+    if qtype == "single" and count >= 4:
+        max_list = max(1, round(count * 0.3))
+        list_idx = [i for i, it in enumerate(cleaned) if _is_list_combo_style(it["question"], it["options"])]
+        if len(list_idx) > max_list:
+            need = len(list_idx) - max_list
+
+            # 用「直接問答」補題：在 prompt 加一句硬性要求只出直接問答
+            direct_prompt = prompt + "\n\n【補充強制】接下來只可用「直接問答」版式：題幹 + A~D（禁止(1)~(4)列表/組合題）。\n"
+            more = _call_with_retries(
+                cfg,
+                messages=[{"role": "user", "content": direct_prompt}],
+                temperature=temperature,
+                max_tokens=max_tokens,
+                timeout=timeout,
+                schema_hint="JSON array",
+            )
+
+            direct_items = []
+            for q2 in more:
+                opts2 = _normalize_options(q2.get("options", []), "single")
+                corr2 = _normalize_correct(q2.get("correct", []), "single")
+                question2 = _strip_boilerplate_question(str(q2.get("question", "")).strip())
+                direct_items.append({
+                    "qtype": "single",
+                    "question": question2,
+                    "options": opts2,
+                    "correct": corr2,
+                    "explanation": str(q2.get("explanation", "")).strip()[:60],
+                    "needs_review": bool(q2.get("needs_review", False)),
+                })
+
+            # 替換超標的組合題（只替換 need 題）
+            replace_targets = list_idx[:need]
+            for k, idx in enumerate(replace_targets):
+                if k < len(direct_items):
+                    cleaned[idx] = direct_items[k]
 
     return cleaned
 
