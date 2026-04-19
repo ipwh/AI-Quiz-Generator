@@ -76,16 +76,8 @@ def build_text_with_highlights(raw_text: str, marked_idx: set, limit: int):
 
     out = ""
     if highlights:
-        out += "【重點段落（老師標記）】
-" + "
-
-".join(highlights) + "
-
-"
-    out += "【其餘教材】
-" + "
-
-".join(others)
+        out += "【重點段落（老師標記）】\n" + "\n\n".join(highlights) + "\n\n"
+    out += "【其餘教材】\n" + "\n\n".join(others)
     return out[:limit]
 
 
