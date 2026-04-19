@@ -29,6 +29,9 @@ from services.google_oauth import (
 from services.google_forms_api import create_quiz_form
 
 
+# -------------------------
+# Helpers
+# -------------------------
 def stable_key(*parts) -> str:
     raw = "||".join("" if p is None else str(p) for p in parts)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -60,7 +63,7 @@ def to_editor_df(data, subject: str):
             {
                 "export": True,
                 "subject": subject,
-                "qtype": q.get("qtype", "single"),  # ✅ 不再強行覆蓋，保留 true_false
+                "qtype": q.get("qtype", "single"),
                 "question": q.get("question", ""),
                 "option_1": opts[0],
                 "option_2": opts[1],
@@ -74,30 +77,14 @@ def to_editor_df(data, subject: str):
     return pd.DataFrame(rows)
 
 
-def split_paragraphs(text: str):
-    return [p.strip() for p in (text or "").split("\n\n") if p.strip()]
-
-
-def build_text_with_highlights(raw_text: str, marked_idx: set, limit: int):
-    paras = split_paragraphs(raw_text)
-    highlights = [paras[i] for i in range(len(paras)) if i in marked_idx]
-    others = [paras[i] for i in range(len(paras)) if i not in marked_idx]
-    out = ""
-    if highlights:
-        out += "【重點段落（老師標記）】\n" + "\n\n".join(highlights) + "\n\n"
-    out += "【其餘教材】\n" + "\n\n".join(others)
-    return out[:limit]
-
-
 def drive_service(creds):
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
 
 def upload_bytes_to_drive(creds, filename: str, mimetype: str, data_bytes: bytes) -> dict:
-    service = drive_service(creds)
     media = MediaIoBaseUpload(io.BytesIO(data_bytes), mimetype=mimetype, resumable=False)
     meta = {"name": filename}
-    f = service.files().create(body=meta, media_body=media, fields="id, webViewLink").execute()
+    f = drive_service(creds).files().create(body=meta, media_body=media, fields="id, webViewLink").execute()
     return f
 
 
@@ -115,25 +102,30 @@ def share_file_to_emails(creds, file_id: str, emails: list, role: str = "reader"
         ).execute()
 
 
+# -------------------------
+# Streamlit Config
+# -------------------------
 st.set_page_config(page_title="AI 題目生成器", layout="wide")
-st.title("🏫 AI 題目生成器（Kahoot / Wayground / Google Form｜一鍵電郵分享匯出檔）")
+st.title("🏫 AI 題目生成器（Kahoot / Wayground / Google Form｜一鍵電郵分享匯出檔｜OCR）")
 
 # session init
-for k, v in {
+defaults = {
     "google_creds": None,
     "generated_data": None,
     "imported_data": None,
     "imported_text": "",
-    "mark_idx": set(),
     "edited_generate_df": None,
     "edited_import_df": None,
     "form_result_generate": None,
     "form_result_import": None,
-}.items():
+}
+for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
+# -------------------------
 # OAuth callback
+# -------------------------
 params = st.query_params
 if oauth_is_configured() and "code" in params and not st.session_state.google_creds:
     try:
@@ -152,7 +144,9 @@ if oauth_is_configured() and "code" in params and not st.session_state.google_cr
         show_exception("Google 登入失敗。請重新按『連接 Google（登入）』一次。", e)
         st.stop()
 
+# -------------------------
 # Sidebar: Google connect
+# -------------------------
 st.sidebar.header("🟦 Google 連接（Google Forms / Google Drive 一鍵分享檔案）")
 if not oauth_is_configured():
     st.sidebar.warning("⚠️ 尚未設定 Google OAuth（Secrets: google_oauth_client + APP_URL）")
@@ -168,14 +162,16 @@ else:
 
 st.sidebar.divider()
 
-# Sidebar: AI config
+# -------------------------
+# Sidebar: AI API config
+# -------------------------
 fast_mode = st.sidebar.checkbox(
     "⚡ 快速模式",
     value=True,
     help="較快、較保守：生成速度更快但題目變化較少；關閉後較慢但更豐富。"
 )
-st.sidebar.header("🔌 AI API 設定")
 
+st.sidebar.header("🔌 AI API 設定")
 preset = st.sidebar.selectbox(
     "快速選擇（簡易）",
     ["DeepSeek", "OpenAI", "Grok (xAI)", "Azure OpenAI", "自訂（OpenAI 相容）"],
@@ -222,7 +218,13 @@ if preset == "Grok (xAI)" and auto_xai and api_key:
 
 def api_config():
     if preset == "Azure OpenAI":
-        return {"type": "azure", "api_key": api_key, "endpoint": azure_endpoint, "deployment": azure_deployment, "api_version": azure_api_version}
+        return {
+            "type": "azure",
+            "api_key": api_key,
+            "endpoint": azure_endpoint,
+            "deployment": azure_deployment,
+            "api_version": azure_api_version
+        }
     return {"type": "openai_compat", "api_key": api_key, "base_url": base_url, "model": model}
 
 def can_call_ai(cfg: dict):
@@ -232,7 +234,9 @@ def can_call_ai(cfg: dict):
         return bool(cfg.get("endpoint")) and bool(cfg.get("deployment"))
     return bool(cfg.get("base_url")) and bool(cfg.get("model"))
 
+# -------------------------
 # Sidebar: API test
+# -------------------------
 st.sidebar.divider()
 st.sidebar.header("🧪 API 連線測試")
 cfg_test = api_config()
@@ -250,7 +254,9 @@ if st.sidebar.button("🧪 一鍵測試 API（回覆 OK）", key="btn_ping_api")
 
 st.sidebar.divider()
 
-# Sidebar: mode/subject/difficulty
+# -------------------------
+# Sidebar: mode/subject/difficulty/qtype
+# -------------------------
 mode = st.sidebar.radio(
     "📂 試題來源模式",
     ["🪄 AI 生成新題目", "📄 匯入現有題目（AI 協助）"],
@@ -278,7 +284,6 @@ level_map = {
 }
 level_code = level_map[level_label]
 
-# ✅ 題型選擇：把 single 顯示改為「多項選擇題（四選一）」
 if mode == "🪄 AI 生成新題目":
     qtype_label = st.sidebar.selectbox(
         "🧩 題型",
@@ -289,14 +294,19 @@ if mode == "🪄 AI 生成新題目":
 else:
     qtype = "single"  # 匯入固定 single
 
+# -------------------------
 # Editor config
+# -------------------------
 EDITOR_COLUMN_CONFIG = {
     "export": st.column_config.CheckboxColumn("匯出", help="勾選：匯出/建Form/分享檔案", width="small"),
     "qtype": st.column_config.TextColumn("題型", width="small"),
-    "correct": st.column_config.TextColumn("答案", help="single：1-4；是非題：1=對、2=錯", width="small"),
+    "correct": st.column_config.TextColumn("答案", help="多項選擇題：1-4；是非題：1=對、2=錯", width="small"),
     "needs_review": st.column_config.CheckboxColumn("需教師確認", width="small"),
 }
 
+# -------------------------
+# Export + Share panel
+# -------------------------
 def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix: str):
     if selected_df is None or selected_df.empty:
         st.warning("⚠️ 尚未選擇任何題目（請勾選『匯出』欄）。")
@@ -360,36 +370,48 @@ def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix:
 
 
 # =========================
-# Mode 1: Generate
+# Mode 1: Generate (OCR)
 # =========================
 if mode == "🪄 AI 生成新題目":
-    st.subheader("🪄 AI 生成新題目")
+    st.subheader("🪄 AI 生成新題目（支援 OCR：圖片 / 掃描 PDF）")
 
     question_count = st.sidebar.selectbox("🧮 題目數目", [5, 8, 10, 12, 15, 20], index=2, key="question_count")
     cfg = api_config()
-    
-    enable_ocr = st.checkbox("🧾 啟用 OCR（圖片/掃描PDF）", value=False, help="適合數理科掃描/截圖題目；開啟會較慢。")
-ocr_lang = st.selectbox("OCR 語言", ["繁中+英 (chi_tra+eng)", "繁中+簡中+英 (chi_tra+chi_sim+eng)", "英 (eng)"], index=1)
-ocr_lang_map = {
-    "繁中+英 (chi_tra+eng)": "chi_tra+eng",
-    "繁中+簡中+英 (chi_tra+chi_sim+eng)": "chi_tra+chi_sim+eng",
-    "英 (eng)": "eng",
-}
-ocr_lang_value = ocr_lang_map[ocr_lang]
-ocr_pages = st.slider("掃描PDF OCR頁數（只處理前幾頁）", min_value=1, max_value=10, value=3)
-  
+
+    # ✅ OCR 控制（預設關，避免普通老師誤開）
+    enable_ocr = st.checkbox(
+        "🧾 啟用 OCR（圖片 / 掃描 PDF）",
+        value=False,
+        help="適合數理科掃描/截圖題目；開啟會較慢。"
+    )
+    ocr_lang_choice = st.selectbox(
+        "OCR 語言",
+        ["繁中+簡中+英", "繁中+英", "英"],
+        index=0
+    )
+    ocr_lang_map = {
+        "繁中+簡中+英": "chi_tra+chi_sim+eng",
+        "繁中+英": "chi_tra+eng",
+        "英": "eng",
+    }
+    ocr_lang = ocr_lang_map[ocr_lang_choice]
+    ocr_pages = st.slider("掃描 PDF OCR 頁數（只處理前幾頁）", min_value=1, max_value=10, value=3)
+
     files = st.file_uploader(
-        "上載教材（PDF/DOCX/TXT/PPTX/XLSX）",
+        "上載教材（PDF/DOCX/TXT/PPTX/XLSX/PNG/JPG）",
         accept_multiple_files=True,
-        type=["pdf","docx","txt","pptx","xlsx"],
+        type=["pdf", "docx", "txt", "pptx", "xlsx", "png", "jpg", "jpeg"],
         key="files_generate"
     )
 
     raw_text = ""
     if files:
         with st.spinner("📄 正在擷取文字…"):
-            raw_text = "".join(extract_text(f, enable_ocr=enable_ocr, ocr_lang=ocr_lang_value, ocr_pdf_pages=ocr_pages) for f in files)
-        st.info(f"✅ 已擷取 {len(raw_text)} 字")
+            raw_text = "".join(
+                extract_text(f, enable_ocr=enable_ocr, ocr_lang=ocr_lang, ocr_pdf_pages=ocr_pages)
+                for f in files
+            )
+        st.info(f"✅ 已擷取 {len(raw_text)} 字（OCR={'開' if enable_ocr else '關'}）")
 
     limit = 8000 if fast_mode else 10000
 
@@ -452,7 +474,7 @@ ocr_pages = st.slider("掃描PDF OCR頁數（只處理前幾頁）", min_value=1
 
 
 # =========================
-# Mode 2: Import (固定 single)
+# Mode 2: Import (AI assist)
 # =========================
 if mode == "📄 匯入現有題目（AI 協助）":
     st.subheader("📄 匯入現有題目（AI 協助）")
