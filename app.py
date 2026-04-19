@@ -482,7 +482,7 @@ if mode == "🪄 AI 生成新題目":
         st.download_button("⬇️ Wayground DOCX（已選）", export_wayground_docx(selected if not selected.empty else edited, subject), "wayground.docx")
 
         if st.session_state.google_creds and not selected.empty:
-            if st.button("🟦 一鍵建立 Google Form Quiz（已選）"):
+            if st.button("🟦 一鍵建立 Google Form Quiz（已選）", key="btn_make_form_generate"):
                 try:
                     with st.spinner("🟦 正在建立 Google Form…"):
                         creds = credentials_from_dict(st.session_state.google_creds)
@@ -551,7 +551,7 @@ if st.button("✨ 整理並轉換", disabled=not (bool(st.session_state.imported
 
         # ✅ 你要求：匯入模式也要輸出 Google Form（已做）
         if st.session_state.google_creds and not selected.empty:
-            if st.button("🟦 一鍵建立 Google Form Quiz（已選）"):
+            if st.button("🟦 一鍵建立 Google Form Quiz（已選）", key="btn_make_form_import"):
                 try:
                     with st.spinner("🟦 正在建立 Google Form…"):
                         creds = credentials_from_dict(st.session_state.google_creds)
