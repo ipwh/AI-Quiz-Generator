@@ -437,7 +437,8 @@ with tab_generate:
             st.info(f"送入 AI：{len(used_text)} 字（上限 {limit}）｜難度：{level_label}｜題數：{question_count}")
 
             cache = load_cache()
-            key = stable_key(used_text, subject, level_code, question_count, fast_mode, preset, model, base_url)
+            PROMPT_VERSION = "fmtquota_v1"
+            key = stable_key(used_text, subject, level_code, question_count, fast_mode, preset, model, base_url, qtype, PROMPT_VERSION)
 
             if key in cache:
                 st.success("✅ 已從快取讀取（節省時間與額度）")
