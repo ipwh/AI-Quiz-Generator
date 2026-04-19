@@ -292,6 +292,64 @@ def get_xai_default_model(api_key: str, base_url: str = "https://api.x.ai/v1", t
 # -------------------------
 # ✅ 一鍵測試 API
 # -------------------------
+def get_xai_default_model(api_key: str, base_url: str = "https://api.x.ai/v1", timeout: int = 15) -> str:
+    """
+    透過 xAI /v1/language-models 列出你個 API key 可用的模型及 aliases，並自動選擇最合適的預設 model。
+    xAI Docs：/v1/language-models 會列出 chat 模型並提供 aliases（適合做自動選型）。[1](https://zhuanlan.zhihu.com/p/1964739506629490036)
+
+    策略：
+    1) 優先用 alias（避免硬綁版本）：grok-4-latest → grok-4 → grok-3-latest → grok-3 → grok-2-latest
+    2) 若 alias 都冇，選 created 最大（最新）的 grok-* model id
+    3) 若查詢失敗，回退 grok-4-latest（alias）
+    """
+    preferred_aliases = ["grok-4-latest", "grok-4", "grok-3-latest", "grok-3", "grok-2-latest"]
+
+    url = base_url.rstrip("/") + "/language-models"
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    try:
+        with _SESSION_LOCK:
+            r = _SESSION.get(url, headers=headers, timeout=(10, timeout))
+        r.raise_for_status()
+        payload = r.json()
+
+        # xAI docs 指出 /v1/language-models 回傳 models array（含 aliases / created 等）[1](https://zhuanlan.zhihu.com/p/1964739506629490036)
+        models = payload.get("models") or payload.get("data") or []
+        if not isinstance(models, list):
+            models = []
+
+        alias_set = set()
+        grok_models = []
+
+        for m in models:
+            if not isinstance(m, dict):
+                continue
+            mid = str(m.get("id", "") or "")
+            created = m.get("created", 0) or 0
+            aliases = m.get("aliases") or []
+            if isinstance(aliases, list):
+                for a in aliases:
+                    if isinstance(a, str):
+                        alias_set.add(a)
+            if mid.startswith("grok-"):
+                grok_models.append((created, mid))
+
+        # 1) 優先 alias（最穩，等同「自動最新」）[1](https://zhuanlan.zhihu.com/p/1964739506629490036)
+        for a in preferred_aliases:
+            if a in alias_set:
+                return a
+
+        # 2) fallback：挑 created 最新的 grok-* id
+        if grok_models:
+            grok_models.sort(key=lambda x: x[0], reverse=True)
+            return grok_models[0][1]
+
+        # 3) 最後 fallback
+        return "grok-4-latest"
+
+    except Exception:
+        return "grok-4-latest"
+    
 def ping_llm(cfg: dict, timeout: int = 25):
     t0 = time.time()
     try:
