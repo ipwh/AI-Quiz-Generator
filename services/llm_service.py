@@ -345,6 +345,14 @@ def generate_questions(cfg, text, subject, level, question_count, fast_mode: boo
 
     text = text[: (8000 if fast_mode else 10000)]
 
+format_rule = ""
+if qtype == "single":
+    format_rule = """
+【題幹格式（優先採用）】
+- 若教材內容包含多個例子/項目/分類/現象，請把它們寫成 (1)(2)(3)(4) 的「資料/敘述」放入 question 內（可用換行分隔）。
+- options A-D 以「只有（…）」/「以上皆是」等方式組合判斷（例如：只有（1）和（2））。
+- 若不適合列表化（例如純定義題），可改為一般單選題，但仍需貼題。
+"""
     schema_hint = """
 每題必須包含：
 - qtype: "single" / "multiple" / "true_false"
@@ -385,6 +393,7 @@ def generate_questions(cfg, text, subject, level, question_count, fast_mode: boo
 3) 每題至少包含教材中出現過的 2 個關鍵詞
 4) 干擾項要合理（常見誤解）
 5) 不足以肯定答案：needs_review=true
+6) {format_rule}
 
 【輸出格式示例】
 {_FEWSHOT}
@@ -424,6 +433,7 @@ def generate_questions(cfg, text, subject, level, question_count, fast_mode: boo
 
 
 def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode: bool = False, qtype: str = "single"):
+    qtype = "single"  # ✅ 匯入固定 single（硬性規則）
     traits = SUBJECT_TRAITS.get(subject, DEFAULT_TRAITS)
     raw_text = _clean_text(raw_text)
 
