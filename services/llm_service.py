@@ -427,6 +427,7 @@ def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode:
     traits = SUBJECT_TRAITS.get(subject, DEFAULT_TRAITS)
     raw_text = _clean_text(raw_text)
 
+    # 匯入整理通常比生成更長：提高上限，但仍要截斷避免太慢
     raw_limit = 8000 if fast_mode else 10000
     raw_text = raw_text[:raw_limit]
 
@@ -434,7 +435,7 @@ def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode:
 每題必須包含：
 - qtype: "single" / "multiple" / "true_false"
 - question: 字串
-- options: list（single/multiple 必須 4 個；true_false 可只用前 2 個）
+- options: list（single/multiple 必須 4 個；true_false 前 2 個=對/錯，其餘可空字串）
 - correct:
    - single/true_false: list（只含 1 個 "1"~"4"；true_false 只用 1 或 2）
    - multiple: list（可多於 1 個，元素為 "1"~"4"）
@@ -442,16 +443,18 @@ def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode:
 - needs_review: true/false
 """
 
+    # ✅ 你要求：無答案時 AI 一定推測
     guess_rule = (
         "若原文未提供答案，你必須推測最可能正確答案，但必須 needs_review=true，"
         "並在 explanation 開頭加「⚠️需教師確認：」說明是推測。"
         if allow_guess
-        else "若原文未提供答案，請 correct 設為 ['1'] 並 needs_review=true，explanation 以「⚠️需教師確認：」開頭。"
+        else "若原文未提供答案，correct 設為 ['1'] 並 needs_review=true，explanation 以「⚠️需教師確認：」開頭。"
     )
 
+    # ✅ timeout 提高（避免 DeepSeek 超時）
     temperature = 0.0 if fast_mode else 0.1
-    max_tokens = 2400 if fast_mode else 3400
-    timeout = 45 if fast_mode else 90
+    max_tokens = 1600 if fast_mode else 2400
+    timeout = 120 if fast_mode else 180  # <—關鍵：由 45/90 提升
 
     qtype_rule = (
         "目標題型為 single（4選1）。" if qtype == "single" else
@@ -474,7 +477,7 @@ def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode:
 
 【輸出要求】
 - 只輸出純 JSON array，不要任何額外文字。
-- options 不足要補空字串到 4 個（true_false 可只用前 2 個，其餘補空）。
+- options 不足要補空字串到 4 個（true_false 前兩個必須為 對/錯）。
 - correct 必須以 "1"~"4" 表示（list）。
 
 【原始文字】
@@ -502,7 +505,7 @@ def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode:
         expl = str(q.get("explanation", "")).strip()
         needs_review = bool(q.get("needs_review", False))
 
-        # ✅ 如果模型推測但冇寫警告，幫佢補上
+        # ✅ 若 needs_review=true 但冇警告，補上
         if needs_review and not expl.startswith("⚠️需教師確認："):
             expl = "⚠️需教師確認：" + (expl if expl else "系統推測答案，請老師核對。")
 
@@ -522,24 +525,59 @@ def parse_import_questions_locally(raw_text: str):
     raw_text = _clean_text(raw_text)
     if not raw_text:
         return []
+
+    # 先用題號切題：1. / 1、 / Q1 / 第1題
     parts = re.split(r"(?:\n(?=\s*(?:\d+\s*[\.、]|Q\d+|第\s*\d+\s*題)))", raw_text, flags=re.IGNORECASE)
     blocks = [p.strip() for p in parts if p.strip()]
+    if not blocks:
+        blocks = [raw_text]
+
     out = []
+
+    # 選項正則：A. / A) / (A) / A： 等
+    opt_pat = re.compile(r"(?m)^\s*(?:\(?([A-D])\)?)[\.\)、\):：]\s*(.+?)\s*$")
+    ans_pat = re.compile(r"(?:答案|Answer)\s*[:：]\s*([A-D]|[1-4])", flags=re.IGNORECASE)
+
     for b in blocks:
-        m_ans = re.search(r"(?:答案|Answer)\s*[:：]\s*([A-D]|[1-4])", b, flags=re.IGNORECASE)
+        text = b.strip()
+
+        # 抽答案
+        m_ans = ans_pat.search(text)
         ans = m_ans.group(1).upper() if m_ans else None
-        correct_num = "1"
+
+        # 抽選項（A-D）
+        opts = {"A": "", "B": "", "C": "", "D": ""}
+        for m in opt_pat.finditer(text):
+            letter = m.group(1).upper()
+            content = m.group(2).strip()
+            opts[letter] = content
+
+        options = [opts["A"], opts["B"], opts["C"], opts["D"]]
+        # 如果 A-D 幾乎都抽唔到，保持空（交回 UI）
+        options = _normalize_options(options, "single")
+
+        # 題幹：刪走選項行 + 刪走答案行
+        qstem = opt_pat.sub("", text)
+        qstem = ans_pat.sub("", qstem)
+        qstem = qstem.strip()
+
+        # correct：有答案就轉 1-4；冇就 needs_review
         needs_review = False
+        correct_num = "1"
         if ans:
             correct_num = ans if ans.isdigit() else str(ord(ans) - ord("A") + 1)
         else:
             needs_review = True
+
+        expl = "⚠️需教師確認：未找到答案，請老師核對。" if needs_review else ""
+
         out.append({
             "qtype": "single",
-            "question": b,
-            "options": ["", "", "", ""],
+            "question": qstem,
+            "options": options,
             "correct": [correct_num],
-            "explanation": "",
+            "explanation": expl,
             "needs_review": needs_review,
         })
+
     return out
