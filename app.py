@@ -47,7 +47,7 @@ def show_exception(user_msg: str, e: Exception):
 
 
 def split_paragraphs(text: str):
-    return [p.strip() for p in (text or "").split("
+    return [p.strip() for p in (text or "").split("\n\n") if p.strip()]
 
 ") if p.strip()]
 
