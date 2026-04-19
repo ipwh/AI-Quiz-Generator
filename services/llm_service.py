@@ -832,3 +832,37 @@ def xai_pick_vision_model(api_key: str, base_url: str = "https://api.x.ai/v1", t
         return candidates[0][1]
     except Exception:
         return None
+
+def llm_ocr_extract_text(cfg: dict, images_data_urls: list[str], lang_hint: str = "zh-Hant", fast_mode: bool = False) -> str:
+    """
+    使用多模態 LLM 做 OCR：輸出「純文字」。
+    images_data_urls: ["data:image/png;base64,...", ...]
+    """
+    if not images_data_urls:
+        return ""
+
+    temperature = 0.0 if fast_mode else 0.1
+    max_tokens = 1800 if fast_mode else 3000
+    timeout = 120 if fast_mode else 180
+
+    prompt = f"""
+你是一個 OCR 文字抽取器。請從圖片中抽取所有可辨識文字，輸出「純文字」即可。
+規則：
+- 不要解釋、不要總結、不要加入你推測的內容。
+- 保留原有段落/換行（能分段就分段）。
+- 語言提示：{lang_hint}
+"""
+
+    content = [{"type": "text", "text": prompt}]
+    for url in images_data_urls:
+        content.append({"type": "image_url", "image_url": {"url": url}})
+
+    out = _chat(
+        cfg,
+        messages=[{"role": "user", "content": content}],
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout=timeout,
+    )
+
+    return (out or "").strip()
