@@ -5,10 +5,9 @@ import docx
 import openpyxl
 from pptx import Presentation
 
-# OCR (optional)
 try:
     import pytesseract
-    from PIL import Image
+    from PIL import Image, ImageOps
     OCR_AVAILABLE = True
 except Exception:
     OCR_AVAILABLE = False
@@ -20,6 +19,18 @@ def _clean_text(s: str) -> str:
     s = re.sub(r"[ \t]+", " ", s)
     s = re.sub(r"\n{3,}", "\n\n", s)
     return s.strip()
+
+
+def _text_quality_score(s: str) -> float:
+    """
+    粗略 OCR 品質分數：可讀字符比例（中英數）/總長度
+    0~1，越高越像可讀文本。
+    """
+    if not s:
+        return 0.0
+    total = len(s)
+    good = len(re.findall(r"[A-Za-z0-9\u4e00-\u9fff]", s))
+    return good / max(total, 1)
 
 
 def _extract_pdf_text(data: bytes) -> str:
@@ -69,22 +80,32 @@ def _extract_pptx_text(data: bytes) -> str:
     return _clean_text("\n".join(chunks))
 
 
+def _preprocess_image_for_ocr(img: Image.Image) -> Image.Image:
+    """
+    簡單前處理：轉灰階 + 自動對比
+    （不做過度二值化，避免數理符號/細字變形）
+    """
+    img = img.convert("L")
+    img = ImageOps.autocontrast(img)
+    return img
+
+
 def _ocr_image_bytes(image_bytes: bytes, lang: str = "chi_tra+chi_sim+eng") -> str:
     if not OCR_AVAILABLE:
         return ""
     try:
-        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        img = Image.open(io.BytesIO(image_bytes))
+        img = _preprocess_image_for_ocr(img)
         text = pytesseract.image_to_string(img, lang=lang)
         return _clean_text(text)
     except Exception:
         return ""
 
 
-def _ocr_scanned_pdf(data: bytes, lang: str = "chi_tra+chi_sim+eng", max_pages: int = 3, zoom: float = 2.0) -> str:
+def _ocr_scanned_pdf_all_pages(data: bytes, lang: str = "chi_tra+chi_sim+eng", zoom: float = 2.5) -> str:
     """
-    掃描 PDF OCR：把每頁 render 成影像再做 OCR。
-    - max_pages：最多處理前幾頁（避免太慢）
-    - zoom：放大倍數（較清晰，但會更慢）
+    掃描 PDF OCR：不限制頁數（按你要求）。
+    為提升準確度，提高 render zoom（較清晰但更慢）。
     """
     if not OCR_AVAILABLE:
         return ""
@@ -92,9 +113,8 @@ def _ocr_scanned_pdf(data: bytes, lang: str = "chi_tra+chi_sim+eng", max_pages: 
     parts = []
     try:
         with fitz.open(stream=data, filetype="pdf") as doc:
-            page_count = min(len(doc), max_pages)
             mat = fitz.Matrix(zoom, zoom)
-            for i in range(page_count):
+            for i in range(len(doc)):
                 page = doc[i]
                 pix = page.get_pixmap(matrix=mat, alpha=False)
                 img_bytes = pix.tobytes("png")
@@ -107,12 +127,12 @@ def _ocr_scanned_pdf(data: bytes, lang: str = "chi_tra+chi_sim+eng", max_pages: 
     return _clean_text("\n".join(parts))
 
 
-def extract_text(file, enable_ocr: bool = False, ocr_lang: str = "chi_tra+chi_sim+eng", ocr_pdf_pages: int = 3) -> str:
+def extract_text(file, enable_ocr: bool = False, ocr_lang: str = "chi_tra+chi_sim+eng") -> str:
     """
-    支援：
-      - pdf/docx/txt/xlsx/pptx：一般文字抽取
-      - png/jpg/jpeg：若 enable_ocr=True 則 OCR
-      - 掃描 pdf：若一般抽取文字太少，且 enable_ocr=True，則 OCR 前幾頁
+    支援 pdf/docx/txt/xlsx/pptx + png/jpg/jpeg（OCR）
+    PDF：
+      - 先嘗試直接抽字
+      - 若抽到文字太少，且 enable_ocr=True → 當掃描件做 OCR（全頁）
     """
     ext = file.name.split(".")[-1].lower()
     data = file.getvalue()
@@ -120,10 +140,12 @@ def extract_text(file, enable_ocr: bool = False, ocr_lang: str = "chi_tra+chi_si
     try:
         if ext == "pdf":
             text = _extract_pdf_text(data)
-            # 掃描 PDF 判斷：抽到文字太少就當掃描件，轉 OCR
             if enable_ocr and len(text) < 50:
-                ocr_text = _ocr_scanned_pdf(data, lang=ocr_lang, max_pages=ocr_pdf_pages)
-                return ocr_text or text
+                ocr_text = _ocr_scanned_pdf_all_pages(data, lang=ocr_lang)
+                # OCR 品質檢測：太垃圾就回傳空（交由上層提示/改用其他方法）
+                if _text_quality_score(ocr_text) < 0.25:
+                    return ""
+                return ocr_text
             return text
 
         if ext == "docx":
@@ -135,10 +157,12 @@ def extract_text(file, enable_ocr: bool = False, ocr_lang: str = "chi_tra+chi_si
         if ext == "pptx":
             return _extract_pptx_text(data)
 
-        # 圖片 OCR
         if ext in {"png", "jpg", "jpeg"}:
             if enable_ocr:
-                return _ocr_image_bytes(data, lang=ocr_lang)
+                ocr_text = _ocr_image_bytes(data, lang=ocr_lang)
+                if _text_quality_score(ocr_text) < 0.25:
+                    return ""
+                return ocr_text
             return ""
 
         return ""
