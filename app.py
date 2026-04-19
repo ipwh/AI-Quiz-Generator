@@ -367,7 +367,17 @@ if mode == "🪄 AI 生成新題目":
 
     question_count = st.sidebar.selectbox("🧮 題目數目", [5, 8, 10, 12, 15, 20], index=2, key="question_count")
     cfg = api_config()
-
+    
+    enable_ocr = st.checkbox("🧾 啟用 OCR（圖片/掃描PDF）", value=False, help="適合數理科掃描/截圖題目；開啟會較慢。")
+ocr_lang = st.selectbox("OCR 語言", ["繁中+英 (chi_tra+eng)", "繁中+簡中+英 (chi_tra+chi_sim+eng)", "英 (eng)"], index=1)
+ocr_lang_map = {
+    "繁中+英 (chi_tra+eng)": "chi_tra+eng",
+    "繁中+簡中+英 (chi_tra+chi_sim+eng)": "chi_tra+chi_sim+eng",
+    "英 (eng)": "eng",
+}
+ocr_lang_value = ocr_lang_map[ocr_lang]
+ocr_pages = st.slider("掃描PDF OCR頁數（只處理前幾頁）", min_value=1, max_value=10, value=3)
+  
     files = st.file_uploader(
         "上載教材（PDF/DOCX/TXT/PPTX/XLSX）",
         accept_multiple_files=True,
@@ -378,7 +388,7 @@ if mode == "🪄 AI 生成新題目":
     raw_text = ""
     if files:
         with st.spinner("📄 正在擷取文字…"):
-            raw_text = "".join(extract_text(f) for f in files)
+            raw_text = "".join(extract_text(f, enable_ocr=enable_ocr, ocr_lang=ocr_lang_value, ocr_pdf_pages=ocr_pages) for f in files)
         st.info(f"✅ 已擷取 {len(raw_text)} 字")
 
     limit = 8000 if fast_mode else 10000
