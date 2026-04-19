@@ -1,7 +1,6 @@
 import io
 import re
-import fitz  # PyMuPDF
-import docx
+import baseimport base64
 import openpyxl
 from pptx import Presentation
 
@@ -22,10 +21,7 @@ def _clean_text(s: str) -> str:
 
 
 def _text_quality_score(s: str) -> float:
-    """
-    粗略 OCR 品質分數：可讀字符比例（中英數）/總長度
-    0~1，越高越像可讀文本。
-    """
+    """粗略 OCR 品質分數：可讀字符比例（中英數）/總長度。"""
     if not s:
         return 0.0
     total = len(s)
@@ -81,91 +77,125 @@ def _extract_pptx_text(data: bytes) -> str:
 
 
 def _preprocess_image_for_ocr(img: Image.Image) -> Image.Image:
-    """
-    簡單前處理：轉灰階 + 自動對比
-    （不做過度二值化，避免數理符號/細字變形）
-    """
     img = img.convert("L")
     img = ImageOps.autocontrast(img)
     return img
 
 
-def _ocr_image_bytes(image_bytes: bytes, lang: str = "chi_tra+chi_sim+eng") -> str:
+def _ocr_image_bytes(image_bytes: bytes, lang: str) -> str:
     if not OCR_AVAILABLE:
         return ""
     try:
         img = Image.open(io.BytesIO(image_bytes))
         img = _preprocess_image_for_ocr(img)
         text = pytesseract.image_to_string(img, lang=lang)
-        return _clean_text(text)
+        text = _clean_text(text)
+        if _text_quality_score(text) < 0.25:
+            return ""
+        return text
     except Exception:
         return ""
 
 
-def _ocr_scanned_pdf_all_pages(data: bytes, lang: str = "chi_tra+chi_sim+eng", zoom: float = 2.5) -> str:
+def _image_bytes_to_data_url(image_bytes: bytes, mime: str) -> str:
+    b64 = base64.b64encode(image_bytes).decode("utf-8")
+    return f"data:{mime};base64,{b64}"
+
+
+def _pdf_pages_to_images_data_url(data: bytes, max_pages: int = 3, zoom: float = 2.0):
     """
-    掃描 PDF OCR：不限制頁數（按你要求）。
-    為提升準確度，提高 render zoom（較清晰但更慢）。
+    Render 前 max_pages 頁做 Vision fallback（避免成本/超時爆炸）
     """
-    if not OCR_AVAILABLE:
-        return ""
-
-    parts = []
-    try:
-        with fitz.open(stream=data, filetype="pdf") as doc:
-            mat = fitz.Matrix(zoom, zoom)
-            for i in range(len(doc)):
-                page = doc[i]
-                pix = page.get_pixmap(matrix=mat, alpha=False)
-                img_bytes = pix.tobytes("png")
-                t = _ocr_image_bytes(img_bytes, lang=lang)
-                if t:
-                    parts.append(t)
-    except Exception:
-        return ""
-
-    return _clean_text("\n".join(parts))
+    imgs = []
+    with fitz.open(stream=data, filetype="pdf") as doc:
+        n = min(len(doc), max_pages)
+        mat = fitz.Matrix(zoom, zoom)
+        for i in range(n):
+            pix = doc[i].get_pixmap(matrix=mat, alpha=False)
+            img_bytes = pix.tobytes("png")
+            imgs.append(_image_bytes_to_data_url(img_bytes, "image/png"))
+    return imgs
 
 
-def extract_text(file, enable_ocr: bool = False, ocr_lang: str = "chi_tra+chi_sim+eng") -> str:
+def extract_payload(
+    file,
+    enable_ocr: bool = False,
+    ocr_lang: str = "chi_tra+chi_sim+eng",
+    enable_vision: bool = False,
+    vision_pdf_max_pages: int = 3,
+) -> dict:
     """
-    支援 pdf/docx/txt/xlsx/pptx + png/jpg/jpeg（OCR）
-    PDF：
-      - 先嘗試直接抽字
-      - 若抽到文字太少，且 enable_ocr=True → 當掃描件做 OCR（全頁）
+    回傳：
+      { "text": str, "images": [data_url, ...], "meta": {...} }
+
+    - text: 抽取文字（OCR / 原生）
+    - images: 供 Vision fallback 的圖片 data URLs（base64）
     """
     ext = file.name.split(".")[-1].lower()
     data = file.getvalue()
 
+    out = {"text": "", "images": [], "meta": {"ext": ext}}
+
     try:
         if ext == "pdf":
             text = _extract_pdf_text(data)
-            if enable_ocr and len(text) < 50:
-                ocr_text = _ocr_scanned_pdf_all_pages(data, lang=ocr_lang)
-                # OCR 品質檢測：太垃圾就回傳空（交由上層提示/改用其他方法）
-                if _text_quality_score(ocr_text) < 0.25:
-                    return ""
-                return ocr_text
-            return text
+            out["text"] = text
+
+            # 若 text 太少 → 可能掃描 PDF：OCR 或 Vision
+            if len(text) < 50:
+                if enable_ocr:
+                    # OCR 全頁（依你要求不限制頁數）：逐頁 OCR 可能慢，但由上層提示頁數
+                    if OCR_AVAILABLE:
+                        parts = []
+                        with fitz.open(stream=data, filetype="pdf") as doc:
+                            mat = fitz.Matrix(2.5, 2.5)
+                            for i in range(len(doc)):
+                                pix = doc[i].get_pixmap(matrix=mat, alpha=False)
+                                t = _ocr_image_bytes(pix.tobytes("png"), lang=ocr_lang)
+                                if t:
+                                    parts.append(t)
+                        out["text"] = _clean_text("\n".join(parts))
+                    else:
+                        out["text"] = ""
+
+                # Vision fallback：只取前 N 頁 images
+                if enable_vision:
+                    try:
+                        out["images"] = _pdf_pages_to_images_data_url(data, max_pages=vision_pdf_max_pages, zoom=2.0)
+                    except Exception:
+                        out["images"] = []
+
+            return out
 
         if ext == "docx":
-            return _extract_docx_text(data)
+            out["text"] = _extract_docx_text(data)
+            return out
         if ext == "txt":
-            return _extract_txt_text(data)
+            out["text"] = _extract_txt_text(data)
+            return out
         if ext == "xlsx":
-            return _extract_xlsx_text(data)
+            out["text"] = _extract_xlsx_text(data)
+            return out
         if ext == "pptx":
-            return _extract_pptx_text(data)
+            out["text"] = _extract_pptx_text(data)
+            return out
 
+        # Image input
         if ext in {"png", "jpg", "jpeg"}:
+            mime = "image/png" if ext == "png" else "image/jpeg"
             if enable_ocr:
-                ocr_text = _ocr_image_bytes(data, lang=ocr_lang)
-                if _text_quality_score(ocr_text) < 0.25:
-                    return ""
-                return ocr_text
-            return ""
+                out["text"] = _ocr_image_bytes(data, lang=ocr_lang)
+            if enable_vision:
+                out["images"] = [_image_bytes_to_data_url(data, mime)]
+            return out
 
-        return ""
+        return out
 
     except Exception:
-        return ""
+        return out
+
+
+# 兼容舊接口：只回傳文字
+def extract_text(file, enable_ocr: bool = False, ocr_lang: str = "chi_tra+chi_sim+eng") -> str:
+    return extract_payload(file, enable_ocr=enable_ocr, ocr_lang=ocr_lang, enable_vision=False).get("text", "")
+import fitz  # PyMuPDF
