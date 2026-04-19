@@ -292,135 +292,69 @@ def _call_with_retries(cfg: dict, messages: list, temperature: float, max_tokens
         return extract_json(out2)
 
 
-
 _FEWSHOT = """
 [
   {
     "qtype": "single",
-    "question": "下列哪一項不是媒體資訊帶來的效益？",
-    "options": ["A 選項", "B 選項", "C 選項", "D 選項"],
-    "correct": ["1"],
-    "explanation": "",
-    "needs_review": false
-  },
-  {
-    "qtype": "single",
-    "question": "哪些屬於新媒體？
-(1) 商業電台
-(2) 實體報章
-(3) 明報網上版
-(4) YouTube",
+    "question": "哪些屬於新媒體？\\n(1) 商業電台\\n(2) 實體報章\\n(3) 明報網上版\\n(4) YouTube",
     "options": ["只有（1）和（2）", "只有（3）和（4）", "只有（1）、（3）和（4）", "以上皆是"],
     "correct": ["2"],
-    "explanation": "",
+    "explanation": "（極短）",
     "needs_review": false
   }
 ]
 """
 
 
-def _difficulty_guidance(level_code: str) -> str:
-    if level_code == "easy":
-        return (
-            "【Easy 基礎】
-"
-            "- 題目重點：定義/關鍵詞辨識/直接理解。
-"
-            "- 不可：跨段推論、多步推理。
-"
-            "- 干擾項：較明顯錯或典型誤解。"
-        )
-    if level_code == "medium":
-        return (
-            "【Medium 標準】
-"
-            "- 題目重點：情境應用、一步推論。
-"
-            "- 干擾項：接近正確但在條件/概念上差一點。"
-        )
-    if level_code == "hard":
-        return (
-            "【Hard 進階】
-"
-            "- 題目重點：分析/比較/判斷（至少2步推理）。
-"
-            "- 干擾項：非常接近、以常見混淆點設陷。"
-        )
-    return (
-        "【Mixed 混合】
-"
-        "- 必須同時包含 easy/medium/hard 三類題目（比例由系統分配）。"
-    )
+# -------------------------
+# ✅ 生成題目（single 會偏好 (1)(2)… + A-D）
+# -------------------------
+def generate_questions(cfg, text, subject, level, question_count, fast_mode: bool = False, qtype: str = "single"):
+    traits = SUBJECT_TRAITS.get(subject, DEFAULT_TRAITS)
+    text = _clean_text(text)
 
+    text = text[: (8000 if fast_mode else 10000)]
 
-def _strip_boilerplate(question: str) -> str:
-    if not question:
-        return ""
-    s = question.strip()
-    patterns = [
-        r"^(根據|依據|參考).{0,12}(教材|內容|資料|文本|上文|文中).{0,12}[，,：:]*",
-        r"^(教材|內容|資料|文本|上文|文中).{0,12}(提及|出現|指出|提到).{0,12}[，,：:]*",
-        r"^根據.{0,12}[，,：:]*",
-    ]
-    for p in patterns:
-        s = re.sub(p, "", s).strip()
-    s = re.sub(r"^[,，:：\-\s]+", "", s).strip()
-    return s
+    schema_hint = """
+每題必須包含：
+- qtype: 固定 "single"
+- question: 字串
+- options: list（必須 4 個字串）
+- correct: list（只含 1 個字串 "1"~"4"）
+- explanation: 字串（極短即可）
+- needs_review: true/false
+"""
 
+    # ✅ 本版：生成固定 single
+    qtype = "single"
 
-def _is_list_combo_style(q: str, options: list) -> bool:
-    if not q:
-        return False
-    q_has = ("(1)" in q) or ("（1）" in q)
-    opt_text = " ".join([str(o) for o in (options or [])])
-    opt_has = ("只有" in opt_text) or ("以上皆是" in opt_text) or ("（1）" in opt_text) or ("(1)" in opt_text)
-    return q_has and opt_has
+    temperature = 0.15 if fast_mode else 0.2
+    max_tokens = 1600 if fast_mode else 2600
+    timeout = 90 if fast_mode else 180
 
-
-def _dedupe(items: list) -> list:
-    seen = set()
-    out = []
-    for it in items:
-        q = (it.get("question") or "").strip()
-        key = re.sub(r"\s+", " ", q).lower()
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        out.append(it)
-    return out
-
-
-def _build_prompt(subject: str, traits: str, level_code: str, count: int, text: str) -> str:
-    banned = "教材、教材中、教材內、教材出現、教材提及、根據教材、根據以上資料、文中提及、上文提到、資料顯示"
-    max_list = max(1, round(count * 0.3))
-    min_direct = count - max_list
-
-    return f"""
+    prompt = f"""
 你是一名香港中學教師，負責出校內測驗題。
-科目：{subject}
-
-【難度規格（必須嚴格遵守）】
-{_difficulty_guidance(level_code)}
+科目：{subject}；難度：{level}
 
 【科目特性（必須遵守）】
 {traits}
 
-【題幹規則（必須遵守）】
-- 題幹要直接、簡潔。
-- 禁止出現：{banned}
-- 不要用「根據…」開頭句式。
+【題幹用語規則（必須遵守）】
+- 題目要直接、簡潔，不要使用「根據教材內容」「根據以上資料」「下列哪項最恰當（根據教材）」等套話。
+- 直接寫問題即可。
+- 若要引用資料，請直接在題幹內列出資料，不要用套話引入。
 
-【題型】多項選擇題（四選一 single）
-【版式配額（必須遵守）】
-- 至少 {min_direct} 題必須使用「直接問答」：題幹 + A~D（四個純選項，不要(1)~(4)組合題）。
-- 最多 {max_list} 題可使用「資料題」：題幹 + (1)~(4) + A~D（選項是(1)~(4)組合）。
+【題幹格式偏好（盡量採用）】
+- 若教材出現多個例子/項目/分類，請用：
+  題幹 + (1)(2)(3)(4) 的資料列點
+- A-D 選項用「只有（…）」/「以上皆是」等組合判斷。
 
 【出題硬規則】
-1) 只生成 {count} 題
+1) 只生成 {question_count} 條「4選1 單選題」
 2) options 必須剛好 4 個
 3) correct 必須是 ["1"~"4"]（只 1 個）
-4) 題幹或選項必須包含提供內容中出現過的至少 2 個關鍵詞（貼題）
-5) 若資訊不足：needs_review=true，但仍要給出最可能答案
+4) 每題題幹或選項必須包含教材出現過的至少 2 個關鍵詞（貼題）
+5) 若教材資訊不足：needs_review=true（但仍要給出最可能答案）
 
 【輸出】
 只輸出純 JSON array，不要任何額外文字。
@@ -428,18 +362,9 @@ def _build_prompt(subject: str, traits: str, level_code: str, count: int, text: 
 【格式示例】
 {_FEWSHOT}
 
-【提供內容】
+【教材內容】
 {text}
 """
-
-
-def _generate_once(cfg, subject: str, level_code: str, count: int, text: str, fast_mode: bool) -> list:
-    traits = SUBJECT_TRAITS.get(subject, DEFAULT_TRAITS)
-    temperature = 0.12 if fast_mode else 0.2
-    max_tokens = 1400 if fast_mode else 2200
-    timeout = 120 if fast_mode else 180
-
-    prompt = _build_prompt(subject, traits, level_code, count, text)
 
     items = _call_with_retries(
         cfg,
@@ -447,101 +372,29 @@ def _generate_once(cfg, subject: str, level_code: str, count: int, text: str, fa
         temperature=temperature,
         max_tokens=max_tokens,
         timeout=timeout,
-        schema_hint="JSON array",
+        schema_hint=schema_hint,
     )
 
     cleaned = []
-    for q in items or []:
+    for q in items:
         opts = _normalize_options(q.get("options", []), "single")
         corr = _normalize_correct(q.get("correct", []), "single")
-        question = _strip_boilerplate(str(q.get("question", "")).strip())
-        if not question:
-            continue
+
         cleaned.append({
             "qtype": "single",
-            "question": question,
+            "question": str(q.get("question", "")).strip(),
             "options": opts,
             "correct": corr,
             "explanation": str(q.get("explanation", "")).strip()[:60],
             "needs_review": bool(q.get("needs_review", False)),
         })
 
-    return _dedupe(cleaned)
+    return cleaned
 
 
-def _fill_to_count(cfg, subject: str, level_code: str, target: int, text: str, fast_mode: bool) -> list:
-    out = _generate_once(cfg, subject, level_code, target, text, fast_mode)
-
-    rounds = 0
-    while len(out) < target and rounds < 3:
-        missing = target - len(out)
-        existing = "
-".join([f"- {it['question']}" for it in out[:25]])
-        prompt_suffix = f"
-
-【補充】請再生成 {missing} 題，不可與以下題目重複：
-{existing}
-"
-        more = _generate_once(cfg, subject, level_code, missing, text + prompt_suffix, fast_mode)
-        out = _dedupe(out + more)
-        rounds += 1
-
-    if len(out) < target:
-        raise ValueError(f"AI 只生成了 {len(out)}/{target} 題（已多次重試）。請重試或減少題目數目。")
-
-    return out[:target]
-
-
-def generate_questions(cfg, text, subject, level, question_count, fast_mode: bool = False, qtype: str = "single"):
-    """確保回傳題目數量 = question_count；mixed 會分層生成再混合。"""
-    text = _clean_text(text)
-    text = text[: (8000 if fast_mode else 10000)]
-
-    n = int(question_count)
-
-    if level == "mixed":
-        n_easy = max(1, round(n * 0.4))
-        n_med = max(1, round(n * 0.4))
-        n_hard = max(1, n - n_easy - n_med)
-
-        a = _fill_to_count(cfg, subject, "easy", n_easy, text, fast_mode)
-        b = _fill_to_count(cfg, subject, "medium", n_med, text, fast_mode)
-        c = _fill_to_count(cfg, subject, "hard", n_hard, text, fast_mode)
-
-        merged = a + b + c
-        random.shuffle(merged)
-        merged = merged[:n]
-
-        if len(merged) < n:
-            merged = _dedupe(merged + _fill_to_count(cfg, subject, "medium", n - len(merged), text, fast_mode))
-            merged = merged[:n]
-
-        # 版式保險：控制(1)-(4)組合題比例
-        max_list = max(1, round(n * 0.3))
-        list_idx = [i for i, it in enumerate(merged) if _is_list_combo_style(it["question"], it["options"])]
-        if len(list_idx) > max_list:
-            need = len(list_idx) - max_list
-            direct_more = _fill_to_count(cfg, subject, "medium", need, text + "
-
-【補充強制】只可用直接問答版式（禁止(1)~(4)組合題）。", fast_mode)
-            for k, idx in enumerate(list_idx[:need]):
-                merged[idx] = direct_more[k]
-
-        return merged
-
-    out = _fill_to_count(cfg, subject, level, n, text, fast_mode)
-
-    max_list = max(1, round(n * 0.3))
-    list_idx = [i for i, it in enumerate(out) if _is_list_combo_style(it["question"], it["options"])]
-    if len(list_idx) > max_list:
-        need = len(list_idx) - max_list
-        direct_more = _fill_to_count(cfg, subject, level, need, text + "
-
-【補充強制】只可用直接問答版式（禁止(1)~(4)組合題）。", fast_mode)
-        for k, idx in enumerate(list_idx[:need]):
-            out[idx] = direct_more[k]
-
-    return out
+# -------------------------
+# ✅ 匯入整理（固定 single + 無答案時必推測）
+# -------------------------
 def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode: bool = False, qtype: str = "single"):
     # ✅ 匯入固定 single
     qtype = "single"
