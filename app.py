@@ -186,11 +186,8 @@ def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix:
 # Page config + session
 # -------------------------
 st.set_page_config(page_title="AI 題目生成器", layout="wide")
-st.markdown("""<style>
-/* Hide Streamlit header anchor/link icons */
-a.header-anchor {display: none !important;}
-</style>""", unsafe_allow_html=True)
-st.title("🏫 AI 題目生成器（支援Kahoot、Wayground、Google Forms及一鍵電郵分享）")
+st.title("🏫 AI 題目生成器（新版介面）")
+st.caption("UI版本：UI-REDESIGN 2026-04-19 v1 ✅（見到呢句＝你已成功換到新版）")
 
 for k, v in {
     "google_creds": None,
@@ -394,11 +391,11 @@ with tab_generate:
     st.caption("支援 PDF/DOCX/TXT/PPTX/XLSX。系統會抽取文字後交給 AI 出題。")
 
     enable_llm_ocr = st.checkbox(
-        "🖼️ 啟用 LLM 讀圖 OCR（適合掃描/截圖/圖表/幾何；較慢；要啟用 Grok 或其他LLM（DeepSeek欠缺OCR功能，不可用））",
+        "🖼️ 啟用 LLM 讀圖 OCR（適合掃描/截圖/圖表/幾何；較慢）",
         value=False,
         help="當抽取到的文字太少或品質差，會把圖片/掃描PDF前幾頁交給 Grok 或其他LLM（DeepSeek欠缺OCR功能，不可用） 讀圖抽字，再用該文字出題。"
     )
-    llm_ocr_pdf_pages = st.selectbox("LLM OCR PDF頁數（Token限制，最多5頁）", [1,2,3,4,5], index=2)
+    llm_ocr_pdf_pages = st.selectbox("LLM OCR PDF頁數（只取前幾頁）", [1,2,3,4,5], index=2)
 
     files = st.file_uploader(
         "上載教材檔案",
@@ -412,34 +409,36 @@ with tab_generate:
         with st.spinner("📄 正在擷取文字…"):
             raw_text = "".join(extract_text(f) for f in files)
 
-# 若啟用 LLM OCR，且抽到文字太少，則用 Grok 讀圖補字
-if enable_llm_ocr and can_call_ai(cfg):
-    # 門檻：你可調（例如 <200 字）
-    if len(raw_text.strip()) < 200:
-        if preset == "Grok (xAI)":
-            vision_model = xai_pick_vision_model(api_key, base_url)
-            if vision_model:
-                cfg2 = dict(cfg)
-                cfg2["model"] = vision_model
-            else:
-                st.warning("⚠️ 找不到支援圖片輸入的 Grok 型號，LLM OCR 已略過。")
-                cfg2 = None
-        else:
-            # 其他供應商只有多模態模型才行（否則略過）
-            cfg2 = cfg
-
-        if cfg2:
-            images = []
-            for f in files:
-                images.extend(extract_images_for_llm_ocr(f, pdf_max_pages=llm_ocr_pdf_pages, pdf_zoom=2.0))
-
-            if images:
-                with st.spinner("🖼️ 正在用 LLM 讀圖抽取文字…"):
-                    ocr_text = llm_ocr_extract_text(cfg2, images, lang_hint="zh-Hant", fast_mode=fast_mode)
-                if ocr_text and len(ocr_text) > len(raw_text):
-                    raw_text = (ocr_text + "\n\n" + raw_text).strip()
-
         st.info(f"✅ 已擷取 {len(raw_text)} 字")
+
+        # 若啟用 LLM OCR，且抽到文字太少，則用 Grok 讀圖補字（不影響『重點段落標記』顯示）
+        if enable_llm_ocr and can_call_ai(cfg) and HAS_LLM_OCR and HAS_EXTRACT_IMAGES and len(raw_text.strip()) < 200:
+            cfg2 = cfg
+            if preset == "Grok (xAI)" and xai_pick_vision_model is not None:
+                vision_model = xai_pick_vision_model(api_key, base_url)
+                if vision_model:
+                    cfg2 = dict(cfg)
+                    cfg2["model"] = vision_model
+                    st.caption(f"🖼️ LLM OCR 使用 Grok Vision：{vision_model}")
+                else:
+                    st.warning("⚠️ 找不到支援圖片輸入的 Grok 型號，LLM OCR 已略過。")
+                    cfg2 = None
+
+            if cfg2 and llm_ocr_extract_text is not None and extract_images_for_llm_ocr is not None:
+                images = []
+                for f in files:
+                    images.extend(extract_images_for_llm_ocr(f, pdf_max_pages=llm_ocr_pdf_pages, pdf_zoom=2.0))
+
+                if images:
+                    with st.spinner("🖼️ 正在用 LLM 讀圖抽取文字…"):
+                        ocr_text = llm_ocr_extract_text(cfg2, images, lang_hint="zh-Hant", fast_mode=fast_mode)
+
+                    if ocr_text:
+                        if len(ocr_text) > len(raw_text):
+                            raw_text = (ocr_text + DNL + raw_text).strip()
+                        st.success("✅ 已用 LLM OCR 補充文字（貼題度更高）")
+                        with st.expander("🔎 預覽 LLM OCR 文字（前 800 字）", expanded=False):
+                            st.text(ocr_text[:800])
 
         st.markdown("## ② 重點段落標記（可選）")
         st.caption("勾選後會把重點段落放在最前面，提高貼題度。")
