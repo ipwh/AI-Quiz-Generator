@@ -66,7 +66,9 @@ def show_exception(user_msg: str, e: Exception):
 
 
 def split_paragraphs(text: str):
-    return [p.strip() for p in (text or "").split("\n\n") if p.strip()]
+    return [p.strip() for p in (text or "").split("
+
+") if p.strip()]
 
 
 def build_text_with_highlights(raw_text: str, marked_idx: set, limit: int):
@@ -76,8 +78,16 @@ def build_text_with_highlights(raw_text: str, marked_idx: set, limit: int):
 
     out = ""
     if highlights:
-        out += "【重點段落（老師標記）】\n" + "\n\n".join(highlights) + "\n\n"
-    out += "【其餘教材】\n" + "\n\n".join(others)
+        out += "【重點段落（老師標記）】
+" + "
+
+".join(highlights) + "
+
+"
+    out += "【其餘教材】
+" + "
+
+".join(others)
     return out[:limit]
 
 
