@@ -296,10 +296,10 @@ _FEWSHOT = """
 [
   {
     "qtype": "single",
-    "question": "（示例）根據教材內容，下列哪一項最恰當？\\n(1) 例子一\\n(2) 例子二\\n(3) 例子三\\n(4) 例子四",
-    "options": ["A選項", "B選項", "C選項", "D選項"],
+    "question": "哪些屬於新媒體？\\n(1) 商業電台\\n(2) 實體報章\\n(3) 明報網上版\\n(4) YouTube",
+    "options": ["只有（1）和（2）", "只有（3）和（4）", "只有（1）、（3）和（4）", "以上皆是"],
     "correct": ["2"],
-    "explanation": "（極短）因為…",
+    "explanation": "（極短）",
     "needs_review": false
   }
 ]
@@ -317,55 +317,49 @@ def generate_questions(cfg, text, subject, level, question_count, fast_mode: boo
 
     schema_hint = """
 每題必須包含：
-- qtype: "single" / "multiple" / "true_false"
+- qtype: 固定 "single"
 - question: 字串
-- options: list（single/multiple 必須 4 個字串；true_false 可只用前 2 個）
-- correct:
-   - single/true_false: list（只含 1 個字串 "1"~"4"；true_false 只用 1 或 2）
-   - multiple: list（可多於 1 個，元素為 "1"~"4"）
-- explanation: 字串（建議極短）
+- options: list（必須 4 個字串）
+- correct: list（只含 1 個字串 "1"~"4"）
+- explanation: 字串（極短即可）
 - needs_review: true/false
 """
 
-    format_rule = ""
-    if qtype == "single":
-        format_rule = """
-【題幹格式（優先採用）】
-- 若教材內容包含多個例子/項目/分類/現象，請把它們寫成 (1)(2)(3)(4) 的「資料/敘述」放入 question 內（可用換行分隔）。
-- options A-D 以「只有（…）」/「以上皆是」等方式組合判斷（例如：只有（1）和（2））。
-- 若不適合列表化（例如純定義題），可改為一般單選題，但仍需貼題。
-"""
-
-    qtype_rule = (
-        "題型固定為 single（四選一單選）。" if qtype == "single" else
-        "題型固定為 multiple（四選多選）。" if qtype == "multiple" else
-        "題型固定為 true_false（是非題，選項必為 對/錯）。"
-    )
+    # ✅ 本版：生成固定 single
+    qtype = "single"
 
     temperature = 0.15 if fast_mode else 0.2
     max_tokens = 1600 if fast_mode else 2600
     timeout = 90 if fast_mode else 180
 
     prompt = f"""
-你是一名香港中學教師，熟悉 DSE/校內測驗出題。
-科目：{subject}；整體難度：{level}
+你是一名香港中學教師，負責出校內測驗題。
+科目：{subject}；難度：{level}
 
 【科目特性（必須遵守）】
 {traits}
 
-【題型】
-{qtype_rule}
+【題幹用語規則（必須遵守）】
+- 題目要直接、簡潔，不要使用「根據教材內容」「根據以上資料」「下列哪項最恰當（根據教材）」等套話。
+- 直接寫問題即可。
+- 若要引用資料，請直接在題幹內列出資料，不要用套話引入。
 
-{format_rule}
+【題幹格式偏好（盡量採用）】
+- 若教材出現多個例子/項目/分類，請用：
+  題幹 + (1)(2)(3)(4) 的資料列點
+- A-D 選項用「只有（…）」/「以上皆是」等組合判斷。
 
 【出題硬規則】
-1) 只生成 {question_count} 條
-2) 必須輸出純 JSON array，不要任何額外文字
-3) 每題至少包含教材中出現過的 2 個關鍵詞
-4) 干擾項要合理（常見誤解）
-5) 不足以肯定答案：needs_review=true
+1) 只生成 {question_count} 條「4選1 單選題」
+2) options 必須剛好 4 個
+3) correct 必須是 ["1"~"4"]（只 1 個）
+4) 每題題幹或選項必須包含教材出現過的至少 2 個關鍵詞（貼題）
+5) 若教材資訊不足：needs_review=true（但仍要給出最可能答案）
 
-【輸出格式示例】
+【輸出】
+只輸出純 JSON array，不要任何額外文字。
+
+【格式示例】
 {_FEWSHOT}
 
 【教材內容】
@@ -383,19 +377,15 @@ def generate_questions(cfg, text, subject, level, question_count, fast_mode: boo
 
     cleaned = []
     for q in items:
-        qt = str(q.get("qtype", qtype)).strip() or qtype
-        if qt not in {"single", "multiple", "true_false"}:
-            qt = qtype
-
-        opts = _normalize_options(q.get("options", []), qt)
-        corr = _normalize_correct(q.get("correct", []), qt)
+        opts = _normalize_options(q.get("options", []), "single")
+        corr = _normalize_correct(q.get("correct", []), "single")
 
         cleaned.append({
-            "qtype": qt,
+            "qtype": "single",
             "question": str(q.get("question", "")).strip(),
             "options": opts,
             "correct": corr,
-            "explanation": str(q.get("explanation", "")).strip()[:120],
+            "explanation": str(q.get("explanation", "")).strip()[:60],
             "needs_review": bool(q.get("needs_review", False)),
         })
 
