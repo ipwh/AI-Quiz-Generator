@@ -49,9 +49,6 @@ def show_exception(user_msg: str, e: Exception):
 def split_paragraphs(text: str):
     return [p.strip() for p in (text or "").split("\n\n") if p.strip()]
 
-") if p.strip()]
-
-
 def build_text_with_highlights(raw_text: str, marked_idx: set, limit: int):
     paras = split_paragraphs(raw_text)
     highlights = [paras[i] for i in range(len(paras)) if i in marked_idx]
