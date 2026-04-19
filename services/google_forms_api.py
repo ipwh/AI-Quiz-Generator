@@ -4,18 +4,20 @@ from googleapiclient.errors import HttpError
 
 
 def _one_line(s: str) -> str:
-    """Google Forms API 的顯示文字不能含 newline；統一轉成單行。[1](https://issuetracker.google.com/issues/271891396?pli=1)"""
+    """Forms API 顯示文字避免換行。"""
     if s is None:
         return ""
     s = str(s)
-    # 將 \r\n \n \r 全部轉空格
     s = s.replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
-    # 壓縮多餘空白
     s = re.sub(r"[ \t]+", " ", s)
     return s.strip()
 
 
 def create_quiz_form(creds, title: str, df):
+    """
+    建立 Google Form Quiz（只匯出題幹+選項+答案）。
+    注意：不匯出 explanation 與 needs_review（老師備註不出到學生表單）。
+    """
     service = build("forms", "v1", credentials=creds, cache_discovery=False)
 
     try:
@@ -37,10 +39,8 @@ def create_quiz_form(creds, title: str, df):
             if not q:
                 continue
 
+            # ✅ 本版只做 single（RADIO 4選1 / true_false 可當成 2選1）
             qtype = str(row.get("qtype", "single")).strip()
-            if qtype not in {"single", "multiple", "true_false"}:
-                qtype = "single"
-
             if qtype == "true_false":
                 options = ["對", "錯"]
             else:
@@ -60,32 +60,16 @@ def create_quiz_form(creds, title: str, df):
             else:
                 corr_list = [x.strip() for x in str(corr).split(",") if x.strip()]
 
-            corr_vals = []
+            # single：只取第一個有效答案
+            correct_value = None
             for c in corr_list:
-                if c not in {"1", "2", "3", "4"}:
-                    continue
-                i = int(c) - 1
-                if 0 <= i < len(options):
-                    v = options[i]
-                    if v and v not in corr_vals:
-                        corr_vals.append(v)
-
-            if not corr_vals:
-                corr_vals = [options[0]]
-
-            explanation = _one_line(row.get("explanation", ""))
-
-            choice_type = "CHECKBOX" if qtype == "multiple" else "RADIO"
-
-            grading = {
-                "pointValue": 1,
-                "correctAnswers": {"answers": [{"value": v} for v in corr_vals]},
-            }
-
-            # 自動評分題的回饋要用 whenRight/whenWrong；generalFeedback 會出錯
-            if explanation:
-                grading["whenRight"] = {"text": explanation}
-                grading["whenWrong"] = {"text": explanation}
+                if c in {"1", "2", "3", "4"}:
+                    i = int(c) - 1
+                    if 0 <= i < len(options):
+                        correct_value = options[i]
+                        break
+            if not correct_value:
+                correct_value = options[0]
 
             item_req = {
                 "createItem": {
@@ -95,11 +79,14 @@ def create_quiz_form(creds, title: str, df):
                             "question": {
                                 "required": True,
                                 "choiceQuestion": {
-                                    "type": choice_type,
+                                    "type": "RADIO",
                                     "options": [{"value": o} for o in options],
                                     "shuffle": False,
                                 },
-                                "grading": grading,
+                                "grading": {
+                                    "pointValue": 1,
+                                    "correctAnswers": {"answers": [{"value": correct_value}]},
+                                },
                             }
                         },
                     },
@@ -107,6 +94,7 @@ def create_quiz_form(creds, title: str, df):
                 }
             }
 
+            # ✅ 不輸出 explanation / needs_review：因此不設 whenRight/whenWrong
             requests.append(item_req)
             idx += 1
 
