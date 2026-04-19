@@ -384,7 +384,7 @@ def generate_questions(cfg, text, subject, level, question_count, fast_mode: boo
 只輸出純 JSON array，不要任何額外文字。
 
 【格式示例】
-{_FEWSHOT}
+{_FEWSHOT_STRONG}
 
 【教材內容】
 {text}
