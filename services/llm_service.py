@@ -70,6 +70,7 @@ def extract_json(text: str):
 
 
 def _normalize_options(opts, qtype: str):
+    # ✅ 是非題固定 options
     if qtype == "true_false":
         return ["對", "錯", "", ""]
     if not isinstance(opts, list):
@@ -109,16 +110,13 @@ def _post_openai_compat(api_key: str, base_url: str, payload: dict, timeout: int
                 r = _SESSION.post(url, headers=headers, json=payload, timeout=t)
             r.raise_for_status()
             return r.json()
-
         except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout) as e:
             last_err = e
             time.sleep(((2 ** attempt) * 2) + random.random())
             with _SESSION_LOCK:
                 _reset_session()
-
         except requests.exceptions.HTTPError:
             raise
-
         except requests.exceptions.RequestException as e:
             last_err = e
             time.sleep(((2 ** attempt) * 2) + random.random())
@@ -140,16 +138,13 @@ def _post_azure(api_key: str, endpoint: str, deployment: str, api_version: str, 
                 r = _SESSION.post(url, headers=headers, json=payload, timeout=t)
             r.raise_for_status()
             return r.json()
-
         except (requests.exceptions.ConnectionError, requests.exceptions.ReadTimeout) as e:
             last_err = e
             time.sleep((2 ** attempt) + random.random())
             with _SESSION_LOCK:
                 _reset_session()
-
         except requests.exceptions.HTTPError:
             raise
-
         except requests.exceptions.RequestException as e:
             last_err = e
             time.sleep((2 ** attempt) + random.random())
@@ -203,17 +198,14 @@ def get_xai_default_model(api_key: str, base_url: str = "https://api.x.ai/v1", t
     preferred_aliases = ["grok-4-latest", "grok-4", "grok-3-latest", "grok-3", "grok-2-latest"]
     url = base_url.rstrip("/") + "/language-models"
     headers = {"Authorization": f"Bearer {api_key}"}
-
     try:
         with _SESSION_LOCK:
             r = _SESSION.get(url, headers=headers, timeout=(10, timeout))
         r.raise_for_status()
         payload = r.json()
-
         models = payload.get("models") or payload.get("data") or []
         if not isinstance(models, list):
             models = []
-
         alias_set = set()
         grok_models = []
         for m in models:
@@ -228,15 +220,12 @@ def get_xai_default_model(api_key: str, base_url: str = "https://api.x.ai/v1", t
                         alias_set.add(a)
             if mid.startswith("grok-"):
                 grok_models.append((created, mid))
-
         for a in preferred_aliases:
             if a in alias_set:
                 return a
-
         if grok_models:
             grok_models.sort(key=lambda x: x[0], reverse=True)
             return grok_models[0][1]
-
         return "grok-4-latest"
     except Exception:
         return "grok-4-latest"
@@ -292,16 +281,15 @@ _FEWSHOT_TF = """
 
 def _difficulty_guidance(level_code: str) -> str:
     if level_code == "easy":
-        return "出題偏重定義、關鍵詞辨識、直接理解；不要太多跨段推論。"
+        return "偏重定義、關鍵詞辨識、直接理解；避免跨段推論。"
     if level_code == "medium":
-        return "出題偏重情境應用與簡單推論；要求理解概念並應用到例子。"
+        return "偏重情境應用與簡單推論；需理解概念並應用到例子。"
     if level_code == "hard":
-        return "出題偏重分析、比較、判斷與推理；可加入常見混淆點作干擾。"
-    return "混合難度。"
+        return "偏重分析、比較、判斷與推理；可加入常見混淆作干擾。"
+    return "混合難度：必須同時包含基礎/標準/進階題。"
 
 
 def _build_prompt(subject: str, traits: str, qtype: str, level_code: str, count: int, text: str) -> str:
-    # 盡量簡潔題幹：避免「根據教材內容」套話
     common_rules = f"""
 你是一名香港中學教師，負責出校內測驗題。
 科目：{subject}
@@ -312,39 +300,50 @@ def _build_prompt(subject: str, traits: str, qtype: str, level_code: str, count:
 
 【題幹用語規則（必須遵守）】
 - 題目要直接、簡潔，不要使用「根據教材內容」「根據以上資料」等套話。
-- 直接寫問題即可。
 """
 
     if qtype == "true_false":
         qtype_rules = """
-【題型】true_false（是非題）
-- options 固定為：["對","錯"]（其餘可留空）
-- 題幹用「一句清晰陳述句」，可判斷對/錯
+【題型】是非題（true_false）
+- options 固定為：["對","錯"]（其餘留空）
+- 題幹必須是一句可判斷對/錯的陳述句（避免問句）
 """
         fewshot = _FEWSHOT_TF
+        schema = f"""
+【輸出要求】
+- 只輸出純 JSON array
+- 只生成 {count} 題
+- qtype 固定為 "true_false"
+- options 必須是 ["對","錯","",""]
+- correct 只可 ["1"] 或 ["2"]
+"""
     else:
         qtype_rules = """
-【題型】single（四選一單選）
+【題型】多項選擇題（四選一 single）
 【題幹格式偏好（盡量採用）】
-- 若教材出現多個例子/項目/分類，請用：
-  題幹 + (1)(2)(3)(4) 的資料列點
-- A-D 選項用「只有（…）」/「以上皆是」等組合判斷。
+- 若教材出現多個例子/項目/分類，請用題幹 + (1)(2)(3)(4) 列點
+- A-D 選項用「只有（…）」/「以上皆是」等組合判斷
 """
         fewshot = _FEWSHOT_SINGLE
-
-    schema = f"""
+        schema = f"""
 【輸出要求】
-- 只輸出純 JSON array，不要任何額外文字。
+- 只輸出純 JSON array
 - 只生成 {count} 題
-- qtype 固定為 "{qtype}"
-- correct 必須是 ["1"~"4"]（只 1 個；true_false 只用 1 或 2）
-- 每題題幹或選項包含教材出現過的至少 2 個關鍵詞（貼題）
-- 若教材資訊不足：needs_review=true，但仍要給出最可能答案
+- qtype 固定為 "single"
+- options 必須剛好 4 個
+- correct 必須是 ["1"~"4"]（只 1 個）
+"""
+
+    extra = """
+【貼題要求】
+- 題幹或選項必須包含教材出現過的至少 2 個關鍵詞。
+- 若教材資訊不足：needs_review=true，但仍要給出最可能答案。
 """
 
     return f"""{common_rules}
 {qtype_rules}
 {schema}
+{extra}
 
 【格式示例】
 {fewshot}
@@ -360,7 +359,6 @@ def _generate_batch(cfg, text, subject, level_code, count, fast_mode, qtype):
     traits = SUBJECT_TRAITS.get(subject, DEFAULT_TRAITS)
 
     temperature = 0.15 if fast_mode else 0.2
-    # true/false token 可更少
     max_tokens = 900 if qtype == "true_false" else (1400 if fast_mode else 2200)
     timeout = 90 if fast_mode else 180
 
@@ -387,9 +385,8 @@ def _generate_batch(cfg, text, subject, level_code, count, fast_mode, qtype):
 
     cleaned = []
     for q in items:
-        qt = str(q.get("qtype", qtype)).strip() or qtype
-        if qt not in {"single", "true_false"}:
-            qt = qtype
+        # ✅ 強制以呼叫方 qtype 為準（避免模型偷換題型）
+        qt = qtype
 
         opts = _normalize_options(q.get("options", []), qt)
         corr = _normalize_correct(q.get("correct", []), qt)
@@ -434,7 +431,7 @@ def generate_questions(cfg, text, subject, level, question_count, fast_mode: boo
     return _generate_batch(cfg, text, subject, level, int(question_count), fast_mode, qtype)
 
 
-# ---- 匯入：固定 single（保持你現狀，不改動行為）----
+# ---- 匯入：固定 single（保持你現狀）----
 def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode: bool = False, qtype: str = "single"):
     qtype = "single"
     raw_text = _clean_text(raw_text)[: (8000 if fast_mode else 10000)]
