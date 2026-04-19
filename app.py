@@ -16,7 +16,6 @@ from services.llm_service import (
 )
 from services.cache_service import load_cache, save_cache
 from extractors.extract import extract_text
-
 from exporters.export_kahoot import export_kahoot
 from exporters.export_wayground_docx import export_wayground_docx
 
@@ -30,10 +29,6 @@ from services.google_oauth import (
 from services.google_forms_api import create_quiz_form
 
 
-# -------------------------
-# Helpers
-# -------------------------
-
 def stable_key(*parts) -> str:
     raw = "||".join("" if p is None else str(p) for p in parts)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -43,21 +38,6 @@ def show_exception(user_msg: str, e: Exception):
     st.error(user_msg)
     with st.expander("🔎 技術細節（供維護用）"):
         st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)))
-
-
-def split_paragraphs(text: str):
-    return [p.strip() for p in (text or "").split("\n\n") if p.strip()]
-
-def build_text_with_highlights(raw_text: str, marked_idx: set, limit: int):
-    paras = split_paragraphs(raw_text)
-    highlights = [paras[i] for i in range(len(paras)) if i in marked_idx]
-    others = [paras[i] for i in range(len(paras)) if i not in marked_idx]
-
-    out = ""
-    if highlights:
-        out += "【重點段落（老師標記）】\n" + "\n\n".join(highlights) + "\n\n"
-    out += "【其餘教材】\n" + "\n\n".join(others)
-    return out[:limit]
 
 
 def to_editor_df(data, subject: str):
@@ -76,20 +56,37 @@ def to_editor_df(data, subject: str):
         else:
             corr_val = str(corr).strip() or "1"
 
-        rows.append({
-            "export": True,
-            "subject": subject,
-            "qtype": "single",
-            "question": q.get("question", ""),
-            "option_1": opts[0],
-            "option_2": opts[1],
-            "option_3": opts[2],
-            "option_4": opts[3],
-            "correct": corr_val,
-            "explanation": q.get("explanation", ""),
-            "needs_review": bool(q.get("needs_review", False)),
-        })
+        rows.append(
+            {
+                "export": True,
+                "subject": subject,
+                "qtype": "single",  # ✅ 固定 single
+                "question": q.get("question", ""),
+                "option_1": opts[0],
+                "option_2": opts[1],
+                "option_3": opts[2],
+                "option_4": opts[3],
+                "correct": corr_val,
+                "explanation": q.get("explanation", ""),
+                "needs_review": bool(q.get("needs_review", False)),
+            }
+        )
     return pd.DataFrame(rows)
+
+
+def split_paragraphs(text: str):
+    return [p.strip() for p in (text or "").split("\n\n") if p.strip()]
+
+
+def build_text_with_highlights(raw_text: str, marked_idx: set, limit: int):
+    paras = split_paragraphs(raw_text)
+    highlights = [paras[i] for i in range(len(paras)) if i in marked_idx]
+    others = [paras[i] for i in range(len(paras)) if i not in marked_idx]
+    out = ""
+    if highlights:
+        out += "【重點段落（老師標記）】\n" + "\n\n".join(highlights) + "\n\n"
+    out += "【其餘教材】\n" + "\n\n".join(others)
+    return out[:limit]
 
 
 def drive_service(creds):
@@ -100,7 +97,8 @@ def upload_bytes_to_drive(creds, filename: str, mimetype: str, data_bytes: bytes
     service = drive_service(creds)
     media = MediaIoBaseUpload(io.BytesIO(data_bytes), mimetype=mimetype, resumable=False)
     meta = {"name": filename}
-    return service.files().create(body=meta, media_body=media, fields="id, webViewLink").execute()
+    f = service.files().create(body=meta, media_body=media, fields="id, webViewLink").execute()
+    return f
 
 
 def share_file_to_emails(creds, file_id: str, emails: list, role: str = "reader"):
@@ -110,99 +108,44 @@ def share_file_to_emails(creds, file_id: str, emails: list, role: str = "reader"
         if not email:
             continue
         body = {"type": "user", "role": role, "emailAddress": email}
-        service.permissions().create(fileId=file_id, body=body, sendNotificationEmail=True).execute()
-
-
-def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix: str):
-    """匯出 Kahoot/Wayground，並可用 Google Drive 一鍵電郵分享檔案。"""
-    if selected_df is None or selected_df.empty:
-        st.warning("⚠️ 尚未選擇任何題目（請勾選『匯出』欄）。")
-        return
-
-    kahoot_bytes = export_kahoot(selected_df)
-    docx_bytes = export_wayground_docx(selected_df, subject_name)
-
-    c1, c2 = st.columns(2)
-    with c1:
-        st.download_button("⬇️ Kahoot Excel", kahoot_bytes, "kahoot.xlsx", key=f"dl_kahoot_{prefix}")
-        st.caption("Kahoot 匯入用 Excel（只包含已勾選題目）。")
-    with c2:
-        st.download_button("⬇️ Wayground DOCX", docx_bytes, "wayground.docx", key=f"dl_docx_{prefix}")
-        st.caption("Wayground/校內工作紙用 Word（只包含已勾選題目）。")
-
-    st.markdown("### 📧 一鍵電郵分享匯出檔")
-    st.caption("會先把檔案上載到你的 Google Drive，然後分享並寄出通知電郵。")
-
-    if not st.session_state.google_creds:
-        st.info("請先在左側登入 Google，才可用電郵分享檔案。")
-        return
-
-    emails_text = st.text_input("收件人電郵（多個用逗號分隔）", value="", key=f"emails_{prefix}")
-    emails = [e.strip() for e in emails_text.split(",") if e.strip()]
-
-    colA, colB = st.columns(2)
-    with colA:
-        if st.button("📧 分享 Kahoot Excel", key=f"btn_share_kahoot_{prefix}"):
-            if not emails:
-                st.warning("請先輸入至少一個電郵。")
-            else:
-                try:
-                    creds = credentials_from_dict(st.session_state.google_creds)
-                    uploaded = upload_bytes_to_drive(
-                        creds,
-                        filename=f"{subject_name}_kahoot.xlsx",
-                        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                        data_bytes=kahoot_bytes,
-                    )
-                    share_file_to_emails(creds, uploaded["id"], emails, role="reader")
-                    st.success("✅ 已分享 Kahoot 檔案（Google 會寄出通知電郵）")
-                    st.write("Drive 連結：", uploaded.get("webViewLink"))
-                except Exception as e:
-                    show_exception("⚠️ 分享 Kahoot 檔案失敗。", e)
-
-    with colB:
-        if st.button("📧 分享 Wayground DOCX", key=f"btn_share_docx_{prefix}"):
-            if not emails:
-                st.warning("請先輸入至少一個電郵。")
-            else:
-                try:
-                    creds = credentials_from_dict(st.session_state.google_creds)
-                    uploaded = upload_bytes_to_drive(
-                        creds,
-                        filename=f"{subject_name}_wayground.docx",
-                        mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        data_bytes=docx_bytes,
-                    )
-                    share_file_to_emails(creds, uploaded["id"], emails, role="reader")
-                    st.success("✅ 已分享 Wayground 檔案（Google 會寄出通知電郵）")
-                    st.write("Drive 連結：", uploaded.get("webViewLink"))
-                except Exception as e:
-                    show_exception("⚠️ 分享 DOCX 檔案失敗。", e)
+        service.permissions().create(
+            fileId=file_id,
+            body=body,
+            sendNotificationEmail=True,
+        ).execute()
 
 
 # -------------------------
-# Page config + session
+# Streamlit Config
 # -------------------------
 st.set_page_config(page_title="AI 題目生成器", layout="wide")
-st.title("🏫 AI 題目生成器")
-st.caption("支援：AI 生成｜匯入整理｜Kahoot/Wayground 匯出｜Google Form Quiz｜Google Drive 電郵分享")
+st.title("🏫 AI 題目生成器（Kahoot / Wayground / Google Form｜一鍵電郵分享匯出檔）")
 
-for k, v in {
-    "google_creds": None,
-    "generated_data": None,
-    "imported_data": None,
-    "imported_text": "",
-    "mark_idx": set(),
-    "form_result_generate": None,
-    "form_result_import": None,
-}.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
+# session init
+if "google_creds" not in st.session_state:
+    st.session_state.google_creds = None
 
+if "generated_data" not in st.session_state:
+    st.session_state.generated_data = None
+if "imported_data" not in st.session_state:
+    st.session_state.imported_data = None
+if "imported_text" not in st.session_state:
+    st.session_state.imported_text = ""
 
-# -------------------------
+if "mark_idx" not in st.session_state:
+    st.session_state.mark_idx = set()
+
+if "edited_generate_df" not in st.session_state:
+    st.session_state.edited_generate_df = None
+if "edited_import_df" not in st.session_state:
+    st.session_state.edited_import_df = None
+
+if "form_result_generate" not in st.session_state:
+    st.session_state.form_result_generate = None
+if "form_result_import" not in st.session_state:
+    st.session_state.form_result_import = None
+
 # OAuth callback
-# -------------------------
 params = st.query_params
 if oauth_is_configured() and "code" in params and not st.session_state.google_creds:
     try:
@@ -221,10 +164,7 @@ if oauth_is_configured() and "code" in params and not st.session_state.google_cr
         show_exception("Google 登入失敗。請重新按『連接 Google（登入）』一次。", e)
         st.stop()
 
-
-# -------------------------
-# Sidebar: Google
-# -------------------------
+# Sidebar: Google connect
 st.sidebar.header("🟦 Google 連接（Google Forms / Google Drive 一鍵分享檔案）")
 if not oauth_is_configured():
     st.sidebar.warning("⚠️ 尚未設定 Google OAuth（Secrets: google_oauth_client + APP_URL）")
@@ -236,26 +176,23 @@ else:
             st.rerun()
     else:
         st.sidebar.link_button("🔐 連接 Google（登入）", get_auth_url())
-        st.sidebar.caption("提示：請以學校電郵登入，方便統一管理與分享。")
+        st.sidebar.caption("提示：請以學校電郵登入（例如：xxx@pochiu.edu.hk）")
 
 st.sidebar.divider()
 
-
-# -------------------------
-# Sidebar: AI
-# -------------------------
+# Sidebar: AI API config
 fast_mode = st.sidebar.checkbox(
     "⚡ 快速模式",
     value=True,
-    help="較快、較保守：較短輸出與較短超時；適合日常快速出題。"
+    help="較快、較保守：會用較短的AI輸出與較短超時；適合日常快速出題。"
 )
-st.sidebar.caption("關閉快速模式：較慢，但題目更豐富/更有變化。")
-
+st.sidebar.caption("快速模式：速度較快但題目較保守；關閉後較慢但可生成更豐富/更有變化的題目。")
 st.sidebar.header("🔌 AI API 設定")
+
 preset = st.sidebar.selectbox(
     "快速選擇（簡易）",
     ["DeepSeek", "OpenAI", "Grok (xAI)", "Azure OpenAI", "自訂（OpenAI 相容）"],
-    key="preset",
+    key="preset"
 )
 api_key = st.sidebar.text_input("API Key", type="password", key="api_key")
 
@@ -296,18 +233,10 @@ if preset == "Grok (xAI)" and auto_xai and api_key:
         model = detected
         st.sidebar.caption(f"✅ 已自動選用：{model}")
 
-
 def api_config():
     if preset == "Azure OpenAI":
-        return {
-            "type": "azure",
-            "api_key": api_key,
-            "endpoint": azure_endpoint,
-            "deployment": azure_deployment,
-            "api_version": azure_api_version,
-        }
+        return {"type": "azure", "api_key": api_key, "endpoint": azure_endpoint, "deployment": azure_deployment, "api_version": azure_api_version}
     return {"type": "openai_compat", "api_key": api_key, "base_url": base_url, "model": model}
-
 
 def can_call_ai(cfg: dict):
     if not cfg.get("api_key"):
@@ -316,8 +245,7 @@ def can_call_ai(cfg: dict):
         return bool(cfg.get("endpoint")) and bool(cfg.get("deployment"))
     return bool(cfg.get("base_url")) and bool(cfg.get("model"))
 
-
-# API test
+# Sidebar: API test
 st.sidebar.divider()
 st.sidebar.header("🧪 API 連線測試")
 cfg_test = api_config()
@@ -333,24 +261,27 @@ if st.sidebar.button("🧪 一鍵測試 API（回覆 OK）", key="btn_ping_api")
             st.sidebar.error("❌ 失敗：請檢查 Key/Endpoint/Model 或服務狀態")
             st.sidebar.code(r.get("error", ""))
 
-
-# -------------------------
-# Sidebar: Teaching settings
-# -------------------------
 st.sidebar.divider()
-st.sidebar.header("📘 出題設定")
+
+# Sidebar: mode / subject / difficulty
+mode = st.sidebar.radio(
+    "📂 試題來源模式",
+    ["🪄 AI 生成新題目", "📄 匯入現有題目（AI 協助）"],
+    key="mode"
+)
+
 subject = st.sidebar.selectbox(
-    "科目",
+    "📘 科目",
     ["中國語文","英國語文","數學","公民與社會發展","科學","公民、經濟及社會","物理","化學","生物","地理","歷史","中國歷史","宗教",
      "資訊及通訊科技（ICT）","經濟","企業、會計與財務概論","旅遊與款待"],
-    key="subject",
+    key="subject"
 )
 
 level_label = st.sidebar.radio(
     "🎯 難度",
     ["基礎（理解與記憶）", "標準（應用與理解）", "進階（分析與思考）", "混合（課堂活動建議）"],
     index=1,
-    key="level_label",
+    key="level_label"
 )
 level_map = {
     "基礎（理解與記憶）": "easy",
@@ -360,104 +291,137 @@ level_map = {
 }
 level_code = level_map[level_label]
 
-question_count = st.sidebar.selectbox("🧮 題目數目（生成用）", [5, 8, 10, 12, 15, 20], index=2, key="question_count")
+# Editor config（qtype 不再提供選擇）
+EDITOR_COLUMN_CONFIG = {
+    "export": st.column_config.CheckboxColumn("匯出", help="勾選：匯出/建Form/分享檔案", width="small"),
+    "correct": st.column_config.SelectboxColumn("正確答案（1-4）", options=["1","2","3","4"], width="small"),
+    "needs_review": st.column_config.CheckboxColumn("需教師確認", width="small"),
+}
 
 
-# -------------------------
-# Main: flow guide
-# -------------------------
-with st.expander("🧭 使用流程（建議）", expanded=True):
-    st.markdown(
-        """
-**生成新題目（推薦）**
-1. 在左側完成：Google 登入（可選）＋設定 AI API。
-2. 選科目、難度與題目數目。
-3. 上載教材 →（可選）標記重點段落。
-4. 按「生成題目」→ 在表格中微調答案/選項。
-5. 勾選要匯出的題目 → 匯出 Kahoot/Wayground、建立 Google Form、或用電郵分享檔案。
+def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix: str):
+    if selected_df is None or selected_df.empty:
+        st.warning("⚠️ 尚未選擇任何題目（請勾選『匯出』欄）。")
+        return
 
-**匯入現有題目**
-1. 上載/貼上題目內容 → 勾「啟用 AI 協助整理」。
-2. 按「整理並轉換」→ 在表格中校對答案。
-3. 匯出/建立 Google Form/電郵分享。
-        """
-    )
+    kahoot_bytes = export_kahoot(selected_df)
+    docx_bytes = export_wayground_docx(selected_df, subject_name)
 
+    c1, c2 = st.columns(2)
+    with c1:
+        st.download_button("⬇️ Kahoot Excel", kahoot_bytes, "kahoot.xlsx", key=f"dl_kahoot_{prefix}")
+    with c2:
+        st.download_button("⬇️ Wayground DOCX", docx_bytes, "wayground.docx", key=f"dl_docx_{prefix}")
 
-tabs = st.tabs(["🪄 生成新題目", "📄 匯入現有題目"])
+    st.markdown("### 📧 一鍵電郵分享匯出檔（需要先登入 Google）")
+    if not st.session_state.google_creds:
+        st.info("請先在左側登入 Google，才可用電郵分享檔案。")
+        return
+
+    emails_text = st.text_input("收件人電郵（多個用逗號分隔）", value="", key=f"emails_{prefix}")
+    emails = [e.strip() for e in emails_text.split(",") if e.strip()]
+
+    share_col1, share_col2 = st.columns(2)
+    with share_col1:
+        if st.button("📧 分享 Kahoot Excel", key=f"btn_share_kahoot_{prefix}"):
+            if not emails:
+                st.warning("請先輸入至少一個電郵。")
+            else:
+                try:
+                    creds = credentials_from_dict(st.session_state.google_creds)
+                    uploaded = upload_bytes_to_drive(
+                        creds,
+                        filename=f"{subject_name}_kahoot.xlsx",
+                        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        data_bytes=kahoot_bytes,
+                    )
+                    share_file_to_emails(creds, uploaded["id"], emails, role="reader")
+                    st.success("✅ 已分享 Kahoot 檔案（Google 會寄出通知電郵）")
+                    st.write("Drive 連結：", uploaded.get("webViewLink"))
+                except Exception as e:
+                    show_exception("⚠️ 分享 Kahoot 檔案失敗。", e)
+
+    with share_col2:
+        if st.button("📧 分享 Wayground DOCX", key=f"btn_share_docx_{prefix}"):
+            if not emails:
+                st.warning("請先輸入至少一個電郵。")
+            else:
+                try:
+                    creds = credentials_from_dict(st.session_state.google_creds)
+                    uploaded = upload_bytes_to_drive(
+                        creds,
+                        filename=f"{subject_name}_wayground.docx",
+                        mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        data_bytes=docx_bytes,
+                    )
+                    share_file_to_emails(creds, uploaded["id"], emails, role="reader")
+                    st.success("✅ 已分享 Wayground 檔案（Google 會寄出通知電郵）")
+                    st.write("Drive 連結：", uploaded.get("webViewLink"))
+                except Exception as e:
+                    show_exception("⚠️ 分享 DOCX 檔案失敗。", e)
 
 
 # =========================
-# Tab 1: Generate
+# Mode 1: Generate (固定 single)
 # =========================
-with tabs[0]:
-    st.markdown("## ① 上載教材")
-    st.caption("支援 PDF/DOCX/TXT/PPTX/XLSX。系統會先抽取文字，再交給 AI 出題。")
+if mode == "🪄 AI 生成新題目":
+    st.subheader("🪄 AI 生成新題目（固定單選 4 選 1）")
+
+    question_count = st.sidebar.selectbox("🧮 題目數目", [5, 8, 10, 12, 15, 20], index=2, key="question_count")
+    cfg = api_config()
 
     files = st.file_uploader(
-        "上載教材檔案",
+        "上載教材（PDF/DOCX/TXT/PPTX/XLSX）",
         accept_multiple_files=True,
-        type=["pdf", "docx", "txt", "pptx", "xlsx"],
-        key="files_generate",
+        type=["pdf","docx","txt","pptx","xlsx"],
+        key="files_generate"
     )
 
     raw_text = ""
     if files:
         with st.spinner("📄 正在擷取文字…"):
             raw_text = "".join(extract_text(f) for f in files)
-        st.info(f"✅ 已擷取 {len(raw_text)} 字")
+        st.info(f"✅ 已擷取 {len(raw_text)} 字（可用重點段落標記加強貼題）")
 
-        st.markdown("## ② 重點段落標記（可選）")
-        st.caption("勾選後，系統會把重點段落放到最前，提升貼題度。")
-
-        with st.expander("⭐ 打開段落清單", expanded=False):
+        with st.expander("⭐ 重點段落標記（勾選後優先送入AI）", expanded=False):
             paras = split_paragraphs(raw_text)
             st.caption(f"段落數：{len(paras)}（以空行分段）")
 
-            cA, cB = st.columns(2)
-            with cA:
+            c1, c2 = st.columns(2)
+            with c1:
                 if st.button("✅ 全選重點段落", key="btn_mark_all"):
                     st.session_state.mark_idx = set(range(len(paras)))
-            with cB:
+            with c2:
                 if st.button("⛔ 全不選", key="btn_mark_none"):
                     st.session_state.mark_idx = set()
 
             for i, p in enumerate(paras[:80]):
                 checked = i in st.session_state.mark_idx
-                new_checked = st.checkbox(f"第 {i+1} 段", value=checked, key=f"para_{i}")
+                new_checked = st.checkbox(f"第 {i+1} 段", value=checked, key=f"para_g_{i}")
                 if new_checked:
                     st.session_state.mark_idx.add(i)
                 else:
                     st.session_state.mark_idx.discard(i)
                 st.write(p[:200] + ("…" if len(p) > 200 else ""))
 
-    st.markdown("## ③ 生成題目")
-    st.caption("按下後會呼叫 AI 生成題目。若你選了『混合』難度，系統會自動生成基礎/標準/進階再混合。")
-
-    cfg = api_config()
     limit = 8000 if fast_mode else 10000
+    qtype = "single"
 
-    if st.button("🪄 生成題目", disabled=not (can_call_ai(cfg) and bool(raw_text.strip())), key="btn_generate"):
+    if st.button("生成題目", disabled=not (can_call_ai(cfg) and bool(raw_text)), key="btn_generate"):
         try:
             used_text = build_text_with_highlights(raw_text, st.session_state.mark_idx, limit)
-            st.info(f"送入 AI：{len(used_text)} 字（上限 {limit}）｜難度：{level_label}｜題數：{question_count}")
+            st.info(f"✅ 送入 AI：{len(used_text)} 字（上限 {limit}）｜難度：{level_label}")
 
             cache = load_cache()
-            key = stable_key(used_text, subject, level_code, question_count, fast_mode, preset, model, base_url)
+            key = stable_key(used_text, subject, level_code, question_count, fast_mode, preset, model, base_url, qtype)
 
             if key in cache:
-                st.success("✅ 已從快取讀取（節省時間與額度）")
+                st.success("✅ 已從快取讀取")
                 st.session_state.generated_data = cache[key]
             else:
-                with st.spinner("🤖 正在生成…"):
+                with st.spinner("🤖 正在呼叫 AI，請稍候 10–30 秒…"):
                     st.session_state.generated_data = generate_questions(
-                        cfg,
-                        used_text,
-                        subject,
-                        level_code,
-                        question_count,
-                        fast_mode=fast_mode,
-                        qtype="single",
+                        cfg, used_text, subject, level_code, question_count, fast_mode=fast_mode, qtype="single"
                     )
                 cache[key] = st.session_state.generated_data
                 save_cache(cache)
@@ -466,14 +430,12 @@ with tabs[0]:
 
         except Exception as e:
             show_exception("⚠️ 生成題目失敗。", e)
+            st.stop()
 
     if st.session_state.generated_data:
-        st.markdown("## ④ 檢視與微調")
-        st.caption("你可以直接在表格內修改題幹、選項、正確答案，以及勾選是否匯出。")
-
         df = to_editor_df(st.session_state.generated_data, subject)
 
-        c1, c2 = st.columns([1, 1])
+        c1, c2, c3 = st.columns([1, 1, 3])
         with c1:
             if st.button("✅ 全選匯出", key="btn_export_all_generate"):
                 df["export"] = True
@@ -485,21 +447,15 @@ with tabs[0]:
             df,
             use_container_width=True,
             num_rows="dynamic",
-            column_config={
-                "export": st.column_config.CheckboxColumn("匯出", width="small"),
-                "correct": st.column_config.SelectboxColumn("正確答案（1-4）", options=["1","2","3","4"], width="small"),
-                "needs_review": st.column_config.CheckboxColumn("需教師確認", width="small"),
-            },
-            disabled=["subject", "qtype"],
-            key="editor_generate",
+            column_config=EDITOR_COLUMN_CONFIG,
+            disabled=["qtype", "subject"],
+            key="editor_generate"
         )
+
+        st.session_state.edited_generate_df = edited
         selected = edited[edited["export"] == True].copy()
+        st.caption(f"✅ 已選擇匯出 {len(selected)} 題（共 {len(edited)} 題）")
 
-        st.success(f"✅ 已生成 {len(edited)} 題；已選擇匯出 {len(selected)} 題")
-
-        st.markdown("## ⑤ 匯出 / Google Form / 電郵分享")
-
-        # Google Form
         if st.session_state.google_creds and not selected.empty:
             if st.button("🟦 一鍵建立 Google Form Quiz", key="btn_form_generate"):
                 try:
@@ -519,13 +475,14 @@ with tabs[0]:
 
 
 # =========================
-# Tab 2: Import
+# Mode 2: Import (固定 single)
 # =========================
-with tabs[1]:
-    st.markdown("## ① 上載 / 貼上題目")
-    st.caption("支援 DOCX/TXT 或直接貼上。匯入模式固定為單選（4選1）。")
+if mode == "📄 匯入現有題目（AI 協助）":
+    st.subheader("📄 匯入現有題目（AI 協助）")
+    st.info("📌 匯入模式固定為「單選 single（4選1）」；若原文無答案，AI 會推測並標示需教師確認。")
 
     cfg = api_config()
+    import_qtype = "single"
 
     def load_import_file_to_textbox():
         f = st.session_state.get("import_file")
@@ -534,41 +491,27 @@ with tabs[1]:
         st.session_state.imported_text = extract_text(f) or ""
         st.session_state.imported_data = None
 
-    st.file_uploader(
-        "上載 DOCX/TXT（自動載入到文字框）",
-        type=["docx", "txt"],
-        key="import_file",
-        on_change=load_import_file_to_textbox,
-    )
-
+    st.file_uploader("上載 DOCX/TXT（自動載入）", type=["docx", "txt"], key="import_file", on_change=load_import_file_to_textbox)
     use_ai_assist = st.checkbox("啟用 AI 協助整理（建議）", value=True, key="use_ai_assist")
     st.text_area("貼上題目內容", height=320, key="imported_text")
 
-    st.markdown("## ② 整理並轉換")
-    st.caption("啟用 AI 協助：會自動拆出題幹/選項/答案；若原文無答案，AI 會推測並標記需教師確認。")
-
-    if st.button(
-        "✨ 整理並轉換",
-        disabled=not (bool(st.session_state.imported_text.strip()) and (not use_ai_assist or can_call_ai(cfg))),
-        key="btn_import_parse",
-    ):
+    if st.button("✨ 整理並轉換", disabled=not (bool(st.session_state.imported_text.strip()) and (not use_ai_assist or can_call_ai(cfg))), key="btn_import_parse"):
         try:
             raw = st.session_state.imported_text.strip()
-            with st.spinner("🧠 正在整理…"):
+            st.info(f"✅ 已載入/貼上 {len(raw)} 字。")
+
+            with st.spinner("🧠 正在整理（可能需 10–30 秒，慢時 1–3 分鐘）…"):
                 if use_ai_assist:
                     st.session_state.imported_data = assist_import_questions(
-                        cfg,
-                        raw,
-                        subject,
-                        allow_guess=True,
-                        fast_mode=fast_mode,
-                        qtype="single",
+                        cfg, raw, subject, allow_guess=True, fast_mode=fast_mode, qtype=import_qtype
                     )
                 else:
                     st.session_state.imported_data = parse_import_questions_locally(raw)
+
             st.session_state.form_result_import = None
+
         except Exception as e:
-            st.warning("⚠️ AI 整理失敗，改用本地拆題作備援，請老師核對答案。")
+            st.warning("⚠️ AI 整理暫時失敗（可能服務繁忙或網絡超時）。系統已改用本地拆題作備援，請老師核對答案。")
             try:
                 st.session_state.imported_data = parse_import_questions_locally(st.session_state.imported_text.strip())
             except Exception as e2:
@@ -578,10 +521,9 @@ with tabs[1]:
                 st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)))
 
     if st.session_state.imported_data:
-        st.markdown("## ③ 檢視與微調")
         df = to_editor_df(st.session_state.imported_data, subject)
 
-        c1, c2 = st.columns([1, 1])
+        c1, c2, c3 = st.columns([1, 1, 3])
         with c1:
             if st.button("✅ 全選匯出", key="btn_export_all_import"):
                 df["export"] = True
@@ -593,19 +535,14 @@ with tabs[1]:
             df,
             use_container_width=True,
             num_rows="dynamic",
-            column_config={
-                "export": st.column_config.CheckboxColumn("匯出", width="small"),
-                "correct": st.column_config.SelectboxColumn("正確答案（1-4）", options=["1","2","3","4"], width="small"),
-                "needs_review": st.column_config.CheckboxColumn("需教師確認", width="small"),
-            },
-            disabled=["subject", "qtype"],
-            key="editor_import",
+            column_config=EDITOR_COLUMN_CONFIG,
+            disabled=["qtype", "subject"],
+            key="editor_import"
         )
+
+        st.session_state.edited_import_df = edited
         selected = edited[edited["export"] == True].copy()
-
-        st.success(f"✅ 已載入 {len(edited)} 題；已選擇匯出 {len(selected)} 題")
-
-        st.markdown("## ④ 匯出 / Google Form / 電郵分享")
+        st.caption(f"✅ 已選擇匯出 {len(selected)} 題（共 {len(edited)} 題）")
 
         if st.session_state.google_creds and not selected.empty:
             if st.button("🟦 一鍵建立 Google Form Quiz", key="btn_form_import"):
