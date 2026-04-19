@@ -422,7 +422,110 @@ def generate_questions(cfg, text, subject, level, question_count, fast_mode: boo
         return batch[:n]
 
     return _generate_batch(cfg, text, subject, level, int(question_count), fast_mode, qtype)
+def generate_questions_from_images(cfg, images_data_urls, subject, level, question_count, fast_mode: bool = False, qtype: str = "single"):
+    """
+    Vision fallback：直接把圖片交給多模態 LLM，要求它讀圖並輸出題目 JSON。
+    images_data_urls: ["data:image/png;base64,...", ...]
+    """
+    if qtype not in {"single", "true_false"}:
+        qtype = "single"
 
+    traits = SUBJECT_TRAITS.get(subject, DEFAULT_TRAITS)
+
+    # 針對你要求：題幹簡潔，禁用「教材/根據」套話
+    banned = "教材、教材中、教材內、教材出現、教材提及、根據教材、根據以上資料、文中提及、上文提到、資料顯示"
+
+    if qtype == "true_false":
+        qtype_rules = """
+【題型】是非題（true_false）
+- options 固定為：["對","錯"]（其餘留空）
+- 題幹必須是一句可判斷對/錯的陳述句（避免問句）
+- correct 只可 ["1"] 或 ["2"]
+"""
+        fewshot = """
+[
+  {"qtype":"true_false","question":"物體在真空中不受空氣阻力影響。","options":["對","錯","",""],"correct":["1"],"explanation":"","needs_review":false}
+]
+"""
+    else:
+        qtype_rules = """
+【題型】多項選擇題（四選一 single）
+- options 必須 4 個
+- correct 必須 ["1"~"4"]（只 1 個）
+"""
+        fewshot = """
+[
+  {"qtype":"single","question":"以下哪一項最符合題目？","options":["A","B","C","D"],"correct":["2"],"explanation":"","needs_review":false}
+]
+"""
+
+    schema = f"""
+【輸出要求】
+- 只輸出純 JSON array，不要任何額外文字
+- 只生成 {question_count} 題
+- qtype 固定為 "{qtype}"
+- 題幹要直接、簡潔，禁止出現：{banned}
+- 若圖片資訊不完整：needs_review=true，但仍要給出最可能答案
+"""
+
+    prompt_text = f"""
+你是一名香港中學教師，負責出校內測驗題。
+科目：{subject}；難度：{level}
+
+【科目特性（必須遵守）】
+{traits}
+
+【題幹規則】
+- 題幹要直接、簡潔，不要使用「根據…」「教材…」等套話。
+
+{qtype_rules}
+{schema}
+
+【格式示例】
+{fewshot}
+
+現在請根據以下圖片內容出題（你需要先理解圖片文字/圖表/題目內容，然後輸出題目JSON）。
+"""
+
+    # 組合多模態 messages（OpenAI-compatible image_url）
+    content = [{"type": "text", "text": prompt_text}]
+    for url in images_data_urls:
+        content.append({"type": "image_url", "image_url": {"url": url}})
+
+    temperature = 0.1 if fast_mode else 0.2
+    max_tokens = 1600 if fast_mode else 2600
+    timeout = 120 if fast_mode else 180
+
+    out = _chat(
+        cfg,
+        messages=[{"role": "user", "content": content}],
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout=timeout,
+    )
+
+    items = extract_json(out)
+
+    cleaned = []
+    for q in items:
+        qt = qtype  # 強制用選定題型
+        opts = _normalize_options(q.get("options", []), qt)
+        corr = _normalize_correct(q.get("correct", []), qt)
+
+        question = str(q.get("question", "")).strip()
+        # 再次保險：刪除開頭套話
+        question = _strip_boilerplate_question(question)
+
+        cleaned.append({
+            "qtype": qt,
+            "question": question,
+            "options": opts,
+            "correct": corr,
+            "explanation": str(q.get("explanation", "")).strip()[:60],
+            "needs_review": bool(q.get("needs_review", False)),
+        })
+
+    return cleaned
 
 # ---- 匯入：固定 single（保持現狀）----
 def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode: bool = False, qtype: str = "single"):
