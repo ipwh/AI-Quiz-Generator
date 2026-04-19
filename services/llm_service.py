@@ -37,7 +37,7 @@ SUBJECT_TRAITS = {
     "旅遊與款待": "重點：行業體系、承載力、服務質素、可持續。",
     "宗教": "天主教用字：天主、伯多祿、聖母瑪利亞、教宗/主教/神父、教友。",
 }
-DEFAULT_TRAITS = "重點：根據教材內容出題，避免離題。"
+DEFAULT_TRAITS = "重點：根據提供內容出題，避免離題。"
 
 
 def _clean_text(text: str) -> str:
@@ -70,7 +70,6 @@ def extract_json(text: str):
 
 
 def _normalize_options(opts, qtype: str):
-    # ✅ 是非題固定 options
     if qtype == "true_false":
         return ["對", "錯", "", ""]
     if not isinstance(opts, list):
@@ -94,7 +93,6 @@ def _normalize_correct(corr, qtype: str):
         corr = [c for c in corr if c in {"1", "2"}]
         return [corr[0]] if corr else ["1"]
 
-    # single
     return [corr[0]] if corr else ["1"]
 
 
@@ -252,31 +250,25 @@ def _call_with_retries(cfg: dict, messages: list, temperature: float, max_tokens
         return extract_json(out2)
 
 
-_FEWSHOT_SINGLE = """
-[
-  {
-    "qtype": "single",
-    "question": "哪些屬於新媒體？\\n(1) 商業電台\\n(2) 實體報章\\n(3) 明報網上版\\n(4) YouTube",
-    "options": ["只有（1）和（2）", "只有（3）和（4）", "只有（1）、（3）和（4）", "以上皆是"],
-    "correct": ["2"],
-    "explanation": "（極短）",
-    "needs_review": false
-  }
-]
-"""
+def _strip_boilerplate_question(q: str) -> str:
+    """刪走題幹開頭常見套話（雙保險）。"""
+    if not q:
+        return q
+    s = q.strip()
 
-_FEWSHOT_TF = """
-[
-  {
-    "qtype": "true_false",
-    "question": "YouTube 屬於新媒體。",
-    "options": ["對", "錯", "", ""],
-    "correct": ["1"],
-    "explanation": "（極短）",
-    "needs_review": false
-  }
-]
-"""
+    # 刪除各種「根據/教材/文中/資料」開頭的套話（只針對開頭）
+    patterns = [
+        r"^(根據|依據|參考).{0,12}(教材|內容|資料|文本|上文|文中).{0,12}，?",
+        r"^(教材|內容|資料|文本|上文|文中).{0,12}(提及|出現|指出|提到).{0,12}，?",
+        r"^根據.{0,12}，?",
+        r"^以下.{0,12}(教材|內容|資料|文本).{0,12}，?",
+    ]
+    for p in patterns:
+        s = re.sub(p, "", s).strip()
+
+    # 再清一次開頭逗號/冒號
+    s = re.sub(r"^[,，:：\-\s]+", "", s).strip()
+    return s
 
 
 def _difficulty_guidance(level_code: str) -> str:
@@ -290,7 +282,8 @@ def _difficulty_guidance(level_code: str) -> str:
 
 
 def _build_prompt(subject: str, traits: str, qtype: str, level_code: str, count: int, text: str) -> str:
-    common_rules = f"""
+    banned = "教材、教材中、教材內、教材出現、教材提及、根據教材、根據以上資料、根據下列資料、文中提及、上文提到、資料顯示、根據內容"
+    common = f"""
 你是一名香港中學教師，負責出校內測驗題。
 科目：{subject}
 難度要求：{_difficulty_guidance(level_code)}
@@ -298,17 +291,18 @@ def _build_prompt(subject: str, traits: str, qtype: str, level_code: str, count:
 【科目特性（必須遵守）】
 {traits}
 
-【題幹用語規則（必須遵守）】
-- 題目要直接、簡潔，不要使用「根據教材內容」「根據以上資料」等套話。
+【題幹規則（必須遵守）】
+- 題幹要直接、簡潔。
+- 禁止出現以下套話或類似句式：{banned}
+- 不要寫「根據…」開頭的句式，直接問問題/直接寫陳述句。
 """
 
     if qtype == "true_false":
-        qtype_rules = """
+        qtype_rules = f"""
 【題型】是非題（true_false）
 - options 固定為：["對","錯"]（其餘留空）
 - 題幹必須是一句可判斷對/錯的陳述句（避免問句）
 """
-        fewshot = _FEWSHOT_TF
         schema = f"""
 【輸出要求】
 - 只輸出純 JSON array
@@ -317,14 +311,18 @@ def _build_prompt(subject: str, traits: str, qtype: str, level_code: str, count:
 - options 必須是 ["對","錯","",""]
 - correct 只可 ["1"] 或 ["2"]
 """
+        fewshot = """
+[
+  {"qtype":"true_false","question":"YouTube 屬於新媒體。","options":["對","錯","",""],"correct":["1"],"explanation":"","needs_review":false}
+]
+"""
     else:
         qtype_rules = """
 【題型】多項選擇題（四選一 single）
 【題幹格式偏好（盡量採用）】
-- 若教材出現多個例子/項目/分類，請用題幹 + (1)(2)(3)(4) 列點
+- 若內容出現多個例子/項目/分類，請用題幹 + (1)(2)(3)(4) 列點
 - A-D 選項用「只有（…）」/「以上皆是」等組合判斷
 """
-        fewshot = _FEWSHOT_SINGLE
         schema = f"""
 【輸出要求】
 - 只輸出純 JSON array
@@ -333,14 +331,20 @@ def _build_prompt(subject: str, traits: str, qtype: str, level_code: str, count:
 - options 必須剛好 4 個
 - correct 必須是 ["1"~"4"]（只 1 個）
 """
+        fewshot = """
+[
+  {"qtype":"single","question":"哪些屬於新媒體？\\n(1) 商業電台\\n(2) 實體報章\\n(3) 明報網上版\\n(4) YouTube",
+   "options":["只有（1）和（2）","只有（3）和（4）","只有（1）、（3）和（4）","以上皆是"],"correct":["2"],"explanation":"","needs_review":false}
+]
+"""
 
     extra = """
 【貼題要求】
-- 題幹或選項必須包含教材出現過的至少 2 個關鍵詞。
-- 若教材資訊不足：needs_review=true，但仍要給出最可能答案。
+- 題幹或選項必須包含內容中出現過的至少 2 個關鍵詞（貼題）。
+- 若資訊不足：needs_review=true，但仍要給出最可能答案。
 """
 
-    return f"""{common_rules}
+    return f"""{common}
 {qtype_rules}
 {schema}
 {extra}
@@ -348,7 +352,7 @@ def _build_prompt(subject: str, traits: str, qtype: str, level_code: str, count:
 【格式示例】
 {fewshot}
 
-【教材內容】
+【提供內容】
 {text}
 """
 
@@ -362,15 +366,7 @@ def _generate_batch(cfg, text, subject, level_code, count, fast_mode, qtype):
     max_tokens = 900 if qtype == "true_false" else (1400 if fast_mode else 2200)
     timeout = 90 if fast_mode else 180
 
-    schema_hint = """
-每題必須包含：
-- qtype
-- question
-- options
-- correct
-- explanation
-- needs_review
-"""
+    schema_hint = "JSON array"
 
     prompt = _build_prompt(subject, traits, qtype, level_code, count, text)
 
@@ -385,15 +381,16 @@ def _generate_batch(cfg, text, subject, level_code, count, fast_mode, qtype):
 
     cleaned = []
     for q in items:
-        # ✅ 強制以呼叫方 qtype 為準（避免模型偷換題型）
-        qt = qtype
+        qt = qtype  # 強制使用呼叫方題型
 
         opts = _normalize_options(q.get("options", []), qt)
         corr = _normalize_correct(q.get("correct", []), qt)
 
+        question = _strip_boilerplate_question(str(q.get("question", "")).strip())
+
         cleaned.append({
             "qtype": qt,
-            "question": str(q.get("question", "")).strip(),
+            "question": question,
             "options": opts,
             "correct": corr,
             "explanation": str(q.get("explanation", "")).strip()[:60],
@@ -404,10 +401,6 @@ def _generate_batch(cfg, text, subject, level_code, count, fast_mode, qtype):
 
 
 def generate_questions(cfg, text, subject, level, question_count, fast_mode: bool = False, qtype: str = "single"):
-    """
-    支援 qtype: single / true_false
-    支援 level: easy / medium / hard / mixed（mixed 會分三批生成再混合）
-    """
     text = _clean_text(text)
     text = text[: (8000 if fast_mode else 10000)]
 
@@ -431,26 +424,12 @@ def generate_questions(cfg, text, subject, level, question_count, fast_mode: boo
     return _generate_batch(cfg, text, subject, level, int(question_count), fast_mode, qtype)
 
 
-# ---- 匯入：固定 single（保持你現狀）----
+# ---- 匯入：固定 single（保持現狀）----
 def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode: bool = False, qtype: str = "single"):
     qtype = "single"
     raw_text = _clean_text(raw_text)[: (8000 if fast_mode else 10000)]
 
-    schema_hint = """
-每題必須包含：
-- qtype 固定 single
-- question
-- options（4個）
-- correct（1個）
-- explanation
-- needs_review
-"""
-
-    guess_rule = (
-        "若原文未提供答案，你必須推測最可能正確答案，但 needs_review=true，explanation 以「⚠️需教師確認：」開頭。"
-        if allow_guess
-        else "若原文未提供答案，correct=['1'] 並 needs_review=true，explanation 以「⚠️需教師確認：」開頭。"
-    )
+    guess_rule = "若原文未提供答案，你必須推測最可能正確答案，但 needs_review=true，explanation 以「⚠️需教師確認：」開頭。"
 
     temperature = 0.0 if fast_mode else 0.1
     max_tokens = 1600 if fast_mode else 2400
@@ -461,8 +440,8 @@ def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode:
 科目：{subject}
 目標題型：single（4選1）
 
-【最重要規則】
-- 原文若有答案（例如：答案：B / Answer: 2），必須跟從。
+【規則】
+- 原文若有答案必須跟從。
 - {guess_rule}
 - 每題都必須填 correct（不可留空）。
 
@@ -480,13 +459,14 @@ def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode:
         temperature=temperature,
         max_tokens=max_tokens,
         timeout=timeout,
-        schema_hint=schema_hint,
+        schema_hint="JSON array",
     )
 
     cleaned = []
     for q in items:
         opts = _normalize_options(q.get("options", []), "single")
         corr = _normalize_correct(q.get("correct", []), "single")
+
         expl = str(q.get("explanation", "")).strip()
         needs_review = bool(q.get("needs_review", False))
         if needs_review and not expl.startswith("⚠️需教師確認："):
@@ -494,7 +474,7 @@ def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode:
 
         cleaned.append({
             "qtype": "single",
-            "question": str(q.get("question", "")).strip(),
+            "question": _strip_boilerplate_question(str(q.get("question", "")).strip()),
             "options": opts,
             "correct": corr,
             "explanation": expl[:120],
@@ -542,7 +522,7 @@ def parse_import_questions_locally(raw_text: str):
 
         out.append({
             "qtype": "single",
-            "question": qstem,
+            "question": _strip_boilerplate_question(qstem),
             "options": options,
             "correct": [correct_num],
             "explanation": expl,
