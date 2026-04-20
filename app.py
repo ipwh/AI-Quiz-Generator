@@ -1,3 +1,7 @@
+# =========================
+# app.py — Final Stable Version
+# =========================
+
 import io
 import traceback
 import hashlib
@@ -5,14 +9,11 @@ import streamlit as st
 import pandas as pd
 
 from core.question_mapper import dicts_to_items, items_to_editor_df
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
 from exporters.export_kahoot import export_kahoot_excel
 from exporters.export_wayground_docx import export_wayground_docx
-
-
 from services.llm_service import (
-    xai_pick_vision_model, llm_ocr_extract_text,
+    xai_pick_vision_model,
+    llm_ocr_extract_text,
     generate_questions,
     assist_import_questions,
     parse_import_questions_locally,
@@ -21,143 +22,99 @@ from services.llm_service import (
 )
 from services.cache_service import load_cache, save_cache
 from extractors.extract import extract_text, extract_images_for_llm_ocr
-from exporters.export_kahoot import export_kahoot_excel
-from exporters.export_wayground_docx import export_wayground_docx
 from services.google_oauth import (
     oauth_is_configured,
     get_auth_url,
-    exchange_code_for_credentials,
-    credentials_to_dict,
     credentials_from_dict,
 )
 from services.google_forms_api import create_quiz_form
-
-if "imported_items" not in st.session_state:
-    st.session_state.imported_items = []
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
 
 # -------------------------
-# Session state init
+# Session State Init
 # -------------------------
 if "generated_items" not in st.session_state:
     st.session_state.generated_items = []
-
 if "imported_items" not in st.session_state:
     st.session_state.imported_items = []
 
-if "form_result_generate" not in st.session_state:
-    st.session_state.form_result_generate = None
+for k, v in {
+    "google_creds": None,
+    "mark_idx": set(),
+    "form_result_generate": None,
+    "form_result_import": None,
+}.items():
+    st.session_state.setdefault(k, v)
 
 # -------------------------
 # Helpers
 # -------------------------
-def stable_key(*parts) -> str:
-    raw = "||".join("" if p is None else str(p) for p in parts)
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-
 def show_exception(user_msg: str, e: Exception):
     st.error(user_msg)
-    with st.expander("🔎 技術細節（供維護用）"):
+    with st.expander("🔎 技術細節（維護用）"):
         st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)))
-
-
-def split_paragraphs(text: str):
-    return [p.strip() for p in (text or "").split("\n\n") if p.strip()]
-
-
-def build_text_with_highlights(raw_text: str, marked_idx: set, limit: int):
-    paras = split_paragraphs(raw_text)
-    highlights = [paras[i] for i in range(len(paras)) if i in marked_idx]
-    others = [paras[i] for i in range(len(paras)) if i not in marked_idx]
-
-    out = ""
-    if highlights:
-        out += "【重點段落（老師標記）】\n" + "\n\n".join(highlights) + "\n\n"
-    out += "【其餘教材】\n" + "\n\n".join(others)
-    return out[:limit]
-
-
-def to_editor_df(data, subject: str):
-    rows = []
-    for q in data or []:
-        opts = q.get("options", [])
-        if not isinstance(opts, list):
-            opts = []
-        opts = [str(x) for x in opts][:4]
-        while len(opts) < 4:
-            opts.append("")
-
-        corr = q.get("correct", ["1"])
-        if isinstance(corr, list):
-            corr_val = ",".join([str(x).strip() for x in corr if str(x).strip()])
-        else:
-            corr_val = str(corr).strip() or "1"
-
-        rows.append(
-            {
-                "export": True,
-                "subject": subject,
-                "qtype": "single",
-                "question": q.get("question", ""),
-                "option_1": opts[0],
-                "option_2": opts[1],
-                "option_3": opts[2],
-                "option_4": opts[3],
-                "correct": corr_val,
-                "explanation": q.get("explanation", ""),
-                "needs_review": bool(q.get("needs_review", False)),
-            }
-        )
-    return pd.DataFrame(rows)
-
 
 def drive_service(creds):
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
-
-def upload_bytes_to_drive(creds, filename: str, mimetype: str, data_bytes: bytes) -> dict:
+def upload_bytes_to_drive(creds, filename, mimetype, data_bytes):
     service = drive_service(creds)
-    media = MediaIoBaseUpload(io.BytesIO(data_bytes), mimetype=mimetype, resumable=False)
+    media = MediaIoBaseUpload(
+        io.BytesIO(data_bytes),
+        mimetype=mimetype,
+        resumable=False,
+    )
     meta = {"name": filename}
-    return service.files().create(body=meta, media_body=media, fields="id, webViewLink").execute()
+    return service.files().create(
+        body=meta,
+        media_body=media,
+        fields="id, webViewLink",
+    ).execute()
 
-
-def share_file_to_emails(creds, file_id: str, emails: list, role: str = "reader"):
+def share_file_to_emails(creds, file_id, emails):
     service = drive_service(creds)
     for email in emails:
-        email = str(email).strip()
-        if not email:
-            continue
-        body = {"type": "user", "role": role, "emailAddress": email}
-        service.permissions().create(fileId=file_id, body=body, sendNotificationEmail=True).execute()
+        body = {
+            "type": "user",
+            "role": "reader",
+            "emailAddress": email,
+        }
+        service.permissions().create(
+            fileId=file_id,
+            body=body,
+            sendNotificationEmail=True,
+        ).execute()
 
-
+# -------------------------
+# ✅ Export & Share Panel (FINAL)
+# -------------------------
 def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix: str):
-    panel_guard = f"_export_panel_rendered_{prefix}"
-    if st.session_state.get(panel_guard):
-        return
-    st.session_state[panel_guard] = True
+    """
+    FINAL STABLE EXPORT PANEL
+    - Excel / Word / Google Forms / Drive Email Share
+    - Render-guarded (no duplicate key)
+    - Stable button keys
+    """
 
-    """
-    匯出 Kahoot / Wayground / Google Forms + Google Drive 分享
-    ✅ key 穩定
-    ✅ Generate / Import 不衝突
-    """
+    # ✅ Render guard (critical)
+    guard_key = f"_export_panel_rendered_{prefix}"
+    if st.session_state.get(guard_key):
+        return
+    st.session_state[guard_key] = True
 
     if selected_df is None or selected_df.empty:
-        st.warning("⚠️ 尚未選擇任何題目（請在表格中勾選『匯出』欄）。")
+        st.warning("⚠️ 尚未選擇任何題目（請勾選『匯出』）。")
         return
 
-    # ✅ 穩定 panel key（只同 prefix 有關）
     panel_id = f"export_{prefix}"
 
     kahoot_bytes = export_kahoot_excel(selected_df)
     docx_bytes = export_wayground_docx(selected_df, subject_name)
 
-    # ✅ 唯一顯示位置
     st.markdown("## ⑤ 匯出 / Google Form / 電郵分享")
 
-    # ========= 下載（無需 Google） =========
+    # --------- Download ----------
     c1, c2 = st.columns(2)
     with c1:
         st.download_button(
@@ -176,72 +133,89 @@ def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix:
             key=f"dl_wayground_{panel_id}",
         )
 
-    # ========= Google Form =========
+    # --------- Google Form ----------
     st.markdown("### 🟦 Google Forms")
     if st.session_state.get("google_creds"):
-        if st.button(
-            "🟦 一鍵建立 Google Form Quiz",
-            key=f"btn_form_{panel_id}",
-        ):
-            with st.spinner("🟦 正在建立 Google Form…"):
-                creds = credentials_from_dict(st.session_state.google_creds)
-                result = create_quiz_form(
-                    creds,
-                    f"{subject_name} Quiz",
-                    selected_df,
-                )
-            st.session_state[f"form_result_{prefix}"] = result
-            st.success("✅ 已建立 Google Form")
+        if st.button("🟦 一鍵建立 Google Form Quiz", key=f"btn_form_{panel_id}"):
+            try:
+                with st.spinner("🟦 正在建立 Google Form…"):
+                    creds = credentials_from_dict(st.session_state.google_creds)
+                    result = create_quiz_form(
+                        creds,
+                        f"{subject_name} Quiz",
+                        selected_df,
+                    )
+                st.session_state[f"form_result_{prefix}"] = result
+                st.success("✅ 已成功建立 Google Form")
+            except Exception as e:
+                show_exception("⚠️ 建立 Google Form 失敗。", e)
 
         result = st.session_state.get(f"form_result_{prefix}")
         if result:
-            st.write("編輯連結：", result.get("editUrl"))
-            st.write("發佈連結：", result.get("responderUrl"))
-    else:
-        st.info("請先在左側登入 Google，才可一鍵建立 Google Form。")
+            st.markdown(f"🔗 **編輯連結：** {result.get('editUrl')}")
+            st.markdown(f"👥 **作答連結：** {result.get('responderUrl')}")
 
-    # ========= Drive 分享 =========
+    else:
+        st.info("請先在左側登入 Google。")
+
+    # --------- Drive Email Share ----------
     st.markdown("### 📧 一鍵電郵分享匯出檔（Google Drive）")
     if not st.session_state.get("google_creds"):
-        st.info("請先在左側登入 Google，才可用電郵分享檔案。")
+        st.info("請先登入 Google 才可使用電郵分享。")
         return
 
     emails_text = st.text_input(
         "收件人電郵（多個用逗號分隔）",
-        value="",
         key=f"emails_{panel_id}",
     )
     emails = [e.strip() for e in emails_text.split(",") if e.strip()]
 
     cA, cB = st.columns(2)
+
     with cA:
         if st.button("📧 分享 Kahoot Excel", key=f"btn_share_kahoot_{panel_id}"):
-            creds = credentials_from_dict(st.session_state.google_creds)
-            uploaded = upload_bytes_to_drive(
-                creds,
-                filename=f"{subject_name}_kahoot.xlsx",
-                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                data_bytes=kahoot_bytes,
-            )
-            share_file_to_emails(creds, uploaded["id"], emails)
+            if not emails:
+                st.warning("請先輸入至少一個電郵。")
+            else:
+                try:
+                    creds = credentials_from_dict(st.session_state.google_creds)
+                    uploaded = upload_bytes_to_drive(
+                        creds,
+                        f"{subject_name}_kahoot.xlsx",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        kahoot_bytes,
+                    )
+                    share_file_to_emails(creds, uploaded["id"], emails)
+                    st.success("✅ 已成功以電郵分享 Kahoot Excel")
+                    st.markdown(f"🔗 **檔案連結：** {uploaded.get('webViewLink')}")
+                except Exception as e:
+                    show_exception("⚠️ 電郵分享失敗。", e)
 
     with cB:
         if st.button("📧 分享 Wayground DOCX", key=f"btn_share_docx_{panel_id}"):
-            creds = credentials_from_dict(st.session_state.google_creds)
-            uploaded = upload_bytes_to_drive(
-                creds,
-                filename=f"{subject_name}_wayground.docx",
-                mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                data_bytes=docx_bytes,
-            )
-            share_file_to_emails(creds, uploaded["id"], emails)
+            if not emails:
+                st.warning("請先輸入至少一個電郵。")
+            else:
+                try:
+                    creds = credentials_from_dict(st.session_state.google_creds)
+                    uploaded = upload_bytes_to_drive(
+                        creds,
+                        f"{subject_name}_wayground.docx",
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        docx_bytes,
+                    )
+                    share_file_to_emails(creds, uploaded["id"], emails)
+                    st.success("✅ 已成功以電郵分享 Wayground DOCX")
+                    st.markdown(f"🔗 **檔案連結：** {uploaded.get('webViewLink')}")
+                except Exception as e:
+                    show_exception("⚠️ 電郵分享失敗。", e)
 
 # -------------------------
 # Page config + session
 # -------------------------
 st.set_page_config(page_title="AI 題目生成器", layout="wide")
-st.title("🏫 AI 題目生成器（新版介面）")
-st.caption("UI版本：UI-REDESIGN 2026-04-19 v1 ✅（見到呢句＝你已成功換到新版）")
+st.title("🏫 AI 題目生成器")
+
 
 for k, v in {
     "google_creds": None,
