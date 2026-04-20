@@ -4,7 +4,7 @@ import hashlib
 import streamlit as st
 import pandas as pd
 
-from core.question_mapper import dicts_to_items
+from core.question_mapper import dicts_to_items, items_to_editor_df
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
