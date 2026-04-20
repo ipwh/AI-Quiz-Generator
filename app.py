@@ -487,7 +487,7 @@ with tab_generate:
     if st.button("🪄 生成題目", ...):
         st.write("DEBUG: calling generate_questions")  # ✅ 臨時
         try:
-        ...
+            ...
 
     st.markdown("## ③ 生成題目")
     st.caption("按下後呼叫 AI 生成題目；若你選『混合』難度，系統會分層生成再混合。")
