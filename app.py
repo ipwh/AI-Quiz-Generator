@@ -393,9 +393,16 @@ with tab_generate:
     enable_llm_ocr = st.checkbox(
         "🖼️ 啟用 LLM 讀圖 OCR（適合掃描/截圖/圖表/幾何；較慢）",
         value=False,
-        help="當抽取到的文字太少或品質差，會把圖片/掃描PDF前幾頁交給 Grok 或其他LLM（DeepSeek欠缺OCR功能，不可用） 讀圖抽字，再用該文字出題。"
+        help=(
+            "當抽取到的文字太少或品質差，會把圖片/掃描 PDF 前幾頁交給 "
+            "Grok 或其他 LLM 讀圖抽字（DeepSeek 欠缺 OCR，不可用）。"
+        )
     )
-    llm_ocr_pdf_pages = st.selectbox("LLM OCR PDF頁數（只取前幾頁）", [1,2,3,4,5], index=2)
+    llm_ocr_pdf_pages = st.selectbox(
+        "LLM OCR PDF 頁數（只取前幾頁）",
+        [1, 2, 3, 4, 5],
+        index=2,
+    )
 
     files = st.file_uploader(
         "上載教材檔案",
@@ -409,34 +416,40 @@ with tab_generate:
         with st.spinner("📄 正在擷取文字…"):
             raw_text = "".join(extract_text(f) for f in files)
 
-        # ===== OCR 補強（與生成按鈕不同層級）=====
-        if enable_llm_ocr and can_call_ai(cfg):
-            if len(raw_text.strip()) < 200:
-                if preset == "Grok (xAI)":
-                    vision_model = xai_pick_vision_model(api_key, base_url)
-                    if vision_model:
-                        cfg2 = dict(cfg)
-                        cfg2["model"] = vision_model
-                    else:
-                        st.warning("⚠️ 找不到支援圖片輸入的 Grok 型號，LLM OCR 已略過。")
-                        cfg2 = None
+        # ===== OCR 補強 =====
+        if enable_llm_ocr and can_call_ai(cfg) and len(raw_text.strip()) < 200:
+            if preset == "Grok (xAI)":
+                vision_model = xai_pick_vision_model(api_key, base_url)
+                if vision_model:
+                    cfg2 = dict(cfg)
+                    cfg2["model"] = vision_model
                 else:
-                    cfg2 = cfg
+                    st.warning("⚠️ 找不到支援圖片輸入的 Grok 型號，已略過 LLM OCR。")
+                    cfg2 = None
+            else:
+                cfg2 = cfg
 
-                if cfg2:
-                    images = []
-                    for f in files:
-                        images.extend(extract_images_for_llm_ocr(
-                            f, pdf_max_pages=llm_ocr_pdf_pages, pdf_zoom=2.0
-                        ))
+            if cfg2:
+                images = []
+                for f in files:
+                    images.extend(
+                        extract_images_for_llm_ocr(
+                            f,
+                            pdf_max_pages=llm_ocr_pdf_pages,
+                            pdf_zoom=2.0,
+                        )
+                    )
 
-                    if images:
-                        with st.spinner("🖼️ 正在用 LLM 讀圖抽取文字…"):
-                            ocr_text = llm_ocr_extract_text(
-                                cfg2, images, lang_hint="zh-Hant", fast_mode=fast_mode
-                            )
-                        if ocr_text and len(ocr_text) > len(raw_text):
-                            raw_text = (ocr_text + "\n\n" + raw_text).strip()
+                if images:
+                    with st.spinner("🖼️ 正在用 LLM 讀圖抽取文字…"):
+                        ocr_text = llm_ocr_extract_text(
+                            cfg2,
+                            images,
+                            lang_hint="zh-Hant",
+                            fast_mode=fast_mode,
+                        )
+                    if ocr_text and len(ocr_text) > len(raw_text):
+                        raw_text = (ocr_text + "\n\n" + raw_text).strip()
 
         st.info(f"✅ 已擷取 {len(raw_text)} 字")
 
@@ -459,7 +472,9 @@ with tab_generate:
             for i, p in enumerate(paras[:80]):
                 checked = i in st.session_state.mark_idx
                 new_checked = st.checkbox(
-                    f"第 {i+1} 段", value=checked, key=f"para_{i}"
+                    f"第 {i+1} 段",
+                    value=checked,
+                    key=f"para_{i}",
                 )
                 if new_checked:
                     st.session_state.mark_idx.add(i)
@@ -474,13 +489,59 @@ with tab_generate:
     cfg = api_config()
     limit = 8000 if fast_mode else 10000
 
-    if st.button("🪄 生成題目",
-                 disabled=not (can_call_ai(cfg) and bool(raw_text.strip())),
-                 key="btn_generate"):
+    if st.button(
+        "🪄 生成題目",
+        disabled=not (can_call_ai(cfg) and bool(raw_text.strip())),
+        key="btn_generate",
+    ):
         try:
-            used_text = build_text_with_highlights(raw_text, st.session_state.mark_idx, limit)
-            ...
+            used_text = build_text_with_highlights(
+                raw_text,
+                st.session_state.mark_idx,
+                limit,
+            )
+            st.info(
+                f"送入 AI：{len(used_text)} 字（上限 {limit}）｜"
+                f"難度：{level_label}｜題數：{question_count}"
+            )
 
+            cache = load_cache()
+            PROMPT_VERSION = "fmtquota_v1"
+            qtype = "single"
+            cache_key = stable_key(
+                used_text,
+                subject,
+                level_code,
+                question_count,
+                fast_mode,
+                preset,
+                model,
+                base_url,
+                qtype,
+                PROMPT_VERSION,
+            )
+
+            if cache_key in cache:
+                st.success("✅ 已從快取讀取（節省時間與額度）")
+                st.session_state.generated_data = cache[cache_key]
+            else:
+                with st.spinner("🤖 正在生成…"):
+                    st.session_state.generated_data = generate_questions(
+                        cfg,
+                        used_text,
+                        subject,
+                        level_code,
+                        question_count,
+                        fast_mode=fast_mode,
+                        qtype=qtype,
+                    )
+                cache[cache_key] = st.session_state.generated_data
+                save_cache(cache)
+
+            st.session_state.form_result_generate = None
+
+        except Exception as e:
+            show_exception("⚠️ 生成題目失敗。", e)
 
 # =========================
 # Tab 2: Import
