@@ -767,6 +767,30 @@ with tab_import:
         st.markdown("## ③ 檢視與微調")
         st.caption("在表格內校對題幹、選項與答案，並勾選是否匯出。")
 
+# =================================================
+# ✅ 題目品質摘要（匯入現有題目）
+# =================================================
+if st.session_state.get("imported_items"):
+    items = st.session_state.imported_items
+
+    total_count = len(items)
+    review_count = sum(1 for q in items if q.needs_review)
+    ok_count = total_count - review_count
+
+    st.markdown("## ✅ 題目品質摘要")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.metric("✅ 通過題目", ok_count)
+    with c2:
+        st.metric("⚠️ 需教師留意", review_count)
+
+    if review_count > 0:
+        with st.expander("⚠️ 查看需教師留意的題目"):
+            for i, q in enumerate(items, start=1):
+                if q.needs_review:
+                    st.write(f"第 {i} 題：{q.question[:80]}…")
+        
         df = to_editor_df(st.session_state.imported_data, subject)
 
         c1, c2 = st.columns([1, 1])
