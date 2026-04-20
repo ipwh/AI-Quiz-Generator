@@ -409,35 +409,38 @@ with tab_generate:
         with st.spinner("📄 正在擷取文字…"):
             raw_text = "".join(extract_text(f) for f in files)
 
-# 若啟用 LLM OCR，且抽到文字太少，則用 Grok 讀圖補字
-if enable_llm_ocr and can_call_ai(cfg):
-    # 門檻：你可調（例如 <200 字）
-    if len(raw_text.strip()) < 200:
-        if preset == "Grok (xAI)":
-            vision_model = xai_pick_vision_model(api_key, base_url)
-            if vision_model:
-                cfg2 = dict(cfg)
-                cfg2["model"] = vision_model
-            else:
-                st.warning("⚠️ 找不到支援圖片輸入的 Grok 型號，LLM OCR 已略過。")
-                cfg2 = None
-        else:
-            # 其他供應商只有多模態模型才行（否則略過）
-            cfg2 = cfg
+        # ===== OCR 補強（與生成按鈕不同層級）=====
+        if enable_llm_ocr and can_call_ai(cfg):
+            if len(raw_text.strip()) < 200:
+                if preset == "Grok (xAI)":
+                    vision_model = xai_pick_vision_model(api_key, base_url)
+                    if vision_model:
+                        cfg2 = dict(cfg)
+                        cfg2["model"] = vision_model
+                    else:
+                        st.warning("⚠️ 找不到支援圖片輸入的 Grok 型號，LLM OCR 已略過。")
+                        cfg2 = None
+                else:
+                    cfg2 = cfg
 
-        if cfg2:
-            images = []
-            for f in files:
-                images.extend(extract_images_for_llm_ocr(f, pdf_max_pages=llm_ocr_pdf_pages, pdf_zoom=2.0))
+                if cfg2:
+                    images = []
+                    for f in files:
+                        images.extend(extract_images_for_llm_ocr(
+                            f, pdf_max_pages=llm_ocr_pdf_pages, pdf_zoom=2.0
+                        ))
 
-            if images:
-                with st.spinner("🖼️ 正在用 LLM 讀圖抽取文字…"):
-                    ocr_text = llm_ocr_extract_text(cfg2, images, lang_hint="zh-Hant", fast_mode=fast_mode)
-                if ocr_text and len(ocr_text) > len(raw_text):
-                    raw_text = (ocr_text + "\n\n" + raw_text).strip()
+                    if images:
+                        with st.spinner("🖼️ 正在用 LLM 讀圖抽取文字…"):
+                            ocr_text = llm_ocr_extract_text(
+                                cfg2, images, lang_hint="zh-Hant", fast_mode=fast_mode
+                            )
+                        if ocr_text and len(ocr_text) > len(raw_text):
+                            raw_text = (ocr_text + "\n\n" + raw_text).strip()
 
         st.info(f"✅ 已擷取 {len(raw_text)} 字")
 
+        # ===== ② 重點段落標記 =====
         st.markdown("## ② 重點段落標記（可選）")
         st.caption("勾選後會把重點段落放在最前面，提高貼題度。")
 
@@ -455,100 +458,28 @@ if enable_llm_ocr and can_call_ai(cfg):
 
             for i, p in enumerate(paras[:80]):
                 checked = i in st.session_state.mark_idx
-                new_checked = st.checkbox(f"第 {i+1} 段", value=checked, key=f"para_{i}")
+                new_checked = st.checkbox(
+                    f"第 {i+1} 段", value=checked, key=f"para_{i}"
+                )
                 if new_checked:
                     st.session_state.mark_idx.add(i)
                 else:
                     st.session_state.mark_idx.discard(i)
                 st.write(p[:200] + ("…" if len(p) > 200 else ""))
 
+    # ===== ③ 生成題目（一定顯示）=====
     st.markdown("## ③ 生成題目")
     st.caption("按下後呼叫 AI 生成題目；若你選『混合』難度，系統會分層生成再混合。")
 
     cfg = api_config()
     limit = 8000 if fast_mode else 10000
 
-    if st.button("🪄 生成題目", disabled=not (can_call_ai(cfg) and bool(raw_text.strip())), key="btn_generate"):
+    if st.button("🪄 生成題目",
+                 disabled=not (can_call_ai(cfg) and bool(raw_text.strip())),
+                 key="btn_generate"):
         try:
             used_text = build_text_with_highlights(raw_text, st.session_state.mark_idx, limit)
-            st.info(f"送入 AI：{len(used_text)} 字（上限 {limit}）｜難度：{level_label}｜題數：{question_count}")
-
-            cache = load_cache()
-            PROMPT_VERSION = "fmtquota_v1"
-            qtype = "single"
-            key = stable_key(used_text, subject, level_code, question_count, fast_mode, preset, model, base_url, qtype, PROMPT_VERSION)
-            
-            if key in cache:
-                st.success("✅ 已從快取讀取（節省時間與額度）")
-                st.session_state.generated_data = cache[key]
-            else:
-                with st.spinner("🤖 正在生成…"):
-                    st.session_state.generated_data = generate_questions(
-                        cfg,
-                        used_text,
-                        subject,
-                        level_code,
-                        question_count,
-                        fast_mode=fast_mode,
-                        qtype="single",
-                    )
-                cache[key] = st.session_state.generated_data
-                save_cache(cache)
-
-            st.session_state.form_result_generate = None
-
-        except Exception as e:
-            show_exception("⚠️ 生成題目失敗。", e)
-
-    if st.session_state.generated_data:
-        st.markdown("## ④ 檢視與微調")
-        st.caption("你可以在表格內直接修改題幹、選項、正確答案，並勾選是否匯出。")
-
-        df = to_editor_df(st.session_state.generated_data, subject)
-
-        c1, c2 = st.columns([1, 1])
-        with c1:
-            if st.button("✅ 全選匯出", key="btn_export_all_generate"):
-                df["export"] = True
-        with c2:
-            if st.button("全部取消匯出", key="btn_export_none_generate"):
-                df["export"] = False
-
-        edited = st.data_editor(
-            df,
-            use_container_width=True,
-            num_rows="dynamic",
-            column_config={
-                "export": st.column_config.CheckboxColumn("匯出", width="small"),
-                "correct": st.column_config.SelectboxColumn("正確答案（1-4）", options=["1","2","3","4"], width="small"),
-                "needs_review": st.column_config.CheckboxColumn("需教師確認", width="small"),
-            },
-            disabled=["subject", "qtype"],
-            key="editor_generate",
-        )
-        selected = edited[edited["export"] == True].copy()
-
-        st.success(f"✅ 已生成 {len(edited)} 題；已選擇匯出 {len(selected)} 題")
-
-        st.markdown("## ⑤ 匯出 / Google Form / 電郵分享")
-        st.caption("先勾選要匯出的題目，然後使用以下功能。")
-
-        if st.session_state.google_creds and not selected.empty:
-            if st.button("🟦 一鍵建立 Google Form Quiz", key="btn_form_generate"):
-                try:
-                    with st.spinner("🟦 正在建立 Google Form…"):
-                        creds = credentials_from_dict(st.session_state.google_creds)
-                        result = create_quiz_form(creds, f"{subject} Quiz", selected)
-                    st.session_state.form_result_generate = result
-                    st.success("✅ 已建立 Google Form")
-                except Exception as e:
-                    show_exception("⚠️ 建立 Google Form 失敗。", e)
-
-        if st.session_state.form_result_generate:
-            st.write("編輯連結：", st.session_state.form_result_generate.get("editUrl"))
-            st.write("發佈連結：", st.session_state.form_result_generate.get("responderUrl") or "（未提供 responderUri）")
-
-        export_and_share_panel(selected, subject, prefix="generate")
+            ...
 
 
 # =========================
