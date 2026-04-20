@@ -475,7 +475,9 @@ with tab_generate:
     # =================================================
     if st.session_state.generated_items:
         items = st.session_state.generated_items
-
+        
+        df = items_to_editor_df(items)
+        
         # ✅ 第一次顯示時，預設全選匯出
     if "export_init_generate" not in st.session_state:
         df["export"] = True
@@ -495,9 +497,7 @@ with tab_generate:
             st.metric("⚠️ 需教師留意", review_count)
 
         st.markdown("## ④ 檢視與微調")
-
-        df = items_to_editor_df(items)
-
+  
         edited = st.data_editor(
             df,
             width="stretch",
@@ -547,6 +547,7 @@ with tab_import:
         key="files_import",
     )
 
+    df = items_to_editor_df(items)
     
     if "export_init_import" not in st.session_state:
         df["export"] = True
@@ -622,7 +623,7 @@ with tab_import:
 
         st.markdown("## ④ 檢視與微調")
 
-        df = items_to_editor_df(items)
+        
 
         edited = st.data_editor(
             df,
