@@ -523,7 +523,7 @@ with tab_generate:
         export_and_share_panel(
             selected,
             subject,
-            prefix="generate",
+            prefix="import",
         )
 
 # =========================
@@ -582,7 +582,6 @@ with tab_import:
                 else:
                     data = parse_import_questions_locally(
                         raw_import_text,
-                        subject=subject,
                     )
 
             if not data:
