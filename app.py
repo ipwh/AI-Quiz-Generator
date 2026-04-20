@@ -202,7 +202,15 @@ for k, v in {
     if k not in st.session_state:
         st.session_state[k] = v
 
+# -------------------------
+# Session state init
+# -------------------------
+if "generated_items" not in st.session_state:
+    st.session_state.generated_items = []
 
+if "form_result_generate" not in st.session_state:
+    st.session_state.form_result_generate = None
+    
 # -------------------------
 # OAuth callback
 # -------------------------
