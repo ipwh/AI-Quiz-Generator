@@ -1,22 +1,12 @@
+
 import streamlit as st
 
 from extractors.extract import extract_text
-from core.question_mapper import dicts_to_items, items_to_editor_df, editor_df_to_items, items_to_export_df
+from core.question_mapper import dicts_to_items, items_to_editor_df, editor_df_to_items
 from core.validators import validate_questions
 
-try:
-    from ui.components_editor import render_editor
-    HAS_EDITOR_COMPONENT = True
-except Exception:
-    render_editor = None
-    HAS_EDITOR_COMPONENT = False
-
-try:
-    from ui.components_export import render_export_panel
-    HAS_EXPORT_COMPONENT = True
-except Exception:
-    render_export_panel = None
-    HAS_EXPORT_COMPONENT = False
+from ui.components_editor import render_editor
+from ui.components_export import render_export_panel
 
 NL = chr(10)
 DNL = chr(10) * 2
@@ -42,14 +32,6 @@ def _build_text_with_highlights(raw_text: str, marked_idx: set, limit: int):
 
 
 def render_generate_tab(ctx: dict):
-    """生成新題目頁。
-
-    ctx 必須包含：
-      - api_config(): dict
-      - can_call_ai(cfg): bool
-      - generate_questions(...) callable
-      - subject, level_code, level_label, question_count, fast_mode
-    """
     st.markdown("## ① 上載教材")
     st.caption("支援 PDF/DOCX/TXT/PPTX/XLSX/PNG/JPG。掃描/截圖可選擇啟用 LLM 讀圖 OCR（較慢，要選用Grok或ChatGPT等LLM，DeepSeek暫不支援）。")
 
@@ -69,7 +51,6 @@ def render_generate_tab(ctx: dict):
             raw_text = "".join(extract_text(f) for f in files)
         st.info(f"✅ 已擷取 {len(raw_text)} 字")
 
-        # ② 重點段落標記（可選）— 注意：不依賴 OCR checkbox
         st.markdown("## ② 重點段落標記（可選）")
         st.caption("勾選後會把重點段落放到最前面，提高貼題度。")
 
@@ -129,23 +110,14 @@ def render_generate_tab(ctx: dict):
             st.warning(f"⚠️ 有 {bad_count} 題需要教師檢查（建議先修正再匯出）")
 
         st.markdown("## ④ 檢視與微調")
-        df = items_to_editor_df(st.session_state.generated_items)
+        df = items_to_editor_df(st.session_state.generated_items, report=report)
+        edited, selected = render_editor(df, key="editor_generate")
 
-        if HAS_EDITOR_COMPONENT and render_editor is not None:
-            edited, selected = render_editor(df, key="editor_generate")
-        else:
-            edited = st.data_editor(df, use_container_width=True, num_rows="dynamic", key="editor_generate")
-            selected = edited[edited["export"] == True].copy() if "export" in edited.columns else edited.copy()
-
+        # update items and report after edits
         edited_items = editor_df_to_items(edited, default_subject=ctx["subject"], source="generate")
+        edited_report = validate_questions(edited_items)
         st.session_state.generated_items = edited_items
+        st.session_state.generated_report = edited_report
 
         st.markdown("## ⑤ 匯出 / Google Form / 電郵分享")
-        export_items = editor_df_to_items(selected, default_subject=ctx["subject"], source="generate")
-        export_df = items_to_export_df(export_items)
-
-        if HAS_EXPORT_COMPONENT and render_export_panel is not None:
-            render_export_panel(export_df, ctx["subject"], st.session_state.get("google_creds"), prefix="generate")
-        else:
-            st.info("（尚未接入 ui/components_export.py，暫時只顯示可匯出題目表格）")
-            st.dataframe(export_df, use_container_width=True)
+        render_export_panel(selected, ctx["subject"], st.session_state.get("google_creds"), prefix="generate")

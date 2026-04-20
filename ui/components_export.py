@@ -1,27 +1,33 @@
+
+import io
 import streamlit as st
 import pandas as pd
+
 from exporters.export_kahoot import export_kahoot
 from exporters.export_wayground_docx import export_wayground_docx
 from services.google_forms_api import create_quiz_form
 from services.google_oauth import credentials_from_dict
+
+from core.question_mapper import editor_df_to_items, items_to_export_df
+from core.validators import validate_questions, summarize_report
+
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
-import io
 
 
-def drive_service(creds):
+def _drive_service(creds):
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
 
-def upload_bytes_to_drive(creds, filename: str, mimetype: str, data_bytes: bytes) -> dict:
-    service = drive_service(creds)
+def _upload_bytes_to_drive(creds, filename: str, mimetype: str, data_bytes: bytes) -> dict:
+    service = _drive_service(creds)
     media = MediaIoBaseUpload(io.BytesIO(data_bytes), mimetype=mimetype, resumable=False)
     meta = {"name": filename}
     return service.files().create(body=meta, media_body=media, fields="id, webViewLink").execute()
 
 
-def share_file_to_emails(creds, file_id: str, emails: list, role: str = "reader"):
-    service = drive_service(creds)
+def _share_file_to_emails(creds, file_id: str, emails: list, role: str = "reader"):
+    service = _drive_service(creds)
     for email in emails:
         email = str(email).strip()
         if not email:
@@ -30,13 +36,58 @@ def share_file_to_emails(creds, file_id: str, emails: list, role: str = "reader"
         service.permissions().create(fileId=file_id, body=body, sendNotificationEmail=True).execute()
 
 
-def render_export_panel(selected_df: pd.DataFrame, subject: str, google_creds_dict, prefix: str):
+def render_export_panel(selected_df: pd.DataFrame, subject: str, google_creds_dict, prefix: str = "generate"):
+    """Export panel with validator quality gate (lenient default).
+
+    Lenient default behavior:
+      - By default, export ONLY ok questions.
+      - User can switch to include problematic questions.
+    """
+
     if selected_df is None or selected_df.empty:
         st.warning("⚠️ 尚未選擇任何題目（請勾選『匯出』欄）。")
         return
 
-    kahoot_bytes = export_kahoot(selected_df)
-    docx_bytes = export_wayground_docx(selected_df, subject)
+    # Convert selected df -> items -> validate
+    items = editor_df_to_items(selected_df, default_subject=subject, source=prefix)
+    report = validate_questions(items)
+    bad_count, err_counts = summarize_report(report)
+
+    # Display validator summary
+    if bad_count:
+        st.warning(f"⚠️ 有 {bad_count} 題未通過檢查。建議先修正，或選擇只匯出通過檢查的題目。")
+        with st.expander("🔎 查看檢查統計與問題清單", expanded=False):
+            st.write("常見問題統計：")
+            st.json(err_counts)
+            # show first few bad items
+            bad_rows = [r for r in report if not r.get('ok')]
+            st.write("未通過的題目（前 20 題）：")
+            st.dataframe(pd.DataFrame(bad_rows)[:20], use_container_width=True)
+    else:
+        st.success("✅ 所有已選題目均通過檢查")
+
+    # Lenient default: export only ok
+    default_mode = "只匯出通過檢查的題目（建議）"
+    mode = st.radio(
+        "匯出模式",
+        [default_mode, "仍然匯出包含問題的題目（不建議）"],
+        index=0,
+        horizontal=True,
+        key=f"export_mode_{prefix}",
+    )
+
+    ok_items = [it for it, r in zip(items, report) if r.get('ok')]
+    export_items = items if mode != default_mode else ok_items
+
+    if not export_items:
+        st.error("⚠️ 沒有任何題目可匯出（全部未通過檢查）。請先修正或降低匯出限制。")
+        return
+
+    export_df = items_to_export_df(export_items)
+
+    # Export files
+    kahoot_bytes = export_kahoot(export_df)
+    docx_bytes = export_wayground_docx(export_df, subject)
 
     c1, c2 = st.columns(2)
     with c1:
@@ -50,7 +101,7 @@ def render_export_panel(selected_df: pd.DataFrame, subject: str, google_creds_di
             try:
                 with st.spinner("🟦 正在建立 Google Form…"):
                     creds = credentials_from_dict(google_creds_dict)
-                    result = create_quiz_form(creds, f"{subject} Quiz", selected_df)
+                    result = create_quiz_form(creds, f"{subject} Quiz", export_df)
                 st.session_state[f"form_result_{prefix}"] = result
                 st.success("✅ 已建立 Google Form")
             except Exception as e:
@@ -74,26 +125,32 @@ def render_export_panel(selected_df: pd.DataFrame, subject: str, google_creds_di
     colA, colB = st.columns(2)
     with colA:
         if st.button("📧 分享 Kahoot Excel", key=f"btn_share_kahoot_{prefix}"):
-            creds = credentials_from_dict(google_creds_dict)
-            uploaded = upload_bytes_to_drive(
-                creds,
-                filename=f"{subject}_kahoot.xlsx",
-                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                data_bytes=kahoot_bytes,
-            )
-            share_file_to_emails(creds, uploaded["id"], emails, role="reader")
-            st.success("✅ 已分享 Kahoot 檔案")
-            st.write("Drive 連結：", uploaded.get("webViewLink"))
+            if not emails:
+                st.warning("請先輸入至少一個電郵。")
+            else:
+                creds = credentials_from_dict(google_creds_dict)
+                uploaded = _upload_bytes_to_drive(
+                    creds,
+                    filename=f"{subject}_kahoot.xlsx",
+                    mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    data_bytes=kahoot_bytes,
+                )
+                _share_file_to_emails(creds, uploaded["id"], emails, role="reader")
+                st.success("✅ 已分享 Kahoot 檔案")
+                st.write("Drive 連結：", uploaded.get("webViewLink"))
 
     with colB:
         if st.button("📧 分享 Wayground DOCX", key=f"btn_share_docx_{prefix}"):
-            creds = credentials_from_dict(google_creds_dict)
-            uploaded = upload_bytes_to_drive(
-                creds,
-                filename=f"{subject}_wayground.docx",
-                mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                data_bytes=docx_bytes,
-            )
-            share_file_to_emails(creds, uploaded["id"], emails, role="reader")
-            st.success("✅ 已分享 Wayground 檔案")
-            st.write("Drive 連結：", uploaded.get("webViewLink"))
+            if not emails:
+                st.warning("請先輸入至少一個電郵。")
+            else:
+                creds = credentials_from_dict(google_creds_dict)
+                uploaded = _upload_bytes_to_drive(
+                    creds,
+                    filename=f"{subject}_wayground.docx",
+                    mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    data_bytes=docx_bytes,
+                )
+                _share_file_to_emails(creds, uploaded["id"], emails, role="reader")
+                st.success("✅ 已分享 Wayground 檔案")
+                st.write("Drive 連結：", uploaded.get("webViewLink"))
