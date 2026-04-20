@@ -1,11 +1,12 @@
 # =========================
-# app.py — Final Stable Version
+# app.py — Final Stable Version (Surgically Fixed)
 # =========================
 
 import io
 import traceback
 import hashlib
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 
 from core.question_mapper import dicts_to_items, items_to_editor_df
@@ -46,8 +47,18 @@ for k, v in {
     "mark_idx": set(),
     "form_result_generate": None,
     "form_result_import": None,
+    # ✅ FIX 3: render guard keys reset every rerun at top-level init
+    "_export_panel_rendered_generate": False,
+    "_export_panel_rendered_import": False,
+    # ✅ FIX 4 (scroll): track current section
+    "current_section": None,
 }.items():
     st.session_state.setdefault(k, v)
+
+# ✅ FIX 3 (CRITICAL): Reset render guards at the START of every rerun
+# This must happen BEFORE any tab renders, so each rerun gets a fresh guard.
+st.session_state["_export_panel_rendered_generate"] = False
+st.session_state["_export_panel_rendered_import"] = False
 
 # -------------------------
 # Helpers
@@ -57,17 +68,14 @@ def build_text_with_highlights(raw_text: str, marked_idx: set, limit: int) -> st
     將教材文字分段，並把用家標記的重點段落放在前面，
     同時限制總字數（避免超過 LLM token 上限）。
     """
-
     if not raw_text:
         return ""
 
-    # 以空行分段
     paragraphs = [p.strip() for p in raw_text.split("\n\n") if p.strip()]
 
     if not paragraphs:
         return ""
 
-    # 標記段落（用家揀選的重點）
     highlighted = []
     others = []
 
@@ -89,19 +97,21 @@ def build_text_with_highlights(raw_text: str, marked_idx: set, limit: int) -> st
 
     final_text = "\n\n".join(combined)
 
-    # 控制最大長度（保護 token）
     if limit and len(final_text) > limit:
         final_text = final_text[:limit]
 
     return final_text
-    
+
+
 def show_exception(user_msg: str, e: Exception):
     st.error(user_msg)
     with st.expander("🔎 技術細節（維護用）"):
         st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)))
 
+
 def drive_service(creds):
     return build("drive", "v3", credentials=creds, cache_discovery=False)
+
 
 def upload_bytes_to_drive(creds, filename, mimetype, data_bytes):
     service = drive_service(creds)
@@ -117,6 +127,7 @@ def upload_bytes_to_drive(creds, filename, mimetype, data_bytes):
         fields="id, webViewLink",
     ).execute()
 
+
 def share_file_to_emails(creds, file_id, emails):
     service = drive_service(creds)
     for email in emails:
@@ -131,40 +142,46 @@ def share_file_to_emails(creds, file_id, emails):
             sendNotificationEmail=True,
         ).execute()
 
-# -------------------------
-# ✅ Export & Share Panel (FINAL)
-# -------------------------
-def export_and_share_panel(selected_df, subject, prefix):
-+    # ✅ 防止同一 rerun 內重複渲染（關鍵）
-+    panel_guard = f"_export_panel_rendered_{prefix}"
-+    if st.session_state.get(panel_guard):
-+        return
-+    st.session_state[panel_guard] = True
 
+# -------------------------
+# ✅ Export & Share Panel (SURGICALLY FIXED)
+# -------------------------
+def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix: str):
     """
-    FINAL STABLE EXPORT PANEL
-    - Excel / Word / Google Forms / Drive Email Share
-    - Render-guarded (no duplicate key)
-    - Stable button keys
+    SURGICALLY FIXED EXPORT PANEL
+    - FIX 1: Title (## ⑤) is rendered HERE only; removed from tab callers
+    - FIX 2: prefix correctly distinguishes generate vs import keys
+    - FIX 3: guard_key reset at top of rerun (see top-level code above),
+             so panel renders exactly once per rerun per prefix
+    - FIX 4: Stable button keys anchored to fixed prefix namespace
     """
+
+    # ✅ Render guard — prevents double-render within a single rerun
+    # (guard is pre-reset at top of every rerun, so it won't block legitimate renders)
+    guard_key = f"_export_panel_rendered_{prefix}"
+    if st.session_state.get(guard_key):
+        return
+    st.session_state[guard_key] = True
+
+    # ✅ FIX 5 (scroll): record that we are in export section
     st.session_state.current_section = "export"
+
+    # ✅ FIX 1: Title lives HERE and only HERE — tab callers must NOT render this title
+    st.markdown("## ⑤ 匯出 / Google Form / 電郵分享")
 
     if selected_df is None or selected_df.empty:
         st.warning("⚠️ 尚未選擇任何題目（請勾選『匯出』）。")
         return
 
+    # ✅ FIX 2: panel_id is based on the CORRECT prefix passed by caller
     panel_id = f"export_{prefix}"
 
     kahoot_bytes = export_kahoot_excel(selected_df)
     docx_bytes = export_wayground_docx(selected_df, subject_name)
 
-    st.markdown("## ⑤ 匯出 / Google Form / 電郵分享")
-
     # --------- Download ----------
     c1, c2 = st.columns(2)
     with c1:
-        st.session_state.keep_export_open = True
-        
         st.download_button(
             "⬇️ Kahoot Excel",
             data=kahoot_bytes,
@@ -173,8 +190,6 @@ def export_and_share_panel(selected_df, subject, prefix):
             key=f"dl_kahoot_{panel_id}",
         )
     with c2:
-        st.session_state.keep_export_open = True
-        
         st.download_button(
             "⬇️ Wayground DOCX",
             data=docx_bytes,
@@ -260,12 +275,12 @@ def export_and_share_panel(selected_df, subject, prefix):
                 except Exception as e:
                     show_exception("⚠️ 電郵分享失敗。", e)
 
+
 # -------------------------
 # Page config + session
 # -------------------------
 st.set_page_config(page_title="AI 題目生成器", layout="wide")
 st.title("🏫 AI 題目生成器")
-
 
 for k, v in {
     "google_creds": None,
@@ -279,7 +294,7 @@ for k, v in {
     if k not in st.session_state:
         st.session_state[k] = v
 
-    
+
 # -------------------------
 # OAuth callback
 # -------------------------
@@ -536,16 +551,12 @@ with tab_generate:
         except Exception as e:
             show_exception("⚠️ 生成題目失敗。", e)
 
-    st.markdown('<a name="export-section"></a>', unsafe_allow_html=True)
-    st.markdown("## ⑤ 匯出 / Google Form / 電郵分享")
     # =================================================
-    # ④＋⑤ 檢視、匯出（共用 panel）
+    # ④＋⑤ 檢視、匯出（Generate pipeline）
     # =================================================
-    st.session_state.current_section = "export"
     if st.session_state.generated_items:
         items = st.session_state.generated_items
 
-        # 題目品質摘要
         total_count = len(items)
         review_count = sum(1 for q in items if q.needs_review)
         ok_count = total_count - review_count
@@ -561,7 +572,6 @@ with tab_generate:
 
         df = items_to_editor_df(items)
 
-        # ✅ 第一次顯示時，預設全選匯出（避免匯出區永遠不顯示）
         if "export_init_generate" not in st.session_state:
             df["export"] = True
             st.session_state.export_init_generate = True
@@ -588,26 +598,30 @@ with tab_generate:
 
         selected = edited[edited["export"] == True].copy()
 
-        st.markdown('<a name="export-section"></a>', unsafe_allow_html=True)
-        
+        # ✅ FIX 1: Title is rendered INSIDE export_and_share_panel only.
+        #           Do NOT add st.markdown("## ⑤ ...") here.
+        # ✅ FIX 2: prefix="generate" (was wrongly "import" in original)
+        # ✅ FIX 5: HTML anchor for scroll-back after rerun
+        st.markdown('<a name="export-section-generate"></a>', unsafe_allow_html=True)
+
         export_and_share_panel(
             selected,
             subject,
-            prefix="import",
+            prefix="generate",  # ✅ FIXED from "import"
         )
-        # ✅ rerun 後，自動回到⑤ 匯出區
+
+        # ✅ FIX 5: Scroll back to export section after rerun using st.components
         if st.session_state.get("current_section") == "export":
-            st.markdown(
+            components.html(
                 """
                 <script>
-                const el = document.querySelector('a[name="export-section"]');
-                if (el) {
-                    el.scrollIntoView({behavior: "instant"});
-                }
+                window.parent.document.querySelector('a[name="export-section-generate"]')
+                    ?.scrollIntoView({behavior: "instant"});
                 </script>
                 """,
-                unsafe_allow_html=True,
+                height=0,
             )
+
 
 # =========================
 # Tab 2: Import
@@ -636,7 +650,6 @@ with tab_import:
                 extract_text(f) for f in import_files
             )
 
-    # ✅ AI assist toggle
     use_ai_assist = st.checkbox(
         "🤖（可選）啟用 AI 協助整理題目",
         value=True,
@@ -681,7 +694,7 @@ with tab_import:
             show_exception("⚠️ 整理並轉換失敗。", e)
 
     # =================================================
-    # ④＋⑤（匯入）
+    # ④＋⑤（Import pipeline）
     # =================================================
     if st.session_state.imported_items:
         items = st.session_state.imported_items
@@ -701,7 +714,6 @@ with tab_import:
 
         df = items_to_editor_df(items)
 
-        # ✅ 第一次顯示時，預設全選匯出（避免匯出區永遠不顯示）
         if "export_init_import" not in st.session_state:
             df["export"] = True
             st.session_state.export_init_import = True
@@ -728,23 +740,26 @@ with tab_import:
 
         selected = edited[edited["export"] == True].copy()
 
-        st.markdown('<a name="export-section"></a>', unsafe_allow_html=True)
-        
+        # ✅ FIX 1: Title is rendered INSIDE export_and_share_panel only.
+        #           Do NOT add st.markdown("## ⑤ ...") here.
+        # ✅ FIX 2: prefix="import" (correct)
+        # ✅ FIX 5: HTML anchor for scroll-back after rerun
+        st.markdown('<a name="export-section-import"></a>', unsafe_allow_html=True)
+
         export_and_share_panel(
             selected,
             subject,
-            prefix="import",
+            prefix="import",  # ✅ correct
         )
-        # ✅ rerun 後，自動回到⑤ 匯出區
+
+        # ✅ FIX 5: Scroll back to export section after rerun using st.components
         if st.session_state.get("current_section") == "export":
-            st.markdown(
+            components.html(
                 """
                 <script>
-                const el = document.querySelector('a[name="export-section"]');
-                if (el) {
-                    el.scrollIntoView({behavior: "instant"});
-                }
+                window.parent.document.querySelector('a[name="export-section-import"]')
+                    ?.scrollIntoView({behavior: "instant"});
                 </script>
                 """,
-                unsafe_allow_html=True,
-            )                                        
+                height=0,
+            )
