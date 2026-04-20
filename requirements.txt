@@ -1,12 +1,23 @@
-streamlit
-pandas
-requests
-pymupdf
-python-docx
-openpyxl
-python-pptx
-google-auth
-google-auth-oauthlib
-google-api-python-client
-pytesseract
-Pillow
+# ── Core UI ──────────────────────────────────────
+streamlit>=1.35.0
+
+# ── Data ─────────────────────────────────────────
+pandas>=2.0.0
+
+# ── HTTP / AI API ────────────────────────────────
+requests>=2.31.0
+
+# ── File Extraction ──────────────────────────────
+pymupdf>=1.23.0          # fitz：PDF 文字抽取 + 圖像渲染
+python-docx>=1.1.0       # DOCX 讀取
+openpyxl>=3.1.0          # XLSX 讀取
+python-pptx>=0.6.23      # PPTX 讀取
+
+# ── OCR（本地 Tesseract，可選）───────────────────
+pytesseract>=0.3.10
+Pillow>=10.0.0
+
+# ── Google APIs ──────────────────────────────────
+google-auth>=2.29.0
+google-auth-oauthlib>=1.2.0
+google-api-python-client>=2.126.0
