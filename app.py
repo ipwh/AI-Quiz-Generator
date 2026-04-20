@@ -630,7 +630,7 @@ if st.session_state.get("generated_items"):
 
     edited = st.data_editor(
         df,
-        use_container_width=True,
+        width="stretch",
         num_rows="dynamic",
         column_config={
             "export": st.column_config.CheckboxColumn("匯出", width="small"),
@@ -796,7 +796,7 @@ with tab_import:
 
         edited = st.data_editor(
             df,
-            use_container_width=True,
+            width="stretch",
             num_rows="dynamic",
             column_config={
                 "export": st.column_config.CheckboxColumn("匯出", width="small"),
