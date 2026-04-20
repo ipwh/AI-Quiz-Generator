@@ -11,7 +11,7 @@ from core.validators import validate_questions
 from ui.components_editor import render_editor
 from ui.components_export import render_export_panel
 
-# 為避免貼碼換行問題，不直接寫 "\n\n"
+# 防止貼碼換行問題
 NL = chr(10)
 DNL = chr(10) * 2
 
@@ -50,14 +50,14 @@ def render_generate_tab(ctx: dict):
       - subject, level_code, question_count, fast_mode
     """
 
-    # ========= ① 上載教材 =========
+    # ===== ① 上載教材 =====
     st.markdown("## ① 上載教材")
     st.caption(
         "支援 PDF/DOCX/TXT/PPTX/XLSX/PNG/JPG。"
         "掃描/截圖可選擇啟用 LLM 讀圖 OCR（較慢，要選用 Grok 或 ChatGPT 等多模態 LLM，DeepSeek 暫不支援）。"
     )
 
-    cfg = ctx["pi_config"
+    cfg = ctx["pi_config"]
     can_call_ai = ctx["can_call_ai"]
 
     files = st.file_uploader(
@@ -73,53 +73,38 @@ def render_generate_tab(ctx: dict):
             raw_text = "".join(extract_text(f) for f in files)
         st.info(f"✅ 已擷取 {len(raw_text)} 字")
 
-        # ========= ② 重點段落標記（一定顯示，不受 OCR 影響） =========
+        # ===== ② 重點段落標記（永遠顯示）=====
         st.markdown("## ② 重點段落標記（可選）")
         st.caption("勾選後會把重點段落放到最前面，提高貼題度。")
 
         paras = _split_paragraphs(raw_text)
-        with st.expander("⭐ 打開段落清單（最多顯示 80 段）", expanded=False):
-            st.caption(f"段落數：{len(paras)}（以空行分段）")
-
+        with st.expander("⭐ 打開段落清單（最多顯示 80 段）"):
             cA, cB = st.columns(2)
             with cA:
-                if st.button("✅ 全選重點段落", key="btn_mark_all"):
+                if st.button("✅ 全選重點段落"):
                     st.session_state.mark_idx = set(range(len(paras)))
             with cB:
-                if st.button("⛔ 全不選", key="btn_mark_none"):
+                if st.button("⛔ 全不選"):
                     st.session_state.mark_idx = set()
 
             for i, p in enumerate(paras[:80]):
                 checked = i in st.session_state.mark_idx
-                new_checked = st.checkbox(
-                    f"第 {i+1} 段",
-                    value=checked,
-                    key=f"para_{i}",
-                )
+                new_checked = st.checkbox(f"第 {i+1} 段", value=checked, key=f"para_{i}")
                 if new_checked:
                     st.session_state.mark_idx.add(i)
                 else:
                     st.session_state.mark_idx.discard(i)
                 st.write(p[:200] + ("…" if len(p) > 200 else ""))
 
-    # ========= ③ 生成題目（按鈕一定顯示） =========
+    # ===== ③ 生成題目（按鈕一定 render）=====
     st.markdown("## ③ 生成題目")
-    st.caption("完成教材上載及設定後，按此生成題目。")
-
     can_generate = bool(raw_text.strip()) and can_call_ai(cfg)
 
-    clicked = st.button(
+    if st.button(
         "🪄 生成題目",
-        key="btn_generate",
         disabled=not can_generate,
-        help=(
-            "請先上載教材並完成 AI API 設定"
-            if not can_generate
-            else "將根據目前教材與設定生成題目"
-        ),
-    )
-
-    if clicked:
+        help="請先上載教材並完成 AI API 設定" if not can_generate else "開始生成題目",
+    ):
         limit = 8000 if ctx.get("fast_mode") else 10000
         used_text = _build_text_with_highlights(
             raw_text,
@@ -134,15 +119,15 @@ def render_generate_tab(ctx: dict):
                 ctx["subject"],
                 ctx["level_code"],
                 ctx["question_count"],
-                fast_mode=ctx.get("fast_mode", Falseems = items
+                fast_mode=ctx.get("fast_mode",ted_items = items
         st.session_state.generated_report = report
 
-    # ========= ④ 檢視與微調 =========
+    # ===== ④ 檢視與微調 =====
     if st.session_state.get("generated_items"):
         report = st.session_state.get("generated_report", [])
         bad_count = len([x for x in report if not x.get("ok")])
         if bad_count:
-            st.warning(f"⚠️ 有 {bad_count} 題需要教師檢查（建議先修正再匯出）")
+            st.warning(f"⚠️ 有 {bad_count} 題需要教師檢查")
 
         st.markdown("## ④ 檢視與微調")
 
@@ -153,18 +138,15 @@ def render_generate_tab(ctx: dict):
 
         edited, selected = render_editor(df, key="editor_generate")
 
-        # Editor 修改後再驗證一次
         edited_items = editor_df_to_items(
             edited,
             default_subject=ctx["subject"],
             source="generate",
         )
-        edited_report = validate_questions(edited_items)
-
         st.session_state.generated_items = edited_items
-        st.session_state.generated_report = edited_report
+        st.session_state.generated_report = validate_questions(edited_items)
 
-        # ========= ⑤ 匯出 / Google Form / 電郵分享 =========
+        # ===== ⑤ 匯出 =====
         st.markdown("## ⑤ 匯出 / Google Form / 電郵分享")
         render_export_panel(
             selected,
