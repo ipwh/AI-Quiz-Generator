@@ -516,8 +516,7 @@ with tab_generate:
                 ),
             },
             disabled=["subject", "qtype"],
-            key="editor_generate",
-        )
+            )
 
         selected = edited[edited["export"] == True].copy()
 
