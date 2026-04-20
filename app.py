@@ -8,6 +8,8 @@ from core.question_mapper import dicts_to_items, items_to_editor_df
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 from exporters.export_kahoot import export_kahoot_excel
+from exporters.export_wayground_docx import export_wayground_docx
+
 
 from services.llm_service import (
     xai_pick_vision_model, llm_ocr_extract_text,
