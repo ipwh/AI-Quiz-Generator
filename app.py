@@ -133,6 +133,11 @@ def share_file_to_emails(creds, file_id: str, emails: list, role: str = "reader"
 
 
 def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix: str):
+    panel_guard = f"_export_panel_rendered_{prefix}"
+    if st.session_state.get(panel_guard):
+        return
+    st.session_state[panel_guard] = True
+
     """
     匯出 Kahoot / Wayground / Google Forms + Google Drive 分享
     ✅ key 穩定
