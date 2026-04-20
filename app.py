@@ -125,7 +125,7 @@ def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix:
         st.warning("⚠️ 尚未選擇任何題目（請在表格中勾選『匯出』欄）。")
         return
 
-    kahoot_bytes = export_kahoot(selected_df)
+    kahoot_bytes = export_kahoot_excel(selected_df)
     docx_bytes = export_wayground_docx(selected_df, subject_name)
 
     c1, c2 = st.columns(2)
