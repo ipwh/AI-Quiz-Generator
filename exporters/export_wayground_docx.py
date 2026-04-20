@@ -1,57 +1,30 @@
-import io
+from io import BytesIO
 from docx import Document
 
-_MAP = {"1": "A", "2": "B", "3": "C", "4": "D"}
 
-def _normalize_correct_to_letters(value) -> str:
-    if value is None:
-        return ""
-    if isinstance(value, list):
-        corr = [str(x).strip() for x in value]
-    else:
-        corr = [x.strip() for x in str(value).split(",") if x.strip()]
-    letters = []
-    for c in corr:
-        if c in _MAP and _MAP[c] not in letters:
-            letters.append(_MAP[c])
-    return ",".join(letters)
-
-def export_wayground_docx(df, subject: str = "", include_explanation: bool = True):
+def export_wayground_docx(df, subject: str) -> bytes:
+    """
+    匯出 Wayground / 教學用 DOCX。
+    """
     doc = Document()
-    title = f"Wayground 題目（{subject}）" if subject else "Wayground 題目"
-    doc.add_heading(title, level=1)
+    doc.add_heading(f"{subject} 題目練習", level=1)
 
-    q_num = 1
-    for _, row in df.iterrows():
-        q = str(row.get("question", "")).strip()
-        if not q:
-            continue
+    for i, r in df.iterrows():
+        doc.add_paragraph(f"{i+1}. {r['question']}")
 
-        qtype = str(row.get("qtype", "single")).strip()
-        if qtype == "true_false":
-            o1, o2, o3, o4 = "對", "錯", "", ""
-        else:
-            o1 = str(row.get("option_1", "")).strip()
-            o2 = str(row.get("option_2", "")).strip()
-            o3 = str(row.get("option_3", "")).strip()
-            o4 = str(row.get("option_4", "")).strip()
+        doc.add_paragraph(f"A. {r['option_1']}")
+        doc.add_paragraph(f"B. {r['option_2']}")
+        doc.add_paragraph(f"C. {r['option_3']}")
+        doc.add_paragraph(f"D. {r['option_4']}")
 
-        correct_letters = _normalize_correct_to_letters(row.get("correct", "1"))
-        expl = str(row.get("explanation", "")).strip()
+        correct = r["correct"]
+        doc.add_paragraph(f"✅ 正確答案：{correct}")
 
-        doc.add_paragraph(f"{q_num}. [{qtype}] {q}")
-        doc.add_paragraph(f"A. {o1}")
-        doc.add_paragraph(f"B. {o2}")
-        if o3 or o4:
-            doc.add_paragraph(f"C. {o3}")
-            doc.add_paragraph(f"D. {o4}")
+        if r.get("explanation"):
+            doc.add_paragraph(f"解說：{r['explanation']}")
 
-        doc.add_paragraph(f"答案：{correct_letters}")
-        if include_explanation and expl:
-            doc.add_paragraph(f"解說：{expl}")
         doc.add_paragraph("")
-        q_num += 1
 
-    buf = io.BytesIO()
-    doc.save(buf)
-    return buf.getvalue()
+    bio = BytesIO()
+    doc.save(bio)
+    return bio.getvalue()
