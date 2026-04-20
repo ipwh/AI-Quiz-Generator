@@ -133,21 +133,71 @@ def share_file_to_emails(creds, file_id: str, emails: list, role: str = "reader"
 
 
 def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix: str):
-    """匯出 Kahoot/Wayground +（可選）用 Google Drive 一鍵電郵分享。"""
+    """匯出 Kahoot/Wayground + Google Forms +（可選）Google Drive 一鍵電郵分享。
+
+    設計原則：
+    - 下載按鈕永遠顯示（不需 Google 登入）
+    - Google Forms / Drive 分享需要先在左側登入 Google
+    - 所有 widget key 以 prefix 區分，避免 DuplicateElementKey
+    """
+
     if selected_df is None or selected_df.empty:
         st.warning("⚠️ 尚未選擇任何題目（請在表格中勾選『匯出』欄）。")
         return
 
+    # 先產出匯出檔 bytes（供下載 / Drive 上載共用）
+    kahoot_bytes = export_kahoot_excel(selected_df)
+    docx_bytes = export_wayground_docx(selected_df, subject_name)
+
+    st.markdown("## ⑤ 匯出 / Google Form / 電郵分享")
+    st.caption("先勾選要匯出的題目，然後使用以下功能。")
+
     c1, c2 = st.columns(2)
     with c1:
-        st.caption("用途：匯入 Kahoot / Quiz 平台（只包含已勾選題目）")
+        st.download_button(
+            "⬇️ Kahoot Excel",
+            data=kahoot_bytes,
+            file_name=f"{subject_name}_kahoot.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key=f"dl_kahoot_{prefix}",
+        )
+        st.caption("用途：匯入 Kahoot（只包含已勾選題目）")
+
     with c2:
+        st.download_button(
+            "⬇️ Wayground DOCX",
+            data=docx_bytes,
+            file_name=f"{subject_name}_wayground.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            key=f"dl_wayground_{prefix}",
+        )
         st.caption("用途：Wayground / 校內工作紙（只包含已勾選題目）")
 
+    # Google Form
+    st.markdown("### 🟦 Google Forms")
+    if st.session_state.get("google_creds"):
+        if st.button("🟦 一鍵建立 Google Form Quiz", key=f"btn_form_{prefix}"):
+            try:
+                with st.spinner("🟦 正在建立 Google Form…"):
+                    creds = credentials_from_dict(st.session_state.google_creds)
+                    result = create_quiz_form(creds, f"{subject_name} Quiz", selected_df)
+                st.session_state[f"form_result_{prefix}"] = result
+                st.success("✅ 已建立 Google Form")
+            except Exception as e:
+                show_exception("⚠️ 建立 Google Form 失敗。", e)
+
+        r = st.session_state.get(f"form_result_{prefix}")
+        if r:
+            st.write("編輯連結：", r.get("editUrl"))
+            st.write("發佈連結：", r.get("responderUrl") or "（未提供 responderUri）")
+    else:
+        st.info("請先在左側登入 Google，才可一鍵建立 Google Form。")
+
+    # Drive share
     st.markdown("### 📧 一鍵電郵分享匯出檔（Google Drive）")
     st.caption("會先把檔案上載到你的 Google Drive，然後分享並寄出通知電郵。")
 
-    if not st.session_state.google_creds:
+    if not st.session_state.get("google_creds"):
         st.info("請先在左側登入 Google，才可用電郵分享檔案。")
         return
 
@@ -191,8 +241,7 @@ def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix:
                     st.success("✅ 已分享 Wayground 檔案（Google 會寄出通知電郵）")
                     st.write("Drive 連結：", uploaded.get("webViewLink"))
                 except Exception as e:
-                    show_exception("⚠️ 分享 DOCX 檔案失敗。", e)
-
+                    show_exception("⚠️ 分享 Wayground 檔案失敗。", e)
 
 # -------------------------
 # Page config + session
@@ -475,15 +524,7 @@ with tab_generate:
     # =================================================
     if st.session_state.generated_items:
         items = st.session_state.generated_items
-        
-        df = items_to_editor_df(items)
-        
-        # ✅ 第一次顯示時，預設全選匯出
-    if "export_init_generate" not in st.session_state:
-        df["export"] = True
-        st.session_state.export_init_import = True
 
-        
         # 題目品質摘要
         total_count = len(items)
         review_count = sum(1 for q in items if q.needs_review)
@@ -497,12 +538,18 @@ with tab_generate:
             st.metric("⚠️ 需教師留意", review_count)
 
         st.markdown("## ④ 檢視與微調")
-  
+
+        df = items_to_editor_df(items)
+
+        # ✅ 第一次顯示時，預設全選匯出（避免匯出區永遠不顯示）
+        if "export_init_generate" not in st.session_state:
+            df["export"] = True
+            st.session_state.export_init_generate = True
+
         edited = st.data_editor(
             df,
             width="stretch",
             num_rows="dynamic",
-            key="editor_generate",
             column_config={
                 "export": st.column_config.CheckboxColumn("匯出", width="small"),
                 "correct": st.column_config.SelectboxColumn(
@@ -516,7 +563,8 @@ with tab_generate:
                 ),
             },
             disabled=["subject", "qtype"],
-            )
+            key="editor_generate",
+        )
 
         selected = edited[edited["export"] == True].copy()
 
@@ -546,12 +594,6 @@ with tab_import:
         accept_multiple_files=True,
         key="files_import",
     )
-
-    df = items_to_editor_df(items)
-    
-    if "export_init_import" not in st.session_state:
-        df["export"] = True
-        st.session_state.export_init_import = True
 
     raw_import_text = import_text.strip()
     if import_files:
@@ -623,7 +665,12 @@ with tab_import:
 
         st.markdown("## ④ 檢視與微調")
 
-        
+        df = items_to_editor_df(items)
+
+        # ✅ 第一次顯示時，預設全選匯出（避免匯出區永遠不顯示）
+        if "export_init_import" not in st.session_state:
+            df["export"] = True
+            st.session_state.export_init_import = True
 
         edited = st.data_editor(
             df,
