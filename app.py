@@ -148,6 +148,8 @@ def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix:
         return
     st.session_state[guard_key] = True
 
+    st.session_state.current_section = "export"
+
     if selected_df is None or selected_df.empty:
         st.warning("⚠️ 尚未選擇任何題目（請勾選『匯出』）。")
         return
@@ -162,6 +164,8 @@ def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix:
     # --------- Download ----------
     c1, c2 = st.columns(2)
     with c1:
+        st.session_state.keep_export_open = True
+        
         st.download_button(
             "⬇️ Kahoot Excel",
             data=kahoot_bytes,
@@ -170,6 +174,8 @@ def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix:
             key=f"dl_kahoot_{panel_id}",
         )
     with c2:
+        st.session_state.keep_export_open = True
+        
         st.download_button(
             "⬇️ Wayground DOCX",
             data=docx_bytes,
@@ -580,11 +586,27 @@ with tab_generate:
 
         selected = edited[edited["export"] == True].copy()
 
+        st.markdown('<a name="export-section"></a>', unsafe_allow_html=True)
+        st.markdown("## ⑤ 匯出 / Google Form / 電郵分享")
+
         export_and_share_panel(
             selected,
             subject,
             prefix="import",
         )
+        # ✅ rerun 後，自動回到⑤ 匯出區
+        if st.session_state.get("current_section") == "export":
+            st.markdown(
+                """
+                <script>
+                const el = document.querySelector('a[name="export-section"]');
+                if (el) {
+                    el.scrollIntoView({behavior: "instant"});
+                }
+                </script>
+                """,
+                unsafe_allow_html=True,
+            )
 
 # =========================
 # Tab 2: Import
@@ -705,8 +727,24 @@ with tab_import:
 
         selected = edited[edited["export"] == True].copy()
 
+        st.markdown('<a name="export-section"></a>', unsafe_allow_html=True)
+        st.markdown("## ⑤ 匯出 / Google Form / 電郵分享")
+
         export_and_share_panel(
             selected,
             subject,
             prefix="import",
         )
+        # ✅ rerun 後，自動回到⑤ 匯出區
+        if st.session_state.get("current_section") == "export":
+            st.markdown(
+                """
+                <script>
+                const el = document.querySelector('a[name="export-section"]');
+                if (el) {
+                    el.scrollIntoView({behavior: "instant"});
+                }
+                </script>
+                """,
+                unsafe_allow_html=True,
+            )                                        
