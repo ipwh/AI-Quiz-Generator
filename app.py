@@ -467,8 +467,7 @@ with tab_generate:
                     fast_mode=fast_mode, qtype="single",
                 )
 
-            if not 
-                st.error("❌ AI 沒有回傳任何題目")
+            if not st.error("❌ AI 沒有回傳任何題目")
             else:
                 st.session_state.generated_items = dicts_to_items(
                     data, subject=subject, source="generate",
