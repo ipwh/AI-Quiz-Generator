@@ -486,7 +486,7 @@ with tab_generate:
     # ===== ③ 生成題目（一定顯示）=====
     if st.button("🪄 生成題目", ...):
     st.write("DEBUG: calling generate_questions")  # ✅ 臨時
-    try:
+        try:
         ...
 
     st.markdown("## ③ 生成題目")
