@@ -22,7 +22,7 @@ from services.llm_service import (
 from services.cache_service import load_cache, save_cache
 from extractors.extract import extract_text
 from extractors.extract import extract_images_for_llm_ocr
-from exporters.export_kahoot import export_kahoot
+from exporters.export_kahoot import export_kahoot_excel
 from exporters.export_wayground_docx import export_wayground_docx
 from services.google_oauth import (
     oauth_is_configured,
