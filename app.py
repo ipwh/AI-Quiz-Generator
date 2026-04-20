@@ -666,26 +666,7 @@ if st.session_state.get("generated_items"):
     if selected.empty:
         st.info("請先在上方表格勾選要匯出的題目。")
     else:
-        # -------- Kahoot Excel --------
-        kahoot_bytes = export_kahoot_excel(selected)
-        st.download_button(
-            "⬇️ 匯出 Kahoot Excel",
-            data=kahoot_bytes,
-            file_name="kahoot_questions.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="dl_kahoot_generate",
-        )
-
-        # -------- Wayground DOCX --------
-        docx_bytes = export_wayground_docx(selected, subject)
-        st.download_button(
-            "⬇️ 匯出 Wayground DOCX",
-            data=docx_bytes,
-            file_name="wayground_questions.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            key="dl_wayground_generate",
-        )
-
+        
         # -------- Google Form Quiz --------
         if st.session_state.google_creds:
             if st.button("🟦 一鍵建立 Google Form Quiz", key="btn_form_generate"):
