@@ -482,9 +482,9 @@ with tab_generate:
                     st.session_state.mark_idx.discard(i)
                 st.write(p[:200] + ("…" if len(p) > 200 else ""))
 
-    # ===== ③ 題目（一定顯示）=====
-    st.markdown("## ③ 題目")
-    st.caption("按下後呼叫 AI 生成題目；若你選『混合』難度，系統會分層生成再混合。")
+    # ===== ③ 生成題目 =====
+    st.markdown("## ③ 生成題目")
+    st.caption("按下後呼叫 AI 生成題目；完成後會自動跳到題目編輯區。")
 
     limit = 8000 if fast_mode else 10000
 
@@ -493,18 +493,15 @@ with tab_generate:
         disabled=not (can_call_ai(cfg) and bool(raw_text.strip())),
         key="btn_generate",
     ):
-        st.write("DEBUG: button clicked")
-        st.write("DEBUG cfg =", cfg)
-        st.write("DEBUG raw_text_len =", len(raw_text.strip()))
-
         try:
             used_text = build_text_with_highlights(
-                raw_text, st.session_state.mark_idx, limit
+                raw_text,
+                st.session_state.mark_idx,
+                limit,
             )
-            st.write("DEBUG used_text_len =", len(used_text))
 
             with st.spinner("🤖 正在生成…"):
-                data = generate_questions(
+                items = generate_questions(
                     cfg,
                     used_text,
                     subject,
@@ -514,19 +511,27 @@ with tab_generate:
                     qtype="single",
                 )
 
-                st.write("DEBUG generate_questions returned:", data)
+            if not items:
+                st.error("❌ AI 沒有回傳任何題目")
+            else:
+                st.session_state.generated_items = dicts_to_items(
+                    items,
+                    subject=subject,
+                    source="generate",
+                )
 
-                if not data:
-                    st.error("❌ AI 沒有回傳任何題目")
-                else:
-                    st.session_state.generated_data = data
-                    st.session_state.generated_items = dicts_to_items(
-                        data,
-                        subject=subject,
-                        source="generate",
-                    )
-                    st.success(f"✅ 成功生成 {len(data)} 題")
-
+                # ✅ 自動 scroll 到 ④
+                st.markdown(
+                    """
+                    <script>
+                    const el = document.getElementById("section-review");
+                    if (el) {
+                        el.scrollIntoView({behavior: "smooth"});
+                    }
+                    </script>
+                    """,
+                    unsafe_allow_html=True,
+                )
 
         except Exception as e:
             show_exception("⚠️ 生成題目失敗。", e)
