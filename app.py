@@ -1,14 +1,14 @@
 # =========================
-# app.py — Final Stable Version (Surgically Fixed)
+# app.py — Cleaned & Fixed
 # =========================
 
 import io
 import traceback
-import hashlib
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
 
+from core.session_state import init_session_state          # ✅ 使用已有的初始化模組
 from core.question_mapper import dicts_to_items, items_to_editor_df
 from exporters.export_kahoot import export_kahoot_excel
 from exporters.export_wayground_docx import export_wayground_docx
@@ -35,28 +35,11 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
 # -------------------------
-# Session State Init
+# Session State Init（只呼叫一次，由 session_state.py 統一管理）
 # -------------------------
-if "generated_items" not in st.session_state:
-    st.session_state.generated_items = []
-if "imported_items" not in st.session_state:
-    st.session_state.imported_items = []
+init_session_state()
 
-for k, v in {
-    "google_creds": None,
-    "mark_idx": set(),
-    "form_result_generate": None,
-    "form_result_import": None,
-    # ✅ FIX 3: render guard keys reset every rerun at top-level init
-    "_export_panel_rendered_generate": False,
-    "_export_panel_rendered_import": False,
-    # ✅ FIX 4 (scroll): track current section
-    "current_section": None,
-}.items():
-    st.session_state.setdefault(k, v)
-
-# ✅ FIX 3 (CRITICAL): Reset render guards at the START of every rerun
-# This must happen BEFORE any tab renders, so each rerun gets a fresh guard.
+# ✅ Reset render guards at START of every rerun
 st.session_state["_export_panel_rendered_generate"] = False
 st.session_state["_export_panel_rendered_import"] = False
 
@@ -64,154 +47,95 @@ st.session_state["_export_panel_rendered_import"] = False
 # Helpers
 # -------------------------
 def build_text_with_highlights(raw_text: str, marked_idx: set, limit: int) -> str:
-    """
-    將教材文字分段，並把用家標記的重點段落放在前面，
-    同時限制總字數（避免超過 LLM token 上限）。
-    """
     if not raw_text:
         return ""
-
     paragraphs = [p.strip() for p in raw_text.split("\n\n") if p.strip()]
-
     if not paragraphs:
         return ""
-
     highlighted = []
     others = []
-
     for idx, p in enumerate(paragraphs):
         if idx in marked_idx:
             highlighted.append(p)
         else:
             others.append(p)
-
     combined = []
-
     if highlighted:
         combined.append("【重點段落】")
         combined.extend(highlighted)
-
     if others:
         combined.append("【其餘內容】")
         combined.extend(others)
-
     final_text = "\n\n".join(combined)
-
     if limit and len(final_text) > limit:
         final_text = final_text[:limit]
-
     return final_text
-
 
 def show_exception(user_msg: str, e: Exception):
     st.error(user_msg)
     with st.expander("🔎 技術細節（維護用）"):
         st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)))
 
-
 def drive_service(creds):
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
-
 def upload_bytes_to_drive(creds, filename, mimetype, data_bytes):
     service = drive_service(creds)
-    media = MediaIoBaseUpload(
-        io.BytesIO(data_bytes),
-        mimetype=mimetype,
-        resumable=False,
-    )
+    media = MediaIoBaseUpload(io.BytesIO(data_bytes), mimetype=mimetype, resumable=False)
     meta = {"name": filename}
-    return service.files().create(
-        body=meta,
-        media_body=media,
-        fields="id, webViewLink",
-    ).execute()
-
+    return service.files().create(body=meta, media_body=media, fields="id, webViewLink").execute()
 
 def share_file_to_emails(creds, file_id, emails):
     service = drive_service(creds)
     for email in emails:
-        body = {
-            "type": "user",
-            "role": "reader",
-            "emailAddress": email,
-        }
-        service.permissions().create(
-            fileId=file_id,
-            body=body,
-            sendNotificationEmail=True,
-        ).execute()
-
+        body = {"type": "user", "role": "reader", "emailAddress": email}
+        service.permissions().create(fileId=file_id, body=body, sendNotificationEmail=True).execute()
 
 # -------------------------
-# ✅ Export & Share Panel (SURGICALLY FIXED)
+# Export & Share Panel
 # -------------------------
 def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix: str):
-    """
-    SURGICALLY FIXED EXPORT PANEL
-    - FIX 1: Title (## ⑤) is rendered HERE only; removed from tab callers
-    - FIX 2: prefix correctly distinguishes generate vs import keys
-    - FIX 3: guard_key reset at top of rerun (see top-level code above),
-             so panel renders exactly once per rerun per prefix
-    - FIX 4: Stable button keys anchored to fixed prefix namespace
-    """
-
-    # ✅ Render guard — prevents double-render within a single rerun
-    # (guard is pre-reset at top of every rerun, so it won't block legitimate renders)
     guard_key = f"_export_panel_rendered_{prefix}"
     if st.session_state.get(guard_key):
         return
     st.session_state[guard_key] = True
-
-    # ✅ FIX 5 (scroll): record that we are in export section
     st.session_state.current_section = "export"
 
-    # ✅ FIX 1: Title lives HERE and only HERE — tab callers must NOT render this title
     st.markdown("## ⑤ 匯出 / Google Form / 電郵分享")
 
     if selected_df is None or selected_df.empty:
         st.warning("⚠️ 尚未選擇任何題目（請勾選『匯出』）。")
         return
 
-    # ✅ FIX 2: panel_id is based on the CORRECT prefix passed by caller
     panel_id = f"export_{prefix}"
-
     kahoot_bytes = export_kahoot_excel(selected_df)
     docx_bytes = export_wayground_docx(selected_df, subject_name)
 
-    # --------- Download ----------
     c1, c2 = st.columns(2)
     with c1:
         st.download_button(
-            "⬇️ Kahoot Excel",
-            data=kahoot_bytes,
+            "⬇️ Kahoot Excel", data=kahoot_bytes,
             file_name=f"{subject_name}_kahoot.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key=f"dl_kahoot_{panel_id}",
         )
     with c2:
         st.download_button(
-            "⬇️ Wayground DOCX",
-            data=docx_bytes,
+            "⬇️ Wayground DOCX", data=docx_bytes,
             file_name=f"{subject_name}_wayground.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             key=f"dl_wayground_{panel_id}",
         )
 
-    # --------- Google Form ----------
     st.markdown("### 🟦 Google Forms")
     if st.session_state.get("google_creds"):
         if st.button("🟦 一鍵建立 Google Form Quiz", key=f"btn_form_{panel_id}"):
             try:
                 with st.spinner("🟦 正在建立 Google Form…"):
                     creds = credentials_from_dict(st.session_state.google_creds)
-                    result = create_quiz_form(
-                        creds,
-                        f"{subject_name} Quiz",
-                        selected_df,
-                    )
-                st.session_state[f"form_result_{prefix}"] = result
-                st.success("✅ 已成功建立 Google Form")
+                    result = create_quiz_form(creds, f"{subject_name} Quiz", selected_df)
+                    st.session_state[f"form_result_{prefix}"] = result
+                    st.success("✅ 已成功建立 Google Form")
             except Exception as e:
                 show_exception("⚠️ 建立 Google Form 失敗。", e)
 
@@ -219,24 +143,18 @@ def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix:
         if result:
             st.markdown(f"🔗 **編輯連結：** {result.get('editUrl')}")
             st.markdown(f"👥 **作答連結：** {result.get('responderUrl')}")
-
     else:
         st.info("請先在左側登入 Google。")
 
-    # --------- Drive Email Share ----------
     st.markdown("### 📧 一鍵電郵分享匯出檔（Google Drive）")
     if not st.session_state.get("google_creds"):
         st.info("請先登入 Google 才可使用電郵分享。")
         return
 
-    emails_text = st.text_input(
-        "收件人電郵（多個用逗號分隔）",
-        key=f"emails_{panel_id}",
-    )
+    emails_text = st.text_input("收件人電郵（多個用逗號分隔）", key=f"emails_{panel_id}")
     emails = [e.strip() for e in emails_text.split(",") if e.strip()]
 
     cA, cB = st.columns(2)
-
     with cA:
         if st.button("📧 分享 Kahoot Excel", key=f"btn_share_kahoot_{panel_id}"):
             if not emails:
@@ -245,8 +163,7 @@ def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix:
                 try:
                     creds = credentials_from_dict(st.session_state.google_creds)
                     uploaded = upload_bytes_to_drive(
-                        creds,
-                        f"{subject_name}_kahoot.xlsx",
+                        creds, f"{subject_name}_kahoot.xlsx",
                         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         kahoot_bytes,
                     )
@@ -264,8 +181,7 @@ def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix:
                 try:
                     creds = credentials_from_dict(st.session_state.google_creds)
                     uploaded = upload_bytes_to_drive(
-                        creds,
-                        f"{subject_name}_wayground.docx",
+                        creds, f"{subject_name}_wayground.docx",
                         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                         docx_bytes,
                     )
@@ -275,25 +191,11 @@ def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix:
                 except Exception as e:
                     show_exception("⚠️ 電郵分享失敗。", e)
 
-
 # -------------------------
-# Page config + session
+# Page config
 # -------------------------
 st.set_page_config(page_title="AI 題目生成器", layout="wide")
 st.title("🏫 AI 題目生成器")
-
-for k, v in {
-    "google_creds": None,
-    "generated_data": None,
-    "imported_data": None,
-    "imported_text": "",
-    "mark_idx": set(),
-    "form_result_generate": None,
-    "form_result_import": None,
-}.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
-
 
 # -------------------------
 # OAuth callback
@@ -307,17 +209,14 @@ if oauth_is_configured() and "code" in params and not st.session_state.google_cr
             code = code[0]
         if isinstance(state, list):
             state = state[0]
-
         creds = exchange_code_for_credentials(code=code, returned_state=state)
         st.session_state.google_creds = credentials_to_dict(creds)
-
         st.query_params.clear()
         st.rerun()
     except Exception as e:
         st.query_params.clear()
         show_exception("Google 登入失敗。請重新按『連接 Google（登入）』一次。", e)
         st.stop()
-
 
 # -------------------------
 # Sidebar: Google connect
@@ -337,13 +236,11 @@ else:
 
 st.sidebar.divider()
 
-
 # -------------------------
 # Sidebar: AI API config
 # -------------------------
 fast_mode = st.sidebar.checkbox(
-    "⚡ 快速模式",
-    value=True,
+    "⚡ 快速模式", value=True,
     help="較快、較保守：較短輸出與較短超時；適合日常快速出題。",
 )
 st.sidebar.caption("關閉快速模式：較慢，但題目更豐富/更有變化。")
@@ -383,11 +280,9 @@ if preset == "Azure OpenAI":
         azure_deployment = st.text_input("Deployment name", value="", key="azure_deployment")
         azure_api_version = st.text_input("API version", value="2024-02-15-preview", key="azure_api_version")
 
-
 @st.cache_data(ttl=600, show_spinner=False)
 def _detect_xai_model_cached(k: str, u: str) -> str:
     return get_xai_default_model(k, u)
-
 
 if preset == "Grok (xAI)" and auto_xai and api_key:
     detected = _detect_xai_model_cached(api_key, base_url)
@@ -395,12 +290,11 @@ if preset == "Grok (xAI)" and auto_xai and api_key:
         model = detected
         st.sidebar.caption(f"✅ 已自動選用：{model}")
 
-
 def api_config():
     if preset == "Azure OpenAI":
-        return {"type": "azure", "api_key": api_key, "endpoint": azure_endpoint, "deployment": azure_deployment, "api_version": azure_api_version}
+        return {"type": "azure", "api_key": api_key, "endpoint": azure_endpoint,
+                "deployment": azure_deployment, "api_version": azure_api_version}
     return {"type": "openai_compat", "api_key": api_key, "base_url": base_url, "model": model}
-
 
 def can_call_ai(cfg: dict):
     if not cfg.get("api_key"):
@@ -409,8 +303,6 @@ def can_call_ai(cfg: dict):
         return bool(cfg.get("endpoint")) and bool(cfg.get("deployment"))
     return bool(cfg.get("base_url")) and bool(cfg.get("model"))
 
-
-# API test
 st.sidebar.divider()
 st.sidebar.header("🧪 API 連線測試")
 cfg_test = api_config()
@@ -420,27 +312,24 @@ if st.sidebar.button("🧪 一鍵測試 API（回覆 OK）", key="btn_ping_api")
     else:
         with st.sidebar.spinner("正在測試連線…"):
             r = ping_llm(cfg_test, timeout=25)
-        if r.get("ok"):
-            st.sidebar.success(f"✅ 成功：{r.get('latency_ms', 0)} ms；回覆：{r.get('output','')}")
-        else:
-            st.sidebar.error("❌ 失敗：請檢查 Key/Endpoint/Model 或服務狀態")
-            st.sidebar.code(r.get("error", ""))
+            if r.get("ok"):
+                st.sidebar.success(f"✅ 成功：{r.get('latency_ms', 0)} ms；回覆：{r.get('output','')}")
+            else:
+                st.sidebar.error("❌ 失敗：請檢查 Key/Endpoint/Model 或服務狀態")
+                st.sidebar.code(r.get("error", ""))
 
 st.sidebar.divider()
-
-# Teaching settings
 st.sidebar.header("📘 出題設定")
 subject = st.sidebar.selectbox(
     "科目",
-    ["中國語文","英國語文","數學","公民與社會發展","科學","公民、經濟及社會","物理","化學","生物","地理","歷史","中國歷史","宗教",
-     "資訊及通訊科技（ICT）","經濟","企業、會計與財務概論","旅遊與款待"],
+    ["中國語文","英國語文","數學","公民與社會發展","科學","公民、經濟及社會","物理","化學","生物",
+     "地理","歷史","中國歷史","宗教","資訊及通訊科技（ICT）","經濟","企業、會計與財務概論","旅遊與款待"],
     key="subject",
 )
 level_label = st.sidebar.radio(
     "🎯 難度",
     ["基礎（理解與記憶）", "標準（應用與理解）", "進階（分析與思考）", "混合（課堂活動建議）"],
-    index=1,
-    key="level_label",
+    index=1, key="level_label",
 )
 level_map = {
     "基礎（理解與記憶）": "easy",
@@ -449,16 +338,13 @@ level_map = {
     "混合（課堂活動建議）": "mixed",
 }
 level_code = level_map[level_label]
-
 question_count = st.sidebar.selectbox("🧮 題目數目（生成用）", [5, 8, 10, 12, 15, 20], index=2, key="question_count")
-
 
 # -------------------------
 # Main: flow guide + tabs
 # -------------------------
 with st.expander("🧭 使用流程（建議）", expanded=True):
-    st.markdown(
-        """
+    st.markdown("""
 **🪄 生成新題目（推薦）**
 1. 左側完成：Google 登入（可選）＋設定 AI API
 2. 選科目、難度、題目數目
@@ -470,18 +356,16 @@ with st.expander("🧭 使用流程（建議）", expanded=True):
 1. 上載/貼上題目內容 →（可選）啟用 AI 協助整理
 2. 按「整理並轉換」→ 在表格內校對答案
 3. 匯出 / 建 Google Form / 電郵分享
-        """
-    )
+""")
 
 tab_generate, tab_import = st.tabs(["🪄 生成新題目", "📄 匯入現有題目"])
-
 
 # =========================
 # Tab 1: Generate
 # =========================
 with tab_generate:
     st.markdown("## ① 上載教材")
-    st.caption("上載教材後由 AI 生成題目。")
+    st.caption("上載教材後由 AI 生成題目。支援 PDF/DOCX/TXT/PPTX/XLSX/PNG/JPG。")
 
     cfg = api_config()
 
@@ -492,9 +376,8 @@ with tab_generate:
     )
 
     files = st.file_uploader(
-        "上載教材檔案",
-        accept_multiple_files=True,
-        type=["pdf", "docx", "txt", "pptx", "xlsx"],
+        "上載教材檔案", accept_multiple_files=True,
+        type=["pdf", "docx", "txt", "pptx", "xlsx", "png", "jpg", "jpeg"],
         key="files_generate",
     )
 
@@ -502,12 +385,32 @@ with tab_generate:
     if files:
         with st.spinner("📄 正在擷取文字…"):
             raw_text = "".join(extract_text(f) for f in files)
-
         st.info(f"✅ 已擷取 {len(raw_text)} 字")
+
+    # ===== ② 重點段落標記 =====
+    st.markdown("## ② 重點段落標記（可選）")
+    st.caption("勾選後會把重點段落放到最前面，提高貼題度。")
+
+    paragraphs = [p.strip() for p in raw_text.split("\n\n") if p.strip()]
+    with st.expander("⭐ 打開段落清單（最多顯示 80 段）"):
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("✅ 全選重點段落", key="mark_all"):
+                st.session_state.mark_idx = set(range(len(paragraphs)))
+        with c2:
+            if st.button("⛔ 全不選", key="mark_none"):
+                st.session_state.mark_idx = set()
+        for i, p in enumerate(paragraphs[:80]):
+            checked = i in st.session_state.mark_idx
+            new_checked = st.checkbox(f"第 {i+1} 段", value=checked, key=f"para_{i}")
+            if new_checked:
+                st.session_state.mark_idx.add(i)
+            else:
+                st.session_state.mark_idx.discard(i)
+            st.write(p[:200] + ("…" if len(p) > 200 else ""))
 
     # ===== ③ 生成題目 =====
     st.markdown("## ③ 生成題目")
-
     limit = 8000 if fast_mode else 10000
 
     if st.button(
@@ -523,40 +426,28 @@ with tab_generate:
                 except Exception:
                     pass
 
-            used_text = build_text_with_highlights(
-                raw_text, st.session_state.mark_idx, limit
-            )
+            used_text = build_text_with_highlights(raw_text, st.session_state.mark_idx, limit)
 
             with st.spinner("🤖 正在生成…"):
                 data = generate_questions(
-                    cfg,
-                    used_text,
-                    subject,
-                    level_code,
-                    question_count,
-                    fast_mode=fast_mode,
-                    qtype="single",
+                    cfg, used_text, subject, level_code, question_count,
+                    fast_mode=fast_mode, qtype="single",
                 )
 
-            if not data:
+            if not 
                 st.error("❌ AI 沒有回傳任何題目")
             else:
-                st.session_state.generated_items = dicts_to_items(
-                    data,
-                    subject=subject,
-                    source="generate",
-                )
+                st.session_state.generated_items = dicts_to_items(data, subject=subject, source="generate")
+                # ✅ 重置 export 初始化旗標，確保新題目預設全勾選
+                st.session_state.pop("export_init_generate", None)
                 st.success(f"✅ 成功生成 {len(st.session_state.generated_items)} 題")
 
         except Exception as e:
             show_exception("⚠️ 生成題目失敗。", e)
 
-    # =================================================
-    # ④＋⑤ 檢視、匯出（Generate pipeline）
-    # =================================================
+    # ===== ④＋⑤ 檢視、匯出 =====
     if st.session_state.generated_items:
         items = st.session_state.generated_items
-
         total_count = len(items)
         review_count = sum(1 for q in items if q.needs_review)
         ok_count = total_count - review_count
@@ -569,197 +460,126 @@ with tab_generate:
             st.metric("⚠️ 需教師留意", review_count)
 
         st.markdown("## ④ 檢視與微調")
-
         df = items_to_editor_df(items)
 
+        # ✅ 只在第一次顯示時預設全勾選；生成新題目後旗標已被清除，會重新全勾
         if "export_init_generate" not in st.session_state:
             df["export"] = True
             st.session_state.export_init_generate = True
 
         edited = st.data_editor(
             df,
-            width="stretch",
+            use_container_width=True,
             num_rows="dynamic",
             column_config={
                 "export": st.column_config.CheckboxColumn("匯出", width="small"),
                 "correct": st.column_config.SelectboxColumn(
-                    "正確答案（1–4）",
-                    options=["1", "2", "3", "4"],
-                    width="small",
+                    "正確答案（1–4）", options=["1", "2", "3", "4"], width="small",
                 ),
-                "needs_review": st.column_config.CheckboxColumn(
-                    "需教師確認",
-                    width="small",
-                ),
+                "needs_review": st.column_config.CheckboxColumn("需教師確認", width="small"),
             },
             disabled=["subject", "qtype"],
             key="editor_generate",
         )
 
         selected = edited[edited["export"] == True].copy()
+        st.markdown('<div id="export_section_generate"></div>', unsafe_allow_html=True)
+        export_and_share_panel(selected, subject, prefix="generate")
 
-        # ✅ FIX 1: Title is rendered INSIDE export_and_share_panel only.
-        #           Do NOT add st.markdown("## ⑤ ...") here.
-        # ✅ FIX 2: prefix="generate" (was wrongly "import" in original)
-        # ✅ FIX 5: HTML anchor for scroll-back after rerun
-        st.markdown('<a name="export-section-generate"></a>', unsafe_allow_html=True)
-
-        export_and_share_panel(
-            selected,
-            subject,
-            prefix="generate",  # ✅ FIXED from "import"
-        )
-
-        # ✅ FIX 5: Scroll back to export section after rerun using st.components
         if st.session_state.get("current_section") == "export":
-            components.html(
-                """
-                <script>
-                window.parent.document.querySelector('a[name="export-section-generate"]')
-                    ?.scrollIntoView({behavior: "instant"});
-                </script>
-                """,
-                height=0,
-            )
-
+            components.html("""
+<script>
+var el = document.getElementById('export_section_generate');
+if (el) { el.scrollIntoView({behavior: 'smooth'}); }
+</script>
+""", height=0)
 
 # =========================
 # Tab 2: Import
 # =========================
 with tab_import:
-    st.markdown("## ① 匯入現有題目")
-    st.caption("貼上或上載題目，整理成標準單選題。")
-
-    import_text = st.text_area(
-        "貼上題目內容",
-        height=280,
-        key="import_text",
-    )
-
-    import_files = st.file_uploader(
-        "上載 DOCX / TXT / PDF",
-        type=["docx", "txt", "pdf"],
-        accept_multiple_files=True,
-        key="files_import",
-    )
-
-    raw_import_text = import_text.strip()
-    if import_files:
-        with st.spinner("📄 正在擷取文字…"):
-            raw_import_text += "\n\n" + "".join(
-                extract_text(f) for f in import_files
-            )
-
-    use_ai_assist = st.checkbox(
-        "🤖（可選）啟用 AI 協助整理題目",
-        value=True,
-        help="關閉後只使用本地規則拆題，不會呼叫 AI。",
-    )
-
-    st.markdown("## ② 整理並轉換")
+    st.markdown("## ① 上載 / 貼上題目")
+    st.caption("支援 DOCX/TXT 或直接貼上。匯入模式固定為單選（4選1）。")
 
     cfg = api_config()
 
+    def load_import_file_to_textbox():
+        f = st.session_state.get("import_file")
+        if f is None:
+            return
+        st.session_state.imported_text = extract_text(f) or ""
+
+    st.file_uploader(
+        "上載 DOCX/TXT（自動載入到文字框）",
+        type=["docx", "txt"], key="import_file",
+        on_change=load_import_file_to_textbox,
+    )
+
+    use_ai_assist = st.checkbox("啟用 AI 協助整理（建議）", value=True, key="use_ai_assist")
+    st.text_area("貼上題目內容", height=320, key="imported_text")
+
+    st.markdown("## ② 整理並轉換")
     if st.button(
         "✨ 整理並轉換",
-        disabled=not raw_import_text.strip(),
+        disabled=not (bool(st.session_state.get("imported_text", "").strip())
+                      and (not use_ai_assist or can_call_ai(cfg))),
         key="btn_import_parse",
     ):
+        raw = st.session_state.get("imported_text", "").strip()
         try:
-            with st.spinner("🧠 正在整理題目…"):
-                if use_ai_assist and can_call_ai(cfg):
+            with st.spinner("🧠 正在整理…"):
+                if use_ai_assist:
                     data = assist_import_questions(
-                        cfg,
-                        raw_import_text,
-                        subject,
-                        fast_mode=fast_mode,
-                        qtype="single",
+                        cfg, raw, subject,
+                        allow_guess=True, fast_mode=fast_mode, qtype="single",
                     )
                 else:
-                    data = parse_import_questions_locally(
-                        raw_import_text,
-                    )
+                    data = parse_import_questions_locally(raw)
 
-            if not data:
-                st.error("❌ 無法解析任何題目")
-            else:
-                st.session_state.imported_items = dicts_to_items(
-                    data,
-                    subject=subject,
-                    source="import",
-                )
-                st.success(f"✅ 成功整理 {len(st.session_state.imported_items)} 題")
+            items = dicts_to_items(data, subject=subject, source="import")
+            st.session_state.imported_items = items
+            st.session_state.imported_report = []
+            st.success(f"✅ 已整理 {len(items)} 題")
 
         except Exception as e:
-            show_exception("⚠️ 整理並轉換失敗。", e)
+            st.warning("⚠️ AI 整理失敗，改用本地拆題作備援，請老師核對答案。")
+            data = parse_import_questions_locally(raw)
+            items = dicts_to_items(data, subject=subject, source="local")
+            st.session_state.imported_items = items
+            st.session_state.imported_report = []
+            st.exception(e)
 
-    # =================================================
-    # ④＋⑤（Import pipeline）
-    # =================================================
     if st.session_state.imported_items:
-        items = st.session_state.imported_items
+        st.markdown("## ③ 檢視與微調")
 
-        total_count = len(items)
-        review_count = sum(1 for q in items if q.needs_review)
-        ok_count = total_count - review_count
-
-        st.markdown("## ✅ 題目品質摘要")
-        c1, c2 = st.columns(2)
-        with c1:
-            st.metric("✅ 通過題目", ok_count)
-        with c2:
-            st.metric("⚠️ 需教師留意", review_count)
-
-        st.markdown("## ④ 檢視與微調")
-
-        df = items_to_editor_df(items)
-
+        df = items_to_editor_df(st.session_state.imported_items)
         if "export_init_import" not in st.session_state:
             df["export"] = True
             st.session_state.export_init_import = True
 
         edited = st.data_editor(
             df,
-            width="stretch",
+            use_container_width=True,
             num_rows="dynamic",
             column_config={
                 "export": st.column_config.CheckboxColumn("匯出", width="small"),
                 "correct": st.column_config.SelectboxColumn(
-                    "正確答案（1–4）",
-                    options=["1", "2", "3", "4"],
-                    width="small",
+                    "正確答案（1–4）", options=["1", "2", "3", "4"], width="small",
                 ),
-                "needs_review": st.column_config.CheckboxColumn(
-                    "需教師確認",
-                    width="small",
-                ),
+                "needs_review": st.column_config.CheckboxColumn("需教師確認", width="small"),
             },
             disabled=["subject", "qtype"],
             key="editor_import",
         )
 
         selected = edited[edited["export"] == True].copy()
+        st.markdown('<div id="export_section_import"></div>', unsafe_allow_html=True)
+        export_and_share_panel(selected, subject, prefix="import")
 
-        # ✅ FIX 1: Title is rendered INSIDE export_and_share_panel only.
-        #           Do NOT add st.markdown("## ⑤ ...") here.
-        # ✅ FIX 2: prefix="import" (correct)
-        # ✅ FIX 5: HTML anchor for scroll-back after rerun
-        st.markdown('<a name="export-section-import"></a>', unsafe_allow_html=True)
-
-        export_and_share_panel(
-            selected,
-            subject,
-            prefix="import",  # ✅ correct
-        )
-
-        # ✅ FIX 5: Scroll back to export section after rerun using st.components
         if st.session_state.get("current_section") == "export":
-            components.html(
-                """
-                <script>
-                window.parent.document.querySelector('a[name="export-section-import"]')
-                    ?.scrollIntoView({behavior: "instant"});
-                </script>
-                """,
-                height=0,
-            )
+            components.html("""
+<script>
+var el = document.getElementById('export_section_import');
+if (el) { el.scrollIntoView({behavior: 'smooth'}); }
+</script>
+""", height=0)
