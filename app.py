@@ -26,6 +26,7 @@ from services.google_oauth import (
     oauth_is_configured,
     get_auth_url,
     exchange_code_for_credentials,
+    credentials_to_dict,
     credentials_from_dict,
 )
 from services.google_forms_api import create_quiz_form
