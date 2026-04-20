@@ -149,7 +149,6 @@ def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix:
     kahoot_bytes = export_kahoot_excel(selected_df)
     docx_bytes = export_wayground_docx(selected_df, subject_name)
 
-    st.markdown("## ⑤ 匯出 / Google Form / 電郵分享")
     st.caption("先勾選要匯出的題目，然後使用以下功能。")
 
     c1, c2 = st.columns(2)
@@ -159,7 +158,7 @@ def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix:
             data=kahoot_bytes,
             file_name=f"{subject_name}_kahoot.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key=f"dl_kahoot_{prefix}",
+            key=f"dl_kahoot_{prefix}_panel",
         )
         st.caption("用途：匯入 Kahoot（只包含已勾選題目）")
 
@@ -169,7 +168,7 @@ def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix:
             data=docx_bytes,
             file_name=f"{subject_name}_wayground.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            key=f"dl_wayground_{prefix}",
+            key=f"dl_wayground_{prefix}_panel",
         )
         st.caption("用途：Wayground / 校內工作紙（只包含已勾選題目）")
 
@@ -568,12 +567,6 @@ with tab_generate:
 
         selected = edited[edited["export"] == True].copy()
 
-        st.markdown("## ⑤ 匯出 / Google Form / 電郵分享")
-        export_and_share_panel(
-            selected,
-            subject,
-            prefix="import",
-        )
 
 # =========================
 # Tab 2: Import
