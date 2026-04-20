@@ -7,6 +7,7 @@ import pandas as pd
 from core.question_mapper import dicts_to_items, items_to_editor_df
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
+from exporters.export_kahoot import export_kahoot_excel
 
 from services.llm_service import (
     xai_pick_vision_model, llm_ocr_extract_text,
@@ -587,20 +588,6 @@ items = st.session_state.generated_items
 total_count = len(items)
 review_count = sum(1 for q in items if q.needs_review)
 ok_count = total_count - review_count
-
-st.markdown("## ✅ 題目品質摘要")
-
-c1, c2 = st.columns(2)
-with c1:
-    st.metric("✅ 通過題目", ok_count)
-with c2:
-    st.metric("⚠️ 需教師留意", review_count)
-
-if review_count > 0:
-    with st.expander("⚠️ 查看需教師留意的題目"):
-        for i, q in enumerate(items, start=1):
-            if q.needs_review:
-                st.write(f"第 {i} 題：{q.question[:80]}…")
 
 # =================================================
 # ④ 檢視與微調（題目品質摘要 + 編輯）
