@@ -1,3 +1,4 @@
+
 import streamlit as st
 
 from extractors.extract import extract_text
@@ -11,7 +12,6 @@ from core.validators import validate_questions
 from ui.components_editor import render_editor
 from ui.components_export import render_export_panel
 
-
 # 為避免貼碼時 \n 被破壞
 NL = chr(10)
 DNL = chr(10) * 2
@@ -20,6 +20,7 @@ DNL = chr(10) * 2
 # -------------------------
 # Helpers
 # -------------------------
+
 def _split_paragraphs(text: str):
     return [p.strip() for p in (text or "").split(DNL) if p.strip()]
 
@@ -42,9 +43,10 @@ def _build_text_with_highlights(raw_text: str, marked_idx: set, limit: int):
 # -------------------------
 # Page: Generate
 # -------------------------
+
 def render_generate_tab(ctx: dict):
     """
-    生成新題目頁面（語法修正最終穩定版）
+    生成新題目頁面（語法正確、按鈕一定顯示）
 
     ctx 必須包含：
       - api_config(): dict
@@ -60,7 +62,7 @@ def render_generate_tab(ctx: dict):
         "掃描／截圖可選擇啟用 LLM 讀圖 OCR（較慢）。"
     )
 
-    cfg = ctx["api_config"]
+    cfg = ctx["api_config"]()
     can_call_ai = ctx["can_call_ai"]
 
     files = st.file_uploader(
@@ -76,7 +78,7 @@ def render_generate_tab(ctx: dict):
             raw_text = "".join(extract_text(f) for f in files)
         st.info(f"✅ 已擷取 {len(raw_text)} 字")
 
-        # ===== ② 重點段落標記（永遠顯示）=====
+        # ===== ② 重點段落標記 =====
         st.markdown("## ② 重點段落標記（可選）")
         st.caption("勾選後會把重點段落放到最前面，提高貼題度。")
 
@@ -103,7 +105,7 @@ def render_generate_tab(ctx: dict):
                     st.session_state.mark_idx.discard(i)
                 st.write(p[:200] + ("…" if len(p) > 200 else ""))
 
-    # ===== ③ 生成題目（按鈕一定 render）=====
+    # ===== ③ 生成題目（按鈕一定 render） =====
     st.markdown("## ③ 生成題目")
 
     can_generate = bool(raw_text.strip()) and can_call_ai(cfg)
@@ -124,18 +126,21 @@ def render_generate_tab(ctx: dict):
         )
 
         with st.spinner("🤖 正在生成題目（約需 10–30 秒）…"):
-            data = ctx["generate_questions"](
+            data = ctx
                 cfg,
                 used_text,
                 ctx["subject"],
                 ctx["level_code"],
                 ctx["question_count"],
-                fast_mode=ctx.get("fast_mode", False)
-            )
-            items = dicts_to_items(data)
-            report = validate_questions(items)
-            st.session_state.generated_items = items
-            st.session_state.generated_report = report
+                fast_mode=ctx.get("fast_mode", False),
+                qtype="single",
+            
+
+        items = dicts_to_items(data, subject=ctx["subject"], source="generate")
+        report = validate_questions(items)
+
+        st.session_state.generated_items = items
+        st.session_state.generated_report = report
 
     # ===== ④ 檢視與微調 =====
     if st.session_state.get("generated_items"):
