@@ -574,14 +574,64 @@ with tab_generate:
         except Exception as e:
             show_exception("⚠️ 生成題目失敗。", e)
 
-# ===== ④ 檢視與微調=====
-if st.session_state.get("generated_items"):
-    st.markdown("## ④ 檢視與微調")
-    st.caption("你可以在表格內直接修改題幹、選項及正確答案。")
+items = st.session_state.generated_items
 
-    df = items_to_editor_df(
-        st.session_state.generated_items,
-    )
+total_count = len(items)
+review_count = sum(1 for q in items if q.needs_review)
+ok_count = total_count - review_count
+
+st.markdown("## ✅ 題目品質摘要")
+
+c1, c2 = st.columns(2)
+with c1:
+    st.metric("✅ 通過題目", ok_count)
+with c2:
+    st.metric("⚠️ 需教師留意", review_count)
+
+if review_count > 0:
+    with st.expander("⚠️ 查看需教師留意的題目"):
+        for i, q in enumerate(items, start=1):
+            if q.needs_review:
+                st.write(f"第 {i} 題：{q.question[:80]}…")
+
+# =================================================
+# ④ 檢視與微調（題目品質摘要 + 編輯）
+# =================================================
+if st.session_state.get("generated_items"):
+    items = st.session_state.generated_items
+
+    # -------- 題目品質摘要 --------
+    total_count = len(items)
+    review_count = sum(1 for q in items if q.needs_review)
+    ok_count = total_count - review_count
+
+    st.markdown("## ✅ 題目品質摘要")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.metric("✅ 通過題目", ok_count)
+    with c2:
+        st.metric("⚠️ 需教師留意", review_count)
+
+    if review_count > 0:
+        with st.expander("⚠️ 查看需教師留意的題目"):
+            for i, q in enumerate(items, start=1):
+                if q.needs_review:
+                    st.write(f"第 {i} 題：{q.question[:80]}…")
+
+    # -------- 題目編輯區 --------
+    st.markdown("## ④ 檢視與微調")
+    st.caption("你可以在表格內直接修改題幹、選項及正確答案，並勾選是否匯出。")
+
+    df = items_to_editor_df(items)
+
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        if st.button("✅ 全選匯出", key="btn_export_all_generate"):
+            df["export"] = True
+    with c2:
+        if st.button("全部取消匯出", key="btn_export_none_generate"):
+            df["export"] = False
 
     edited = st.data_editor(
         df,
@@ -590,19 +640,90 @@ if st.session_state.get("generated_items"):
         column_config={
             "export": st.column_config.CheckboxColumn("匯出", width="small"),
             "correct": st.column_config.SelectboxColumn(
-                "正確答案（1-4）",
+                "正確答案（1–4）",
                 options=["1", "2", "3", "4"],
                 width="small",
             ),
             "needs_review": st.column_config.CheckboxColumn(
-                "需教師確認", width="small"
+                "需教師確認",
+                width="small",
             ),
         },
         disabled=["subject", "qtype"],
         key="editor_generate",
     )
 
-    st.success(f"✅ 目前共有 {len(edited)} 題可供檢視與匯出")
+    selected = edited[edited["export"] == True].copy()
+
+    st.success(
+        f"✅ 已生成 {len(edited)} 題；"
+        f"已選擇匯出 {len(selected)} 題"
+    )
+
+    # =================================================
+    # ⑤ 匯出 / Google Form / 電郵分享
+    # =================================================
+    st.markdown("## ⑤ 匯出 / Google Form / 電郵分享")
+    st.caption("先勾選要匯出的題目，然後使用以下功能。")
+
+    if selected.empty:
+        st.info("請先在上方表格勾選要匯出的題目。")
+    else:
+        # -------- Kahoot Excel --------
+        kahoot_bytes = export_kahoot_excel(selected)
+        st.download_button(
+            "⬇️ 匯出 Kahoot Excel",
+            data=kahoot_bytes,
+            file_name="kahoot_questions.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="dl_kahoot_generate",
+        )
+
+        # -------- Wayground DOCX --------
+        docx_bytes = export_wayground_docx(selected, subject)
+        st.download_button(
+            "⬇️ 匯出 Wayground DOCX",
+            data=docx_bytes,
+            file_name="wayground_questions.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            key="dl_wayground_generate",
+        )
+
+        # -------- Google Form Quiz --------
+        if st.session_state.google_creds:
+            if st.button("🟦 一鍵建立 Google Form Quiz", key="btn_form_generate"):
+                try:
+                    with st.spinner("🟦 正在建立 Google Form…"):
+                        creds = credentials_from_dict(
+                            st.session_state.google_creds
+                        )
+                        result = create_quiz_form(
+                            creds,
+                            f"{subject} Quiz",
+                            selected,
+                        )
+                    st.session_state.form_result_generate = result
+                    st.success("✅ 已建立 Google Form")
+                except Exception as e:
+                    show_exception("⚠️ 建立 Google Form 失敗。", e)
+
+        if st.session_state.form_result_generate:
+            st.write(
+                "編輯連結：",
+                st.session_state.form_result_generate.get("editUrl"),
+            )
+            st.write(
+                "發佈連結：",
+                st.session_state.form_result_generate.get("responderUrl")
+                or "（未提供 responderUri）",
+            )
+
+        # -------- Google Drive 一鍵分享 --------
+        export_and_share_panel(
+            selected,
+            subject,
+            prefix="generate",
+        )
 
 
 # =========================
