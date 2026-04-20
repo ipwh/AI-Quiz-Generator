@@ -581,7 +581,6 @@ if st.session_state.get("generated_items"):
 
     df = items_to_editor_df(
         st.session_state.generated_items,
-        subject
     )
 
     edited = st.data_editor(
