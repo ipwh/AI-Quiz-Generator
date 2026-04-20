@@ -20,8 +20,7 @@ from services.llm_service import (
     get_xai_default_model,
 )
 from services.cache_service import load_cache, save_cache
-from extractors.extract import extract_text
-from extractors.extract import extract_images_for_llm_ocr
+from extractors.extract import extract_text, extract_images_for_llm_ocr
 from exporters.export_kahoot import export_kahoot_excel
 from exporters.export_wayground_docx import export_wayground_docx
 from services.google_oauth import (
@@ -35,6 +34,18 @@ from services.google_forms_api import create_quiz_form
 
 if "imported_items" not in st.session_state:
     st.session_state.imported_items = []
+
+# -------------------------
+# Session state init
+# -------------------------
+if "generated_items" not in st.session_state:
+    st.session_state.generated_items = []
+
+if "imported_items" not in st.session_state:
+    st.session_state.imported_items = []
+
+if "form_result_generate" not in st.session_state:
+    st.session_state.form_result_generate = None
 
 # -------------------------
 # Helpers
@@ -207,14 +218,6 @@ for k, v in {
     if k not in st.session_state:
         st.session_state[k] = v
 
-# -------------------------
-# Session state init
-# -------------------------
-if "generated_items" not in st.session_state:
-    st.session_state.generated_items = []
-
-if "form_result_generate" not in st.session_state:
-    st.session_state.form_result_generate = None
     
 # -------------------------
 # OAuth callback
@@ -751,6 +754,13 @@ with tab_import:
 
     cfg = api_config()
 
+    # ✅（可選）啟用 AI 協助整理
+use_ai_assist = st.checkbox(
+    "🤖（可選）啟用 AI 協助整理題目",
+    value=True,
+    help="關閉後只會使用本地規則拆題，不會呼叫 AI（較保守、但不亂猜）。",
+)
+    
     if st.button(
         "✨ 整理並轉換",
         disabled=not raw_import_text.strip(),
@@ -758,14 +768,19 @@ with tab_import:
     ):
         try:
             with st.spinner("🧠 正在整理題目…"):
-                # ✅ 優先用 AI 協助整理
-                data = assist_import_questions(
-                    cfg,
-                    raw_import_text,
-                    subject,
-                    fast_mode=fast_mode,
-                    qtype="single",
-                )
+                if use_ai_assist and can_call_ai(cfg):
+                    data = assist_import_questions(
+                        cfg,
+                        raw_import_text,
+                        subject,
+                        fast_mode=fast_mode,
+                        qtype="single",
+                    )
+                else:
+                    data = parse_import_questions_locally(
+                        raw_import_text,
+                        subject=subject,
+                    )
 
             if not data:
                 st.error("❌ 無法解析任何題目")
