@@ -33,6 +33,8 @@ from services.google_oauth import (
 )
 from services.google_forms_api import create_quiz_form
 
+if "imported_items" not in st.session_state:
+    st.session_state.imported_items = []
 
 # -------------------------
 # Helpers
@@ -838,3 +840,62 @@ if st.session_state.get("imported_items"):
             st.write("發佈連結：", st.session_state.form_result_import.get("responderUrl") or "（未提供 responderUri）")
 
         export_and_share_panel(selected, subject, prefix="import")
+
+# =================================================
+# ④ 檢視與微調（匯入現有題目）
+# =================================================
+if st.session_state.get("imported_items"):
+    items = st.session_state.imported_items
+
+    # -------- 題目品質摘要 --------
+    total_count = len(items)
+    review_count = sum(1 for q in items if q.needs_review)
+    ok_count = total_count - review_count
+
+    st.markdown("## ✅ 題目品質摘要")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        st.metric("✅ 通過題目", ok_count)
+    with c2:
+        st.metric("⚠️ 需教師留意", review_count)
+
+    # -------- 編輯區 --------
+    st.markdown("## ④ 檢視與微調")
+    st.caption("你可以在表格內直接修改題幹、選項及正確答案，並勾選是否匯出。")
+
+    df = items_to_editor_df(items)
+
+    edited = st.data_editor(
+        df,
+        width="stretch",
+        num_rows="dynamic",
+        column_config={
+            "export": st.column_config.CheckboxColumn("匯出", width="small"),
+            "correct": st.column_config.SelectboxColumn(
+                "正確答案（1–4）",
+                options=["1", "2", "3", "4"],
+                width="small",
+            ),
+            "needs_review": st.column_config.CheckboxColumn(
+                "需教師確認",
+                width="small",
+            ),
+        },
+        disabled=["subject", "qtype"],
+        key="editor_import",
+    )
+
+    selected = edited[edited["export"] == True].copy()
+
+    st.success(
+        f"✅ 已匯入 {len(edited)} 題；"
+        f"已選擇匯出 {len(selected)} 題"
+    )
+
+    # -------- 匯出 / 分享 --------
+    export_and_share_panel(
+        selected,
+        subject,
+        prefix="import",
+    )
