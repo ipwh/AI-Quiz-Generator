@@ -513,13 +513,19 @@ with tab_generate:
                     qtype="single",
                 )
 
-            st.write("DEBUG generate_questions returned:", data)
+                st.write("DEBUG generate_questions returned:", data)
 
-            if not data:
-                st.error("❌ AI 沒有回傳任何題目（data 為空）")
-            else:
-                st.session_state.generated_data = data
-                st.success(f"✅ 成功生成 {len(data)} 題")
+                if not data:
+                    st.error("❌ AI 沒有回傳任何題目")
+                else:
+                    st.session_state.generated_data = data
+                    st.session_state.generated_items = dicts_to_items(
+                        data,
+                        subject=subject,
+                        source="generate",
+                    )
+                    st.success(f"✅ 成功生成 {len(data)} 題")
+
 
         except Exception as e:
             show_exception("⚠️ 生成題目失敗。", e)
