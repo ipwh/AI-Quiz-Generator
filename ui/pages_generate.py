@@ -11,7 +11,8 @@ from core.validators import validate_questions
 from ui.components_editor import render_editor
 from ui.components_export import render_export_panel
 
-# 防止貼碼換行問題
+
+# 為避免貼碼時 \n 被破壞
 NL = chr(10)
 DNL = chr(10) * 2
 
@@ -43,7 +44,9 @@ def _build_text_with_highlights(raw_text: str, marked_idx: set, limit: int):
 # -------------------------
 def render_generate_tab(ctx: dict):
     """
-    ctx 需要包含：
+    生成新題目頁面（語法修正最終穩定版）
+
+    ctx 必須包含：
       - api_config(): dict
       - can_call_ai(cfg): bool
       - generate_questions(...)
@@ -54,10 +57,10 @@ def render_generate_tab(ctx: dict):
     st.markdown("## ① 上載教材")
     st.caption(
         "支援 PDF/DOCX/TXT/PPTX/XLSX/PNG/JPG。"
-        "掃描/截圖可選擇啟用 LLM 讀圖 OCR（較慢，要選用 Grok 或 ChatGPT 等多模態 LLM，DeepSeek 暫不支援）。"
+        "掃描／截圖可選擇啟用 LLM 讀圖 OCR（較慢）。"
     )
 
-    cfg = ctx["pi_config"
+    cfg = ctx["api_config
     can_call_ai = ctx["can_call_ai"]
 
     files = st.file_uploader(
@@ -79,17 +82,21 @@ def render_generate_tab(ctx: dict):
 
         paras = _split_paragraphs(raw_text)
         with st.expander("⭐ 打開段落清單（最多顯示 80 段）"):
-            cA, cB = st.columns(2)
-            with cA:
+            c1, c2 = st.columns(2)
+            with c1:
                 if st.button("✅ 全選重點段落"):
                     st.session_state.mark_idx = set(range(len(paras)))
-            with cB:
+            with c2:
                 if st.button("⛔ 全不選"):
                     st.session_state.mark_idx = set()
 
             for i, p in enumerate(paras[:80]):
                 checked = i in st.session_state.mark_idx
-                new_checked = st.checkbox(f"第 {i+1} 段", value=checked, key=f"para_{i}")
+                new_checked = st.checkbox(
+                    f"第 {i+1} 段",
+                    value=checked,
+                    key=f"para_{i}",
+                )
                 if new_checked:
                     st.session_state.mark_idx.add(i)
                 else:
@@ -98,13 +105,17 @@ def render_generate_tab(ctx: dict):
 
     # ===== ③ 生成題目（按鈕一定 render）=====
     st.markdown("## ③ 生成題目")
+
     can_generate = bool(raw_text.strip()) and can_call_ai(cfg)
 
-    if st.button(
+    clicked = st.button(
         "🪄 生成題目",
+        key="btn_generate",
         disabled=not can_generate,
         help="請先上載教材並完成 AI API 設定" if not can_generate else "開始生成題目",
-    ):
+    )
+
+    if clicked:
         limit = 8000 if ctx.get("fast_mode") else 10000
         used_text = _build_text_with_highlights(
             raw_text,
@@ -119,7 +130,7 @@ def render_generate_tab(ctx: dict):
                 ctx["subject"],
                 ctx["level_code"],
                 ctx["question_count"],
-                fast_mode=ctx.get("fast_mode",ted_items = items
+                fast_mode=ctx.get("fast_moderated_items = items
         st.session_state.generated_report = report
 
     # ===== ④ 檢視與微調 =====
@@ -143,6 +154,7 @@ def render_generate_tab(ctx: dict):
             default_subject=ctx["subject"],
             source="generate",
         )
+
         st.session_state.generated_items = edited_items
         st.session_state.generated_report = validate_questions(edited_items)
 
