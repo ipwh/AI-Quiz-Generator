@@ -712,98 +712,100 @@ if st.session_state.get("generated_items"):
 # Tab 2: Import
 # =========================
 with tab_import:
-    st.markdown("## ① 上載 / 貼上題目")
-    st.caption("支援 DOCX/TXT 或直接貼上。匯入模式固定為單選（4選1）。")
+    st.markdown("## ① 匯入現有題目")
+    st.caption("支援貼上文字或上載檔案，系統會整理成標準單選題。")
+
+    # ---------- session state init ----------
+    if "imported_items" not in st.session_state:
+        st.session_state.imported_items = []
+
+    # ---------- 輸入 ----------
+    import_text = st.text_area(
+        "貼上題目內容",
+        height=300,
+        key="import_text",
+        placeholder="請貼上題目，例如：\n1. 題目...\nA. ...\nB. ...\nC. ...\nD. ...\n答案：B",
+    )
+
+    st.markdown("### 或上載檔案")
+    import_files = st.file_uploader(
+        "上載 DOCX / TXT / PDF",
+        type=["docx", "txt", "pdf"],
+        accept_multiple_files=True,
+        key="files_import",
+    )
+
+    raw_import_text = ""
+
+    if import_text.strip():
+        raw_import_text = import_text.strip()
+
+    if import_files:
+        with st.spinner("📄 正在擷取文字…"):
+            raw_import_text += "\n\n" + "".join(
+                extract_text(f) for f in import_files
+            )
+
+    # ---------- 整理並轉換 ----------
+    st.markdown("## ② 整理並轉換")
 
     cfg = api_config()
 
-    def load_import_file_to_textbox():
-        f = st.session_state.get("import_file")
-        if f is None:
-            return
-        st.session_state.imported_text = extract_text(f) or ""
-        st.session_state.imported_data = None
-
-    st.file_uploader(
-        "上載 DOCX/TXT（自動載入到文字框）",
-        type=["docx", "txt"],
-        key="import_file",
-        on_change=load_import_file_to_textbox,
-    )
-
-    use_ai_assist = st.checkbox("啟用 AI 協助整理（建議）", value=True, key="use_ai_assist")
-    st.text_area("貼上題目內容", height=320, key="imported_text")
-
-    st.markdown("## ② 整理並轉換")
-    st.caption("啟用 AI 協助：會拆出題幹/選項/答案；若原文無答案，AI 會推測並標記『需教師確認』。")
-
     if st.button(
         "✨ 整理並轉換",
-        disabled=not (bool(st.session_state.imported_text.strip()) and (not use_ai_assist or can_call_ai(cfg))),
+        disabled=not raw_import_text.strip(),
         key="btn_import_parse",
     ):
         try:
-            raw = st.session_state.imported_text.strip()
-            with st.spinner("🧠 正在整理…"):
-                if use_ai_assist:
-                    st.session_state.imported_data = assist_import_questions(
-                        cfg,
-                        raw,
-                        subject,
-                        allow_guess=True,
-                        fast_mode=fast_mode,
-                        qtype="single",
-                    )
-                else:
-                    st.session_state.imported_data = parse_import_questions_locally(raw)
-            st.session_state.form_result_import = None
+            with st.spinner("🧠 正在整理題目…"):
+                # ✅ 優先用 AI 協助整理
+                data = assist_import_questions(
+                    cfg,
+                    raw_import_text,
+                    subject,
+                    fast_mode=fast_mode,
+                    qtype="single",
+                )
+
+            if not data:
+                st.error("❌ 無法解析任何題目")
+            else:
+                # ✅ ✅ ✅ 關鍵：寫入 session_state
+                st.session_state.imported_items = dicts_to_items(
+                    data,
+                    subject=subject,
+                    source="import",
+                )
+                st.success(f"✅ 成功整理 {len(st.session_state.imported_items)} 題")
+
         except Exception as e:
-            st.warning("⚠️ AI 整理失敗，改用本地拆題作備援，請老師核對答案。")
-            try:
-                st.session_state.imported_data = parse_import_questions_locally(st.session_state.imported_text.strip())
-            except Exception as e2:
-                show_exception("⚠️ 本地拆題亦失敗，請檢查貼上的格式。", e2)
-                st.stop()
-            with st.expander("🔎 AI 失敗技術細節"):
-                st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)))
+            show_exception("⚠️ 整理並轉換失敗。", e)
 
-    if st.session_state.imported_data:
-        st.markdown("## ③ 檢視與微調")
-        st.caption("在表格內校對題幹、選項與答案，並勾選是否匯出。")
+    # =================================================
+    # ✅ 題目品質摘要（匯入）
+    # =================================================
+    if st.session_state.get("imported_items"):
+        items = st.session_state.imported_items
 
-# =================================================
-# ✅ 題目品質摘要（匯入現有題目）
-# =================================================
-if st.session_state.get("imported_items"):
-    items = st.session_state.imported_items
+        total_count = len(items)
+        review_count = sum(1 for q in items if q.needs_review)
+        ok_count = total_count - review_count
 
-    total_count = len(items)
-    review_count = sum(1 for q in items if q.needs_review)
-    ok_count = total_count - review_count
+        st.markdown("## ✅ 題目品質摘要")
 
-    st.markdown("## ✅ 題目品質摘要")
-
-    c1, c2 = st.columns(2)
-    with c1:
-        st.metric("✅ 通過題目", ok_count)
-    with c2:
-        st.metric("⚠️ 需教師留意", review_count)
-
-    if review_count > 0:
-        with st.expander("⚠️ 查看需教師留意的題目"):
-            for i, q in enumerate(items, start=1):
-                if q.needs_review:
-                    st.write(f"第 {i} 題：{q.question[:80]}…")
-        
-        df = to_editor_df(st.session_state.imported_data, subject)
-
-        c1, c2 = st.columns([1, 1])
+        c1, c2 = st.columns(2)
         with c1:
-            if st.button("✅ 全選匯出", key="btn_export_all_import"):
-                df["export"] = True
+            st.metric("✅ 通過題目", ok_count)
         with c2:
-            if st.button("全部取消匯出", key="btn_export_none_import"):
-                df["export"] = False
+            st.metric("⚠️ 需教師留意", review_count)
+
+        # =================================================
+        # ④ 檢視與微調（匯入）
+        # =================================================
+        st.markdown("## ④ 檢視與微調")
+        st.caption("你可以在表格內直接修改題幹、選項及正確答案，並勾選是否匯出。")
+
+        df = items_to_editor_df(items)
 
         edited = st.data_editor(
             df,
@@ -811,91 +813,32 @@ if st.session_state.get("imported_items"):
             num_rows="dynamic",
             column_config={
                 "export": st.column_config.CheckboxColumn("匯出", width="small"),
-                "correct": st.column_config.SelectboxColumn("正確答案（1-4）", options=["1","2","3","4"], width="small"),
-                "needs_review": st.column_config.CheckboxColumn("需教師確認", width="small"),
+                "correct": st.column_config.SelectboxColumn(
+                    "正確答案（1–4）",
+                    options=["1", "2", "3", "4"],
+                    width="small",
+                ),
+                "needs_review": st.column_config.CheckboxColumn(
+                    "需教師確認",
+                    width="small",
+                ),
             },
             disabled=["subject", "qtype"],
             key="editor_import",
         )
+
         selected = edited[edited["export"] == True].copy()
 
-        st.success(f"✅ 已載入 {len(edited)} 題；已選擇匯出 {len(selected)} 題")
+        st.success(
+            f"✅ 已匯入 {len(edited)} 題；"
+            f"已選擇匯出 {len(selected)} 題"
+        )
 
-        st.markdown("## ④ 匯出 / Google Form / 電郵分享")
-        st.caption("先勾選要匯出的題目，然後使用以下功能。")
-
-        if st.session_state.google_creds and not selected.empty:
-            if st.button("🟦 一鍵建立 Google Form Quiz", key="btn_form_import"):
-                try:
-                    with st.spinner("🟦 正在建立 Google Form…"):
-                        creds = credentials_from_dict(st.session_state.google_creds)
-                        result = create_quiz_form(creds, f"{subject} Quiz", selected)
-                    st.session_state.form_result_import = result
-                    st.success("✅ 已建立 Google Form")
-                except Exception as e:
-                    show_exception("⚠️ 建立 Google Form 失敗。", e)
-
-        if st.session_state.form_result_import:
-            st.write("編輯連結：", st.session_state.form_result_import.get("editUrl"))
-            st.write("發佈連結：", st.session_state.form_result_import.get("responderUrl") or "（未提供 responderUri）")
-
-        export_and_share_panel(selected, subject, prefix="import")
-
-# =================================================
-# ④ 檢視與微調（匯入現有題目）
-# =================================================
-if st.session_state.get("imported_items"):
-    items = st.session_state.imported_items
-
-    # -------- 題目品質摘要 --------
-    total_count = len(items)
-    review_count = sum(1 for q in items if q.needs_review)
-    ok_count = total_count - review_count
-
-    st.markdown("## ✅ 題目品質摘要")
-
-    c1, c2 = st.columns(2)
-    with c1:
-        st.metric("✅ 通過題目", ok_count)
-    with c2:
-        st.metric("⚠️ 需教師留意", review_count)
-
-    # -------- 編輯區 --------
-    st.markdown("## ④ 檢視與微調")
-    st.caption("你可以在表格內直接修改題幹、選項及正確答案，並勾選是否匯出。")
-
-    df = items_to_editor_df(items)
-
-    edited = st.data_editor(
-        df,
-        width="stretch",
-        num_rows="dynamic",
-        column_config={
-            "export": st.column_config.CheckboxColumn("匯出", width="small"),
-            "correct": st.column_config.SelectboxColumn(
-                "正確答案（1–4）",
-                options=["1", "2", "3", "4"],
-                width="small",
-            ),
-            "needs_review": st.column_config.CheckboxColumn(
-                "需教師確認",
-                width="small",
-            ),
-        },
-        disabled=["subject", "qtype"],
-        key="editor_import",
-    )
-
-    selected = edited[edited["export"] == True].copy()
-
-    st.success(
-        f"✅ 已匯入 {len(edited)} 題；"
-        f"已選擇匯出 {len(selected)} 題"
-    )
-
-    # -------- 匯出 / 分享 --------
-    export_and_share_panel(
-        selected,
-        subject,
-        prefix="import",
-    )
+        # =================================================
+        # ⑤ 匯出 / Google Form / 電郵分享
+        # =================================================
+        export_and_share_panel(
+            selected,
+            subject,
+            prefix="import",
+        )
