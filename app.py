@@ -134,69 +134,59 @@ def share_file_to_emails(creds, file_id: str, emails: list, role: str = "reader"
 
 def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix: str):
     """
-    匯出 Kahoot / Wayground / Google Forms +（可選）Google Drive 一鍵電郵分享。
-
-    ✅ 下載按鈕永遠顯示（不需 Google 登入）
-    ✅ Google Forms / Drive 分享需要先在左側登入 Google
-    ✅ 內建 nonce，確保即使同一 rerun render 多次都不會 DuplicateElementKey
+    匯出 Kahoot / Wayground / Google Forms + Google Drive 分享
+    ✅ key 穩定
+    ✅ Generate / Import 不衝突
     """
 
     if selected_df is None or selected_df.empty:
         st.warning("⚠️ 尚未選擇任何題目（請在表格中勾選『匯出』欄）。")
         return
 
-    # ========= 防撞 key：每次 render 自動遞增 =========
-    nonce_key = f"export_panel_nonce_{prefix}"
-    st.session_state[nonce_key] = st.session_state.get(nonce_key, 0) + 1
-    nonce = st.session_state[nonce_key]
+    # ✅ 穩定 panel key（只同 prefix 有關）
+    panel_id = f"export_{prefix}"
 
-    # ========= 準備匯出檔 =========
     kahoot_bytes = export_kahoot_excel(selected_df)
     docx_bytes = export_wayground_docx(selected_df, subject_name)
 
+    # ✅ 唯一顯示位置
     st.markdown("## ⑤ 匯出 / Google Form / 電郵分享")
 
-    # ========= 下載（不需登入 Google） =========
+    # ========= 下載（無需 Google） =========
     c1, c2 = st.columns(2)
-
     with c1:
         st.download_button(
             "⬇️ Kahoot Excel",
             data=kahoot_bytes,
             file_name=f"{subject_name}_kahoot.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key=f"dl_kahoot_{prefix}_{nonce}",
+            key=f"dl_kahoot_{panel_id}",
         )
-
     with c2:
         st.download_button(
             "⬇️ Wayground DOCX",
             data=docx_bytes,
             file_name=f"{subject_name}_wayground.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            key=f"dl_wayground_{prefix}_{nonce}",
+            key=f"dl_wayground_{panel_id}",
         )
 
-    # ========= Google Forms =========
+    # ========= Google Form =========
     st.markdown("### 🟦 Google Forms")
-
     if st.session_state.get("google_creds"):
         if st.button(
             "🟦 一鍵建立 Google Form Quiz",
-            key=f"btn_form_{prefix}_{nonce}",
+            key=f"btn_form_{panel_id}",
         ):
-            try:
-                with st.spinner("🟦 正在建立 Google Form…"):
-                    creds = credentials_from_dict(st.session_state.google_creds)
-                    result = create_quiz_form(
-                        creds,
-                        f"{subject_name} Quiz",
-                        selected_df,
-                    )
-                st.session_state[f"form_result_{prefix}"] = result
-                st.success("✅ 已建立 Google Form")
-            except Exception as e:
-                show_exception("⚠️ 建立 Google Form 失敗。", e)
+            with st.spinner("🟦 正在建立 Google Form…"):
+                creds = credentials_from_dict(st.session_state.google_creds)
+                result = create_quiz_form(
+                    creds,
+                    f"{subject_name} Quiz",
+                    selected_df,
+                )
+            st.session_state[f"form_result_{prefix}"] = result
+            st.success("✅ 已建立 Google Form")
 
         result = st.session_state.get(f"form_result_{prefix}")
         if result:
@@ -205,9 +195,8 @@ def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix:
     else:
         st.info("請先在左側登入 Google，才可一鍵建立 Google Form。")
 
-    # ========= Drive 電郵分享 =========
+    # ========= Drive 分享 =========
     st.markdown("### 📧 一鍵電郵分享匯出檔（Google Drive）")
-
     if not st.session_state.get("google_creds"):
         st.info("請先在左側登入 Google，才可用電郵分享檔案。")
         return
@@ -215,45 +204,32 @@ def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix:
     emails_text = st.text_input(
         "收件人電郵（多個用逗號分隔）",
         value="",
-        key=f"emails_{prefix}_{nonce}",
+        key=f"emails_{panel_id}",
     )
     emails = [e.strip() for e in emails_text.split(",") if e.strip()]
 
-    colA, colB = st.columns(2)
+    cA, cB = st.columns(2)
+    with cA:
+        if st.button("📧 分享 Kahoot Excel", key=f"btn_share_kahoot_{panel_id}"):
+            creds = credentials_from_dict(st.session_state.google_creds)
+            uploaded = upload_bytes_to_drive(
+                creds,
+                filename=f"{subject_name}_kahoot.xlsx",
+                mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                data_bytes=kahoot_bytes,
+            )
+            share_file_to_emails(creds, uploaded["id"], emails)
 
-    with colA:
-        if st.button(
-            "📧 分享 Kahoot Excel",
-            key=f"btn_share_kahoot_{prefix}_{nonce}",
-        ):
-            if not emails:
-                st.warning("請先輸入至少一個電郵。")
-            else:
-                creds = credentials_from_dict(st.session_state.google_creds)
-                uploaded = upload_bytes_to_drive(
-                    creds,
-                    filename=f"{subject_name}_kahoot.xlsx",
-                    mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    data_bytes=kahoot_bytes,
-                )
-                share_file_to_emails(creds, uploaded["id"], emails)
-
-    with colB:
-        if st.button(
-            "📧 分享 Wayground DOCX",
-            key=f"btn_share_docx_{prefix}_{nonce}",
-        ):
-            if not emails:
-                st.warning("請先輸入至少一個電郵。")
-            else:
-                creds = credentials_from_dict(st.session_state.google_creds)
-                uploaded = upload_bytes_to_drive(
-                    creds,
-                    filename=f"{subject_name}_wayground.docx",
-                    mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    data_bytes=docx_bytes,
-                )
-                share_file_to_emails(creds, uploaded["id"], emails)
+    with cB:
+        if st.button("📧 分享 Wayground DOCX", key=f"btn_share_docx_{panel_id}"):
+            creds = credentials_from_dict(st.session_state.google_creds)
+            uploaded = upload_bytes_to_drive(
+                creds,
+                filename=f"{subject_name}_wayground.docx",
+                mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                data_bytes=docx_bytes,
+            )
+            share_file_to_emails(creds, uploaded["id"], emails)
 
 # -------------------------
 # Page config + session
@@ -580,7 +556,6 @@ with tab_generate:
 
         selected = edited[edited["export"] == True].copy()
 
-        st.markdown("## ⑤ 匯出 / Google Form / 電郵分享")
         export_and_share_panel(
             selected,
             subject,
