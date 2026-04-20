@@ -134,20 +134,19 @@ def share_file_to_emails(creds, file_id, emails):
 # -------------------------
 # ✅ Export & Share Panel (FINAL)
 # -------------------------
-def export_and_share_panel(selected_df: pd.DataFrame, subject_name: str, prefix: str):
+def export_and_share_panel(selected_df, subject, prefix):
++    # ✅ 防止同一 rerun 內重複渲染（關鍵）
++    panel_guard = f"_export_panel_rendered_{prefix}"
++    if st.session_state.get(panel_guard):
++        return
++    st.session_state[panel_guard] = True
+
     """
     FINAL STABLE EXPORT PANEL
     - Excel / Word / Google Forms / Drive Email Share
     - Render-guarded (no duplicate key)
     - Stable button keys
     """
-
-    # ✅ Render guard (critical)
-    guard_key = f"_export_panel_rendered_{prefix}"
-    if st.session_state.get(guard_key):
-        return
-    st.session_state[guard_key] = True
-
     st.session_state.current_section = "export"
 
     if selected_df is None or selected_df.empty:
@@ -537,9 +536,12 @@ with tab_generate:
         except Exception as e:
             show_exception("⚠️ 生成題目失敗。", e)
 
+    st.markdown('<a name="export-section"></a>', unsafe_allow_html=True)
+    st.markdown("## ⑤ 匯出 / Google Form / 電郵分享")
     # =================================================
     # ④＋⑤ 檢視、匯出（共用 panel）
     # =================================================
+    st.session_state.current_section = "export"
     if st.session_state.generated_items:
         items = st.session_state.generated_items
 
@@ -587,8 +589,7 @@ with tab_generate:
         selected = edited[edited["export"] == True].copy()
 
         st.markdown('<a name="export-section"></a>', unsafe_allow_html=True)
-        st.markdown("## ⑤ 匯出 / Google Form / 電郵分享")
-
+        
         export_and_share_panel(
             selected,
             subject,
@@ -728,8 +729,7 @@ with tab_import:
         selected = edited[edited["export"] == True].copy()
 
         st.markdown('<a name="export-section"></a>', unsafe_allow_html=True)
-        st.markdown("## ⑤ 匯出 / Google Form / 電郵分享")
-
+        
         export_and_share_panel(
             selected,
             subject,
