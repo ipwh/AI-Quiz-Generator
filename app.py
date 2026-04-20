@@ -476,6 +476,12 @@ with tab_generate:
     if st.session_state.generated_items:
         items = st.session_state.generated_items
 
+        # ✅ 第一次顯示時，預設全選匯出
+    if "export_init_generate" not in st.session_state:
+        df["export"] = True
+        st.session_state.export_init_import = True
+
+        
         # 題目品質摘要
         total_count = len(items)
         review_count = sum(1 for q in items if q.needs_review)
@@ -496,6 +502,7 @@ with tab_generate:
             df,
             width="stretch",
             num_rows="dynamic",
+            key="editor_generate",
             column_config={
                 "export": st.column_config.CheckboxColumn("匯出", width="small"),
                 "correct": st.column_config.SelectboxColumn(
@@ -540,6 +547,11 @@ with tab_import:
         accept_multiple_files=True,
         key="files_import",
     )
+
+    
+    if "export_init_import" not in st.session_state:
+        df["export"] = True
+        st.session_state.export_init_import = True
 
     raw_import_text = import_text.strip()
     if import_files:
