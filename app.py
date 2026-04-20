@@ -52,6 +52,49 @@ for k, v in {
 # -------------------------
 # Helpers
 # -------------------------
+def build_text_with_highlights(raw_text: str, marked_idx: set, limit: int) -> str:
+    """
+    將教材文字分段，並把用家標記的重點段落放在前面，
+    同時限制總字數（避免超過 LLM token 上限）。
+    """
+
+    if not raw_text:
+        return ""
+
+    # 以空行分段
+    paragraphs = [p.strip() for p in raw_text.split("\n\n") if p.strip()]
+
+    if not paragraphs:
+        return ""
+
+    # 標記段落（用家揀選的重點）
+    highlighted = []
+    others = []
+
+    for idx, p in enumerate(paragraphs):
+        if idx in marked_idx:
+            highlighted.append(p)
+        else:
+            others.append(p)
+
+    combined = []
+
+    if highlighted:
+        combined.append("【重點段落】")
+        combined.extend(highlighted)
+
+    if others:
+        combined.append("【其餘內容】")
+        combined.extend(others)
+
+    final_text = "\n\n".join(combined)
+
+    # 控制最大長度（保護 token）
+    if limit and len(final_text) > limit:
+        final_text = final_text[:limit]
+
+    return final_text
+    
 def show_exception(user_msg: str, e: Exception):
     st.error(user_msg)
     with st.expander("🔎 技術細節（維護用）"):
