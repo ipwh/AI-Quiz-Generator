@@ -511,7 +511,8 @@ with tab_import:
 
     st.file_uploader(
         "上載 DOCX/TXT（自動載入到文字框）",
-        type=["docx", "txt"], key="import_file",
+        type=["docx", "txt"],
+        key="import_file",
         on_change=load_import_file_to_textbox,
     )
 
@@ -519,10 +520,14 @@ with tab_import:
     st.text_area("貼上題目內容", height=320, key="imported_text")
 
     st.markdown("## ② 整理並轉換")
+
+    # ✅ 修正：先計算條件，避免 not 後直接換行的 SyntaxError
+    _has_text = bool(st.session_state.get("imported_text", "").strip())
+    _ai_ready = (not use_ai_assist) or can_call_ai(cfg)
+
     if st.button(
         "✨ 整理並轉換",
-        disabled=not (bool(st.session_state.get("imported_text", "").strip())
-                      and (not use_ai_assist or can_call_ai(cfg))),
+        disabled=not (_has_text and _ai_ready),
         key="btn_import_parse",
     ):
         raw = st.session_state.get("imported_text", "").strip()
@@ -530,8 +535,12 @@ with tab_import:
             with st.spinner("🧠 正在整理…"):
                 if use_ai_assist:
                     data = assist_import_questions(
-                        cfg, raw, subject,
-                        allow_guess=True, fast_mode=fast_mode, qtype="single",
+                        cfg,
+                        raw,
+                        subject,
+                        allow_guess=True,
+                        fast_mode=fast_mode,
+                        qtype="single",
                     )
                 else:
                     data = parse_import_questions_locally(raw)
@@ -539,6 +548,8 @@ with tab_import:
             items = dicts_to_items(data, subject=subject, source="import")
             st.session_state.imported_items = items
             st.session_state.imported_report = []
+            # ✅ 重置 export 初始化旗標，確保新匯入題目預設全勾選
+            st.session_state.pop("export_init_import", None)
             st.success(f"✅ 已整理 {len(items)} 題")
 
         except Exception as e:
@@ -553,6 +564,8 @@ with tab_import:
         st.markdown("## ③ 檢視與微調")
 
         df = items_to_editor_df(st.session_state.imported_items)
+
+        # ✅ 新匯入後旗標被清除，確保預設全勾選
         if "export_init_import" not in st.session_state:
             df["export"] = True
             st.session_state.export_init_import = True
@@ -573,6 +586,7 @@ with tab_import:
         )
 
         selected = edited[edited["export"] == True].copy()
+
         st.markdown('<div id="export_section_import"></div>', unsafe_allow_html=True)
         export_and_share_panel(selected, subject, prefix="import")
 
