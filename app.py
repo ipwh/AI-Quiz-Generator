@@ -528,9 +528,11 @@ with tab_generate:
                 st.session_state.generated_items = dicts_to_items(
                     items,
                     subject=subject,
-                    source="generate",
+                    source="import",
                 )
 
+                st.session_state.imported_items = items
+                
                 # ✅ 自動 scroll 到 ④
                 st.markdown(
                     """
