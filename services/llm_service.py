@@ -100,7 +100,7 @@ def _normalize_correct(corr, qtype: str):
 
     if qtype == "true_false":
         corr = [c for c in corr if c in {"1", "2"}]
-        return [corr[0]] if corr else ["1"]
+        return [corr] if corr else ["1"]
 
     if qtype == "multiple":
         seen = set()
@@ -111,7 +111,7 @@ def _normalize_correct(corr, qtype: str):
                 out.append(c)
         return out[:4] if out else ["1"]
 
-    return [corr[0]] if corr else ["1"]
+    return [corr] if corr else ["1"]
 
 
 # -------------------------
@@ -196,7 +196,7 @@ def _chat(cfg: dict, messages: list, temperature: float, max_tokens: int, timeou
             payload={"model": cfg["model"], "messages": messages, "temperature": temperature, "max_tokens": max_tokens},
             timeout=timeout,
         )
-    return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+    return data.get("choices", [{}]).get("message", {}).get("content", "")
 
 
 # -------------------------
@@ -260,12 +260,54 @@ def get_xai_default_model(api_key: str, base_url: str = "https://api.x.ai/v1", t
                 return a
 
         if grok_models:
-            grok_models.sort(key=lambda x: x[0], reverse=True)
-            return grok_models[0][1]
+            grok_models.sort(key=lambda x: x, reverse=True)
+            return grok_models[2]
 
         return "grok-4-latest"
     except Exception:
         return "grok-4-latest"
+
+
+def xai_pick_vision_model(api_key: str, base_url: str = "https://api.x.ai/v1", timeout: int = 15):
+    """
+    從 /language-models 挑選支援 image input 的 Grok 模型。
+    """
+    url = base_url.rstrip("/") + "/language-models"
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    try:
+        with _SESSION_LOCK:
+            r = _SESSION.get(url, headers=headers, timeout=(10, timeout))
+        r.raise_for_status()
+        payload = r.json()
+        models = payload.get("models") or payload.get("data") or []
+        if not isinstance(models, list):
+            return None
+
+        candidates = []
+        for m in models:
+            if not isinstance(m, dict):
+                continue
+            input_mods = m.get("input_modalities") or []
+            if isinstance(input_mods, list) and "image" in input_mods:
+                created = m.get("created", 0) or 0
+                mid = str(m.get("id", "") or "")
+                aliases = m.get("aliases") or []
+                alias_latest = None
+                if isinstance(aliases, list):
+                    for a in aliases:
+                        if isinstance(a, str) and a.endswith("-latest"):
+                            alias_latest = a
+                            break
+                candidates.append((created, alias_latest or mid))
+
+        if not candidates:
+            return None
+
+        candidates.sort(key=lambda x: x, reverse=True)
+        return candidates[2]
+    except Exception:
+        return None
 
 
 # -------------------------
@@ -312,14 +354,6 @@ _FEWSHOT_STRONG = r"""
   },
   {
     "qtype": "single",
-    "question": "哪些屬於新媒體？\n(1) 商業電台\n(2) 實體報章\n(3) 明報網上版\n(4) YouTube",
-    "options": ["只有（1）和（2）", "只有（3）和（4）", "只有（1）、（3）和（4）", "以上皆是"],
-    "correct": ["2"],
-    "explanation": "",
-    "needs_review": false
-  },
-  {
-    "qtype": "single",
     "question": "若要減少測量誤差，下列哪一項最有效？",
     "options": ["只量一次以節省時間", "多次量度取平均值", "用較短的尺以便攜帶", "把結果四捨五入到整數"],
     "correct": ["2"],
@@ -331,30 +365,15 @@ _FEWSHOT_STRONG = r"""
 
 
 # -------------------------
-# ✅ 生成題目（single 會偏好 (1)(2)… + A-D）
+# 生成題目
 # -------------------------
 def generate_questions(cfg, text, subject, level, question_count, fast_mode: bool = False, qtype: str = "single"):
-    """
-    單選（single）生成：
-    - 強制格式配額：至少 75% 直接問答；最多 25% (1)-(4) 組合題
-    - 分階段生成：先 direct，再生成剩餘（混合）
-    - 程式端檢查：超配額就用 direct 補回並替換
-    - 保證回傳題數 = question_count（不足會自動補題 + 去重）
-    """
-    import math, re, random
-
-    qtype = "single"  # 目前生成固定單選（4選1）
+    qtype = "single"
     traits = SUBJECT_TRAITS.get(subject, DEFAULT_TRAITS)
     text = _clean_text(text)
     text = text[: (8000 if fast_mode else 10000)]
-    n = int(question_count)
+    n = max(1, int(question_count))
 
-    DIRECT_MIN_RATIO = 0.75
-    COMBO_MAX_RATIO = 0.25
-    direct_target = max(1, math.ceil(n * DIRECT_MIN_RATIO))
-    combo_max = max(0, math.floor(n * COMBO_MAX_RATIO))
-
-    # 溫度：提升多樣化（fast_mode 稍低）
     temperature = 0.18 if fast_mode else 0.28
     max_tokens = 1500 if fast_mode else 2300
     timeout = 120 if fast_mode else 180
@@ -374,14 +393,6 @@ def generate_questions(cfg, text, subject, level, question_count, fast_mode: boo
             s = re.sub(p, "", s).strip()
         s = re.sub(r"^[,，:：\-\s]+", "", s).strip()
         return s
-
-    def is_combo_style(question: str, options: list) -> bool:
-        if not question:
-            return False
-        q_has = ("(1)" in question) or ("（1）" in question)
-        opt_text = " ".join([str(o) for o in (options or [])])
-        opt_has = ("只有" in opt_text) or ("以上皆是" in opt_text) or ("（1）" in opt_text) or ("(1)" in opt_text)
-        return q_has and opt_has
 
     def dedupe(items: list) -> list:
         seen = set()
@@ -404,30 +415,8 @@ def generate_questions(cfg, text, subject, level, question_count, fast_mode: boo
             return "【Hard 進階】分析/比較/至少2步推理；干擾項以常見混淆點設陷。"
         return "【Mixed 混合】必須同時包含 easy/medium/hard。"
 
-    def build_prompt(level_code: str, count_needed: int, mode: str) -> str:
-        """
-        mode:
-          - 'direct': 強制全部 direct（嚴禁(1)-(4)）
-          - 'mixed' : 至少 75% direct，最多 25% combo（仍要混合）
-        """
-        rules_top = f"""
-【強制格式規則（最優先，違反即無效）】
-- 必須生成至少 75%「直接問答題」：題幹直接提出問題，選項為 A~D 四個獨立描述。
-- 絕對不要在題幹出現 (1)(2)(3)(4) 或（1）（2）（3）（4）。
-- 最多只能有 25%「(1)-(4) 組合題」。
-- 嚴禁全部或大部分題目使用同一格式；必須混合。
-- 若你傾向生成組合題，請立即調整為混合並增加直接問答題比例。
-"""
-        if mode == "direct":
-            rules_top += """
-【補充強制（direct 模式）】
-- 本次生成的所有題目必須是「直接問答」格式。
-- 嚴禁：題幹出現 (1)-(4)；嚴禁選項出現「只有」「以上皆是」或任何(1)-(4)組合語。
-"""
-
+    def build_prompt(level_code: str, count_needed: int) -> str:
         return f"""
-{rules_top}
-
 你是一名香港中學教師，負責出校內測驗題。
 科目：{subject}
 
@@ -460,8 +449,8 @@ def generate_questions(cfg, text, subject, level, question_count, fast_mode: boo
 {text}
 """
 
-    def call_once(level_code: str, count_needed: int, mode: str) -> list:
-        prompt = build_prompt(level_code, count_needed, mode=mode)
+    def call_once(level_code: str, count_needed: int) -> list:
+        prompt = build_prompt(level_code, count_needed)
         items = _call_with_retries(
             cfg,
             messages=[{"role": "user", "content": prompt}],
@@ -483,20 +472,20 @@ def generate_questions(cfg, text, subject, level, question_count, fast_mode: boo
                 "question": question,
                 "options": opts,
                 "correct": corr,
-                "explanation": str(q.get("explanation", "")).strip()[:60],
+                "explanation": str(q.get("explanation", "")).strip()[:80],
                 "needs_review": bool(q.get("needs_review", False)),
             })
 
         return dedupe(cleaned)
 
-    def fill_to_count(level_code: str, target: int, mode: str) -> list:
-        out = call_once(level_code, target, mode=mode)
+    def fill_to_count(level_code: str, target: int) -> list:
+        out = call_once(level_code, target)
         rounds = 0
+
         while len(out) < target and rounds < 3:
             missing = target - len(out)
             existing = "\n".join([f"- {it['question']}" for it in out[:25]])
-            # 追加「不可重複」規則
-            extra_prompt = build_prompt(level_code, missing, mode=mode) + f"\n\n【去重】不可與以下題目重複：\n{existing}\n"
+            extra_prompt = build_prompt(level_code, missing) + f"\n\n【去重】不可與以下題目重複：\n{existing}\n"
             items = _call_with_retries(
                 cfg,
                 messages=[{"role": "user", "content": extra_prompt}],
@@ -517,7 +506,7 @@ def generate_questions(cfg, text, subject, level, question_count, fast_mode: boo
                     "question": question,
                     "options": opts,
                     "correct": corr,
-                    "explanation": str(q.get("explanation", "")).strip()[:60],
+                    "explanation": str(q.get("explanation", "")).strip()[:80],
                     "needs_review": bool(q.get("needs_review", False)),
                 })
             out = dedupe(out + more)
@@ -528,64 +517,21 @@ def generate_questions(cfg, text, subject, level, question_count, fast_mode: boo
 
         return out[:target]
 
-    # -------------------------
-    # 分階段生成（中期建議，直接做）
-    # -------------------------
     if level == "mixed":
-        # mixed：先按比例分層生成 direct，再生成混合補足
         n_easy = max(1, round(n * 0.4))
         n_med = max(1, round(n * 0.4))
         n_hard = max(1, n - n_easy - n_med)
-
-        a = fill_to_count("easy", n_easy, mode="mixed")
-        b = fill_to_count("medium", n_med, mode="mixed")
-        c = fill_to_count("hard", n_hard, mode="mixed")
-
-        out = a + b + c
+        out = fill_to_count("easy", n_easy) + fill_to_count("medium", n_med) + fill_to_count("hard", n_hard)
         random.shuffle(out)
-        out = out[:n]
-    else:
-        # Stage A：先生成 direct_target（強制 direct）
-        direct_part = fill_to_count(level, direct_target, mode="mixed")
+        return out[:n]
 
-        # Stage B：再生成剩餘（mixed 模式，但仍限制比例）
-        remaining = n - len(direct_part)
-        if remaining > 0:
-            rest = fill_to_count(level, remaining, mode="mixed")
-            out = dedupe(direct_part + rest)
-        else:
-            out = direct_part[:n]
+    return fill_to_count(level, n)
 
-        # 若因去重不足，再補（mixed）
-        if len(out) < n:
-            out = dedupe(out + fill_to_count(level, n - len(out), mode="mixed"))
-            out = out[:n]
 
-    # -------------------------
-    # 程式端檢查：combo 超配額 → 用 direct 補回並替換
-    # -------------------------
-    combo_idx = [i for i, it in enumerate(out) if is_combo_style(it["question"], it["options"])]
-    if len(combo_idx) > combo_max:
-        need = len(combo_idx) - combo_max
-        direct_more = fill_to_count("medium" if level == "mixed" else level, need, mode="mixed")
-        for k, idx in enumerate(combo_idx[:need]):
-            if k < len(direct_more):
-                out[idx] = direct_more[k]
-
-    # 最終保險：回傳正確題數
-    return out[:n]
-# =========================
-# ✅ Restore import helpers (used by app.py)
-# - assist_import_questions
-# - parse_import_questions_locally
-# =========================
-
+# -------------------------
+# 匯入題目整理
+# -------------------------
 def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode: bool = False, qtype: str = "single"):
-    """
-    匯入題目整理：固定 single（4選1）
-    - 若原文有答案：跟從
-    - 若無答案：allow_guess=True 時推測，但 needs_review=true + explanation 以「⚠️需教師確認：」開頭
-    """
     qtype = "single"
     traits = SUBJECT_TRAITS.get(subject, DEFAULT_TRAITS)
     raw_text = _clean_text(raw_text)
@@ -639,7 +585,6 @@ def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode:
         expl = str(q.get("explanation", "")).strip()
         needs_review = bool(q.get("needs_review", False))
 
-        # 若 needs_review=true，確保 explanation 有提示字樣
         if needs_review and not expl.startswith("⚠️需教師確認："):
             expl = "⚠️需教師確認：" + (expl if expl else "系統推測答案，請老師核對。")
 
@@ -656,14 +601,10 @@ def assist_import_questions(cfg, raw_text, subject, allow_guess=True, fast_mode:
 
 
 def parse_import_questions_locally(raw_text: str):
-    """
-    本地拆題備援：支援 A-D 選項 & (答案: A/B/1/2/3/4)
-    """
     raw_text = _clean_text(raw_text)
     if not raw_text:
         return []
 
-    # 按題號粗分（可容錯）
     parts = re.split(r"(?:\n(?=\s*(?:\d+\s*[\.、]|Q\d+|第\s*\d+\s*題)))", raw_text, flags=re.IGNORECASE)
     blocks = [p.strip() for p in parts if p.strip()] or [raw_text]
 
@@ -706,50 +647,13 @@ def parse_import_questions_locally(raw_text: str):
 
     return out
 
-def xai_pick_vision_model(api_key: str, base_url: str = "https://api.x.ai/v1", timeout: int = 15) -> str | None:
+
+# -------------------------
+# Vision OCR：抽純文字
+# -------------------------
+def llm_ocr_extract_text_only(cfg: dict, images_data_urls: list, lang_hint: str = "zh-Hant", fast_mode: bool = False) -> str:
     """
-    從 /v1/language-models 挑一個 input_modalities 含 image 的 Grok 模型。[3](https://www.aidoczh.com/streamlit/develop/concepts/connections/secrets-management.html)
-    """
-    url = base_url.rstrip("/") + "/language-models"
-    headers = {"Authorization": f"Bearer {api_key}"}
-
-    try:
-        with _SESSION_LOCK:
-            r = _SESSION.get(url, headers=headers, timeout=(10, timeout))
-        r.raise_for_status()
-        payload = r.json()
-        models = payload.get("models") or payload.get("data") or []
-        if not isinstance(models, list):
-            return None
-
-        candidates = []
-        for m in models:
-            if not isinstance(m, dict):
-                continue
-            input_mods = m.get("input_modalities") or []
-            if isinstance(input_mods, list) and "image" in input_mods:
-                created = m.get("created", 0) or 0
-                mid = str(m.get("id", "") or "")
-                aliases = m.get("aliases") or []
-                alias_latest = None
-                if isinstance(aliases, list):
-                    for a in aliases:
-                        if isinstance(a, str) and a.endswith("-latest"):
-                            alias_latest = a
-                            break
-                candidates.append((created, alias_latest or mid))
-
-        if not candidates:
-            return None
-
-        candidates.sort(key=lambda x: x[0], reverse=True)
-        return candidates[0][1]
-    except Exception:
-        return None
-
-def llm_ocr_extract_text(cfg: dict, images_data_urls: list[str], lang_hint: str = "zh-Hant", fast_mode: bool = False) -> str:
-    """
-    使用多模態 LLM 做 OCR：輸出「純文字」。
+    使用多模態 LLM 做 OCR，只輸出純文字。
     images_data_urls: ["data:image/png;base64,...", ...]
     """
     if not images_data_urls:
@@ -769,7 +673,7 @@ def llm_ocr_extract_text(cfg: dict, images_data_urls: list[str], lang_hint: str 
 
     content = [{"type": "text", "text": prompt}]
     for url in images_data_urls:
-        content.append({"type": "image_url", "image_url": {"url": url}})
+        content.append({"type": "image_url", "image_url": {"url": url, "detail": "high"}})
 
     out = _chat(
         cfg,
@@ -780,3 +684,85 @@ def llm_ocr_extract_text(cfg: dict, images_data_urls: list[str], lang_hint: str 
     )
 
     return (out or "").strip()
+
+
+# -------------------------
+# Vision 出題：圖像 + 文字
+# -------------------------
+def llm_ocr_extract_text(
+    cfg: dict,
+    text: str,
+    images: list,
+    subject: str,
+    level: str,
+    count: int,
+    fast_mode: bool = True,
+) -> list:
+    """
+    多模態 LLM 出題：
+    - 把教材圖像（data URL）+ 文字一起傳給支援 Vision 的模型
+    - 模型直接「看圖出題」，適合含圖表、方程式、手寫、掃描頁
+    - 若模型不支援 Vision，自動回退至純文字 generate_questions()
+    """
+    temperature = 0.18 if fast_mode else 0.28
+    max_tokens = 1800 if fast_mode else 2800
+    timeout = 150 if fast_mode else 220
+
+    traits = SUBJECT_TRAITS.get(subject, DEFAULT_TRAITS)
+    level_desc = {
+        "easy": "【Easy 基礎】定義/辨識/直接理解；禁止多步推理。",
+        "medium": "【Medium 標準】情境應用/一步推論；干擾項要接近但錯在條件。",
+        "hard": "【Hard 進階】分析/比較/至少2步推理；干擾項以常見混淆點設陷。",
+        "mixed": "【Mixed 混合】必須同時包含 easy/medium/hard。",
+    }.get(level, "")
+
+    system_prompt = (
+        "你是香港中學" + subject + "老師，根據以下教材（圖像及文字）出 " + str(count) + " 條"
+        "多項選擇題（四選一）。\n"
+        "難度：" + level_desc + "\n"
+        "科目特性：" + traits + "\n\n"
+        "規則：\n"
+        "- 只輸出純 JSON array，不要任何額外文字\n"
+        "- 每題格式：{question, options:[4個], correct:[\"1\"~\"4\"], explanation, needs_review}\n"
+        "- 題目必須貼合圖像/公式內容，不可離題\n"
+        "- 若有數學公式，用文字描述（如 x^2 + 2x + 1）\n"
+        "- needs_review=true 代表需教師核對"
+    )
+
+    content = []
+    for img_url in images[:10]:
+        content.append({"type": "image_url", "image_url": {"url": img_url, "detail": "high"}})
+    if text and text.strip():
+        content.append({"type": "text", "text": "【補充文字教材】\n" + text.strip()[:4000]})
+    content.append({"type": "text", "text": "請根據以上教材出題，只輸出 JSON array。"})
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": content},
+    ]
+
+    try:
+        raw = _chat(cfg, messages, temperature=temperature, max_tokens=max_tokens, timeout=timeout)
+        items = extract_json(raw)
+        cleaned = []
+        for q in (items if isinstance(items, list) else []):
+            opts = _normalize_options(q.get("options", []), "single")
+            corr = _normalize_correct(q.get("correct", []), "single")
+            question = str(q.get("question", "")).strip()
+            if not question:
+                continue
+            cleaned.append({
+                "qtype": "single",
+                "question": question,
+                "options": opts,
+                "correct": corr,
+                "explanation": str(q.get("explanation", "")).strip()[:80],
+                "needs_review": bool(q.get("needs_review", False)),
+            })
+        return cleaned if cleaned else generate_questions(
+            cfg, text, subject, level, count, fast_mode=fast_mode, qtype="single"
+        )
+    except Exception:
+        return generate_questions(
+            cfg, text, subject, level, count, fast_mode=fast_mode, qtype="single"
+        )
