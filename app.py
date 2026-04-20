@@ -468,16 +468,16 @@ with tab_generate:
                 )
 
             if not st.error("❌ AI 沒有回傳任何題目"):
-            else:
+                else:
                 st.session_state.generated_items = dicts_to_items(
                     data, subject=subject, source="generate",
                 )
                 # 重置旗標，確保新題目預設全勾選
                 st.session_state.pop("export_init_generate", None)
                 st.success(f"✅ 成功生成 {len(st.session_state.generated_items)} 題")
-
-        except Exception as e:
-            show_exception("⚠️ 生成題目失敗。", e)
+    
+            except Exception as e:
+                show_exception("⚠️ 生成題目失敗。", e)
 
     # ===== ④＋⑤ 檢視、匯出 =====
     if st.session_state.generated_items:
