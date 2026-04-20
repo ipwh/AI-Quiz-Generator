@@ -574,6 +574,37 @@ with tab_generate:
         except Exception as e:
             show_exception("⚠️ 生成題目失敗。", e)
 
+# ===== ④ 檢視與微調=====
+if st.session_state.get("generated_items"):
+    st.markdown("## ④ 檢視與微調")
+    st.caption("你可以在表格內直接修改題幹、選項及正確答案。")
+
+    df = items_to_editor_df(
+        st.session_state.generated_items,
+        subject
+    )
+
+    edited = st.data_editor(
+        df,
+        use_container_width=True,
+        num_rows="dynamic",
+        column_config={
+            "export": st.column_config.CheckboxColumn("匯出", width="small"),
+            "correct": st.column_config.SelectboxColumn(
+                "正確答案（1-4）",
+                options=["1", "2", "3", "4"],
+                width="small",
+            ),
+            "needs_review": st.column_config.CheckboxColumn(
+                "需教師確認", width="small"
+            ),
+        },
+        disabled=["subject", "qtype"],
+        key="editor_generate",
+    )
+
+    st.success(f"✅ 目前共有 {len(edited)} 題可供檢視與匯出")
+
 
 # =========================
 # Tab 2: Import
