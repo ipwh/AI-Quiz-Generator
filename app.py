@@ -1,6 +1,7 @@
+# app.py — 極簡主程式（已修正 Google 登入 UI）
+
 import streamlit as st
 import streamlit.components.v1 as components
-import pandas as pd
 import traceback
 
 from services.google_oauth import (
@@ -51,48 +52,56 @@ if oauth_is_configured() and "code" in params and not st.session_state.google_cr
     except Exception as e:
         st.query_params.clear()
         st.error("Google 登入失敗。請重新按『連接 Google（登入）』一次。")
-        with st.expander("技術細節"):
+        with st.expander("🔎 技術細節"):
             st.code("".join(traceback.format_exception(type(e), e, e.__traceback__)))
         st.stop()
 
-# ------------------------- Sidebar -------------------------
-ctx = render_sidebar()   # 回傳包含 fast_mode, api_config, can_call_ai, subject 等資訊的 dict
+# ------------------------- Sidebar：Google 登入 + 出題設定 -------------------------
+# Google 登入區塊（固定在最上方）
+st.sidebar.header("🟦 Google 連接")
+if not oauth_is_configured():
+    st.sidebar.warning("⚠️ 尚未設定 Google OAuth（需在 Secrets 中設定 google_oauth_client + APP_URL）")
+else:
+    if st.session_state.google_creds:
+        st.sidebar.success("✅ 已連接 Google")
+        if st.sidebar.button("🔒 登出 Google", key="btn_logout_google"):
+            st.session_state.google_creds = None
+            st.rerun()
+    else:
+        st.sidebar.link_button("🔐 連接 Google（登入）", get_auth_url())
+        st.sidebar.caption("建議使用學校電郵登入，方便使用 Google Forms 與 Drive 分享")
+
+st.sidebar.divider()
+
+# 出題設定與 API 設定（由 sidebar.py 處理）
+ctx = render_sidebar()
 
 # ------------------------- 使用流程 + 隱私提醒 -------------------------
 with st.expander("🧭 使用流程", expanded=True):
     st.markdown("""
 **⚠️ 重要隱私提醒**  
-教材內容會上傳至第三方 AI 服務（OpenAI / xAI / DeepSeek 等），  
-**請勿上傳含有學生個人資料、敏感資訊或受版權嚴格保護的完整教材。**
+教材內容會上傳至第三方 AI 服務，請避免上傳含學生個人資料的文件。
 
 ### 🪄 生成新題目
-1. 左側欄設定科目、難度、題目數目與 API  
-2. **① 上載教材**（支援 Vision 讀圖）  
-3. **② 重點段落標記**（可選，提高貼題度）  
-4. 按「🪄 生成題目」  
-5. 檢視與微調（特別留意 `⚠️ 需教師確認` 的題目）  
-6. 勾選匯出 → 一鍵匯出 Kahoot / Wayground / Google Forms / 電郵分享
+1. 左側欄登入 Google（可選，但推薦）  
+2. 設定科目、難度、API  
+3. 上載教材 → 重點段落標記 → 生成題目  
+4. 檢視微調後匯出（Kahoot / Wayground / Google Forms）
 
 ### 📄 匯入現有題目
-1. 貼上或上載題目  
-2. 可開啟 AI 協助整理  
-3. 整理後核對答案與驗證報告  
-4. 勾選匯出
+貼上題目 → AI 整理 → 核對 → 匯出
 
-**💡 小提示**：數理科強烈建議開啟 **Vision 模式**；重要測驗請關閉快速模式。
+**💡 小提示**：數理科請開啟 **Vision 模式**。
 """)
 
 tab_generate, tab_import = st.tabs(["🪄 生成新題目", "📄 匯入現有題目"])
 
-# ========================= Tab 1: Generate =========================
 with tab_generate:
     render_generate_tab(ctx)
 
-# ========================= Tab 2: Import =========================
 with tab_import:
     render_import_tab(ctx)
 
-# 保留 Google 登入成功後的 rerender 處理
-if st.session_state.get("google_creds") and "code" in st.query_params:
+# 清理 query params
+if "code" in st.query_params:
     st.query_params.clear()
-    st.rerun()
