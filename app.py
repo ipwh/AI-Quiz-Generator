@@ -363,7 +363,7 @@ st.sidebar.divider()
 # -------------------------
 st.sidebar.header("🔬 OCR / 讀圖設定（數理科必讀）")
 st.sidebar.caption(
-    "數學／物理／化學／生物老師：若教材含圖表、方程式、掃描頁面，"
+    "若教材含圖表、方程式、掃描頁面，"
     "建議開啟『LLM Vision 讀圖』讓 AI 直接理解圖像內容再出題。"
 )
 
@@ -422,7 +422,7 @@ question_count = st.sidebar.selectbox("🧮 題目數目（生成用）", [5, 8,
 # -------------------------
 # Flow guide
 # -------------------------
-with st.expander("🧭 使用流程", expanded=True):
+with st.expander("🧭 使用流程", expanded=False):
     st.markdown("""
 ### 🪄 生成新題目
 1. **左側欄** 選擇科目、難度、題目數目
