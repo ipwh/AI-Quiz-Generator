@@ -30,7 +30,6 @@ from services.google_oauth import (
 from services.google_forms_api import create_quiz_form
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
-from ui.components_drive_picker import render_drive_input_panel
 
 # -------------------------
 # Session State Init
@@ -481,29 +480,6 @@ with tab_generate:
         key="files_generate",
     )
     
-    # ── Drive 上載（需登入 Google）──────────────────────
-    drive_bytes, drive_filename, drive_ext = render_drive_input_panel(
-        st.session_state.get("google_creds")
-    )
-
-    # 若從 Drive 下載了檔案，用虛擬 file-like object 送入 extract_text
-    if drive_bytes and drive_ext:
-        import io
-
-        class _FakeFile:
-            def __init__(self, data, name):
-                self.name = name
-                self._data = data
-            def getvalue(self):
-                return self._data
-
-        fake_file = _FakeFile(drive_bytes, drive_filename)
-        with st.spinner(f"📄 正在擷取 Drive 教材文字（{drive_filename}）…"):
-            drive_text = extract_text(fake_file)
-        if drive_text:
-            raw_text = (raw_text + "\n\n" + drive_text).strip()
-            st.info(f"☁️ 已加入 Drive 教材：{drive_filename}（+{len(drive_text)} 字）")
-
     raw_text = ""
     vision_images = []
 
