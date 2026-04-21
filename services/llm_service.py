@@ -100,7 +100,7 @@ def _normalize_correct(corr, qtype: str):
 
     if qtype == "true_false":
         corr = [c for c in corr if c in {"1", "2"}]
-        return [corr] if corr else ["1"]
+        return corr if corr else ["1"]
 
     if qtype == "multiple":
         seen = set()
@@ -111,7 +111,7 @@ def _normalize_correct(corr, qtype: str):
                 out.append(c)
         return out[:4] if out else ["1"]
 
-    return [corr] if corr else ["1"]
+    return corr if corr else ["1"]
 
 
 # -------------------------
