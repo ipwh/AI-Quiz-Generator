@@ -18,7 +18,7 @@ from ui.pages_import import render_import_tab
 _SS_DEFAULTS = {
     "google_creds": None,
     "generated_items": [],
-    "generated_items_df": None
+    "generated_items_df": None,
     "imported_items": [],
     "generated_report": [],
     "imported_report": [],
