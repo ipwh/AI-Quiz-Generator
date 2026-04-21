@@ -34,7 +34,7 @@ for _k, _v in _SS_DEFAULTS.items():
 
 # ------------------------- Page Config -------------------------
 st.set_page_config(page_title="AI 題目生成器", layout="wide")
-st.title("🏫 AI 多項選擇題目生成器 - 支援Kahoot / Wayground / Google Forms / 一鍵電郵分享")
+st.title("🏫 AI 題目生成器")
 
 # ------------------------- OAuth Callback -------------------------
 params = st.query_params
@@ -59,7 +59,7 @@ if oauth_is_configured() and "code" in params and not st.session_state.google_cr
 ctx = render_sidebar()   # 回傳包含 fast_mode, api_config, can_call_ai, subject 等資訊的 dict
 
 # ------------------------- 使用流程 + 隱私提醒 -------------------------
-with st.expander("🧭 使用流程", expanded=False):
+with st.expander("🧭 使用流程", expanded=True):
     st.markdown("""
 **⚠️ 重要隱私提醒**  
 教材內容會上傳至第三方 AI 服務（OpenAI / xAI / DeepSeek 等），  
