@@ -196,7 +196,7 @@ def _chat(cfg: dict, messages: list, temperature: float, max_tokens: int, timeou
             payload={"model": cfg["model"], "messages": messages, "temperature": temperature, "max_tokens": max_tokens},
             timeout=timeout,
         )
-    return data.get("choices", [{}]).get("message", {}).get("content", "")
+    return data.get("choices", [{}])[0].get("message", {}).get("content", "")
 
 
 # -------------------------
