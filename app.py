@@ -361,7 +361,7 @@ st.sidebar.divider()
 # -------------------------
 # Sidebar: OCR / Vision
 # -------------------------
-st.sidebar.header("🔬 OCR / 讀圖設定（數理科必讀）")
+st.sidebar.header("🔬 OCR / 讀圖設定")
 st.sidebar.caption(
     "若教材含圖表、方程式、掃描頁面，"
     "建議開啟『LLM Vision 讀圖』讓 AI 直接理解圖像內容再出題。"
