@@ -148,8 +148,8 @@ def render_generate_tab(ctx: dict):
         report = validate_questions(items)
 
         if st.session_state.generated_items_df is None:
-        df["export"] = True
-        st.session_state.generated_items_df = df.copy()
+            df["export"] = True
+            st.session_state.generated_items_df = df.copy()
             df["export"] = True
             st.session_state.export_init_generate = True
 
