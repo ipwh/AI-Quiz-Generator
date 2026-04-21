@@ -142,21 +142,25 @@ def render_generate_tab(ctx: dict):
                 st.code(traceback.format_exc())
 
     # 檢視與微調 + 匯出
-    if st.session_state.get("generated_items"):
+    if st.session_state.generated_items:
         from core.validators import validate_questions
         items = st.session_state.generated_items
         report = validate_questions(items)
 
-        st.markdown("## ④ 檢視與微調")
-        df = items_to_editor_df(items, report=report)
-        if "export_init_generate" not in st.session_state:
+        if st.session_state.generated_items_df is None:
+        df["export"] = True
+        st.session_state.generated_items_df = df.copy()
             df["export"] = True
             st.session_state.export_init_generate = True
 
-        edited, selected = render_editor(df, key="editor_generate")
+        edited_df, selected = render_editor(
+            st.session_state.generated_items_df,
+            key="editor_generate"
+)
+
 
         # 更新 session state
-        st.session_state.generated_items = edited  # 這裡可再轉回 items，若需要
+        st.session_state.generated_items_df = edited_df  # 這裡可再轉回 items，若需要
 
         st.markdown('<div id="export_anchor_generate"></div>', unsafe_allow_html=True)
         render_export_panel(selected, subject, st.session_state.get("google_creds"), prefix="generate")
