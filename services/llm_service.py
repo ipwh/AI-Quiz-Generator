@@ -378,7 +378,7 @@ def generate_questions(cfg, text, subject, level, question_count, fast_mode: boo
     max_tokens = 1500 if fast_mode else 2300
     timeout = 120 if fast_mode else 180
 
-    banned_phrases = "教材、教材中、教材內、教材出現、教材提及、根據教材、根據以上資料、文中提及、上文提到、資料顯示"
+    banned_phrases = "教材、教材中、教材內、教材出現、教材提及、根據教材、根據以上資料、文中提及、上文提到、資料顯示、筆記、筆記提到、根據筆記、筆記中、從筆記、史料、從史料"
 
     def strip_boilerplate(q: str) -> str:
         if not q:
