@@ -30,6 +30,7 @@ from services.google_oauth import (
 from services.google_forms_api import create_quiz_form
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
+from ui.components_drive_picker import render_drive_input_panel
 
 # -------------------------
 # Session State Init
