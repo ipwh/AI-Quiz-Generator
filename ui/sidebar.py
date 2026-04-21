@@ -2,19 +2,24 @@ import streamlit as st
 from services.llm_service import ping_llm, get_xai_default_model
 
 
-def render_sidebar():
-    st.sidebar.header("🟦 Google 連接")
-    st.sidebar.caption("（登入 UI 仍由 app.py 控制，這裡只做出題設定與 API 設定）")
+def render_sidebar() -> dict:
+    """
+    渲染側邊欄設定
+    回傳 ctx dict，供 pages_generate.py 和 pages_import.py 使用
+    """
+    st.sidebar.header("🔌 AI API 設定")
 
-    st.sidebar.divider()
-
+    # Fast Mode
     fast_mode = st.sidebar.checkbox(
         "⚡ 快速模式",
         value=True,
-        help="較快、較保守：較短輸出與較短超時；適合日常快速出題。",
+        help="較快、較保守：較短輸出與較短超時；適合日常快速出題。"
     )
+    st.sidebar.caption("關閉快速模式：較慢，但題目更豐富/更有變化。")
 
-    st.sidebar.header("🔌 AI API 設定")
+    st.sidebar.divider()
+
+    # API Preset 選擇
     preset = st.sidebar.selectbox(
         "快速選擇（簡易）",
         ["DeepSeek", "OpenAI", "Grok (xAI)", "Azure OpenAI", "自訂（OpenAI 相容）"],
@@ -49,6 +54,7 @@ def render_sidebar():
             azure_deployment = st.text_input("Deployment name", value="", key="azure_deployment")
             azure_api_version = st.text_input("API version", value="2024-02-15-preview", key="azure_api_version")
 
+    # Grok 自動偵測
     @st.cache_data(ttl=600, show_spinner=False)
     def _detect_xai_model_cached(k: str, u: str) -> str:
         return get_xai_default_model(k, u)
@@ -59,6 +65,7 @@ def render_sidebar():
             model = detected
             st.sidebar.caption(f"✅ 已自動選用：{model}")
 
+    # API 配置函數
     def api_config():
         if preset == "Azure OpenAI":
             return {
@@ -68,9 +75,14 @@ def render_sidebar():
                 "deployment": azure_deployment,
                 "api_version": azure_api_version,
             }
-        return {"type": "openai_compat", "api_key": api_key, "base_url": base_url, "model": model}
+        return {
+            "type": "openai_compat",
+            "api_key": api_key,
+            "base_url": base_url,
+            "model": model,
+        }
 
-    def can_call_ai(cfg: dict):
+    def can_call_ai(cfg: dict) -> bool:
         if not cfg.get("api_key"):
             return False
         if cfg.get("type") == "azure":
@@ -93,13 +105,48 @@ def render_sidebar():
                 st.sidebar.code(r.get("error", ""))
 
     st.sidebar.divider()
+
+    # OCR / Vision 設定
+    st.sidebar.header("🔬 OCR / 讀圖設定（數理科必讀）")
+    st.sidebar.caption("數學／物理／化學／生物建議開啟 Vision 模式以辨識圖表與方程式。")
+
+    ocr_mode = st.sidebar.radio(
+        "教材擷取模式",
+        [
+            "📄 純文字（一般文件，最快）",
+            "🔬 本地 OCR（掃描 PDF/圖片，離線）",
+            "🤖 LLM Vision 讀圖（圖表/方程式/手寫，最準）",
+        ],
+        index=0,
+        key="ocr_mode",
+    )
+
+    vision_pdf_max_pages = 3
+    if ocr_mode == "🤖 LLM Vision 讀圖（圖表/方程式/手寫，最準）":
+        vision_pdf_max_pages = st.sidebar.slider(
+            "Vision PDF 最多讀取頁數",
+            min_value=1,
+            max_value=10,
+            value=3,
+            key="vision_pdf_max_pages",
+            help="頁數越多越準確，但耗時與費用也越高。"
+        )
+        st.sidebar.info("💡 DeepSeek 不支援 Vision，請改用 Grok 或 GPT-4o 等模型。")
+
+    st.sidebar.divider()
+
+    # 出題設定
     st.sidebar.header("📘 出題設定")
     subject = st.sidebar.selectbox(
         "科目",
-        ["中國語文","英國語文","數學","公民與社會發展","科學","公民、經濟及社會","物理","化學","生物","地理","歷史","中國歷史","宗教",
-         "資訊及通訊科技（ICT）","經濟","企業、會計與財務概論","旅遊與款待"],
+        [
+            "中國語文", "英國語文", "數學", "公民與社會發展", "科學", "公民、經濟及社會",
+            "物理", "化學", "生物", "地理", "歷史", "中國歷史", "宗教",
+            "資訊及通訊科技（ICT）", "經濟", "企業、會計與財務概論", "旅遊與款待",
+        ],
         key="subject",
     )
+
     level_label = st.sidebar.radio(
         "🎯 難度",
         ["基礎（理解與記憶）", "標準（應用與理解）", "進階（分析與思考）", "混合（課堂活動建議）"],
@@ -114,18 +161,23 @@ def render_sidebar():
     }
     level_code = level_map[level_label]
 
-    question_count = st.sidebar.selectbox("🧮 題目數目（生成用）", [5, 8, 10, 12, 15, 20], index=2, key="question_count")
+    question_count = st.sidebar.selectbox(
+        "🧮 題目數目（生成用）",
+        [5, 8, 10, 12, 15, 20],
+        index=2,
+        key="question_count",
+    )
 
+    # 回傳上下文給主程式與各頁面使用
     return {
         "fast_mode": fast_mode,
+        "api_config": api_config,
+        "can_call_ai": can_call_ai,
+        "subject": subject,
+        "level_code": level_code,
+        "question_count": question_count,
         "preset": preset,
         "api_key": api_key,
         "base_url": base_url,
         "model": model,
-        "api_config": api_config,
-        "can_call_ai": can_call_ai,
-        "subject": subject,
-        "level_label": level_label,
-        "level_code": level_code,
-        "question_count": question_count,
     }
