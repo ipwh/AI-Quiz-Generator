@@ -686,9 +686,7 @@ def llm_ocr_extract_text_only(cfg: dict, images_data_urls: list, lang_hint: str 
     return (out or "").strip()
 
 
-# -------------------------
-# Vision 出題：圖像 + 文字
-# -------------------------
+# ------------------------- Vision 出題：圖像 + 文字 -------------------------
 def llm_ocr_extract_text(
     cfg: dict,
     text: str,
@@ -699,10 +697,8 @@ def llm_ocr_extract_text(
     fast_mode: bool = True,
 ) -> list:
     """
-    多模態 LLM 出題：
-    - 把教材圖像（data URL）+ 文字一起傳給支援 Vision 的模型
-    - 模型直接「看圖出題」，適合含圖表、方程式、手寫、掃描頁
-    - 若模型不支援 Vision，自動回退至純文字 generate_questions()
+    多模態 LLM 出題。
+    若模型不支援 Vision 或呼叫失敗，會自動回退至純文字 generate_questions()。
     """
     temperature = 0.18 if fast_mode else 0.28
     max_tokens = 1800 if fast_mode else 2800
@@ -725,7 +721,6 @@ def llm_ocr_extract_text(
         "- 只輸出純 JSON array，不要任何額外文字\n"
         "- 每題格式：{question, options:[4個], correct:[\"1\"~\"4\"], explanation, needs_review}\n"
         "- 題目必須貼合圖像/公式內容，不可離題\n"
-        "- 若有數學公式，用文字描述（如 x^2 + 2x + 1）\n"
         "- needs_review=true 代表需教師核對"
     )
 
@@ -762,7 +757,10 @@ def llm_ocr_extract_text(
         return cleaned if cleaned else generate_questions(
             cfg, text, subject, level, count, fast_mode=fast_mode, qtype="single"
         )
-    except Exception:
+    except Exception as e:
+        # 小調整：加入明確的 Exception 訊息，方便主程式捕捉
+        import logging
+        logging.warning(f"Vision 模式失敗（模型不支援或 API 錯誤）：{str(e)[:200]}")
         return generate_questions(
             cfg, text, subject, level, count, fast_mode=fast_mode, qtype="single"
         )
