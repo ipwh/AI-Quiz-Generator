@@ -147,17 +147,33 @@ def render_generate_tab(ctx: dict):
         items = st.session_state.generated_items
         report = validate_questions(items)
 
+        st.markdown("## ④ 檢視與微調")
+        # ① 一定要先建立 df（每次 rerun 都要有）
+        df = items_to_editor_df(items, report=report)
+        
+        # ② 只在「第一次進來」時初始化 editor 狀態
         if st.session_state.generated_items_df is None:
             df["export"] = True
             st.session_state.generated_items_df = df.copy()
-            df["export"] = True
-            st.session_state.export_init_generate = True
 
+        # ③ editor 永遠用 session_state 裡的 df
         edited_df, selected = render_editor(
             st.session_state.generated_items_df,
             key="editor_generate"
-)
+        )
 
+        # ④ 更新 editor 狀態（不是 items！）
+        st.session_state.generated_items_df = edited_df
+
+        st.markdown('<div id="export_anchor_generate"></div>', unsafe_allow_html=True)
+
+        # ⚠️ 這裡後續 export 要用 selected / edited_df
+        render_export_panel(
+            selected,
+            subject,
+            st.session_state.get("google_creds"),
+            prefix="generate"
+        )
 
         # 更新 session state
         st.session_state.generated_items_df = edited_df  # 這裡可再轉回 items，若需要
