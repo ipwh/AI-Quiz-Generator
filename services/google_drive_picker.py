@@ -1,9 +1,25 @@
 import io
 import re
-import requests
+import streamlit as st
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 
+
+# ── Secrets 讀取 ──────────────────────────────────────
+def _picker_api_key() -> str:
+    try:
+        return st.secrets.get("AIzaSyDPrNmV6TMjAzzTfQebvWMBM1b5Yvx7MOA", "")
+    except Exception:
+        return ""
+
+def _picker_project_number() -> str:
+    try:
+        return st.secrets.get("577655749758", "")
+    except Exception:
+        return ""
+
+
+# ── 支援的 MIME 格式 ──────────────────────────────────
 SUPPORTED_MIME_EXPORT = {
     "application/vnd.google-apps.document": (
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -37,7 +53,6 @@ def _drive_service(creds):
 def extract_file_id(link_or_id: str) -> str:
     """從分享連結或純 ID 抽出 file_id。"""
     s = link_or_id.strip()
-    # 嘗試從 URL 抽取
     patterns = [
         r"/file/d/([a-zA-Z0-9_-]+)",
         r"id=([a-zA-Z0-9_-]+)",
@@ -47,7 +62,6 @@ def extract_file_id(link_or_id: str) -> str:
         m = re.search(p, s)
         if m:
             return m.group(1)
-    # 若無 URL 特徵，直接當 ID 用
     if re.match(r"^[a-zA-Z0-9_-]{10,}$", s):
         return s
     raise ValueError(f"無法辨識 Drive 連結或 ID：{s}")
@@ -81,16 +95,13 @@ def download_file(creds, file_id: str) -> tuple[bytes, str, str]:
         return data, f"{name}.{ext}", ext
 
     # 一般二進位格式 → 直接下載
-    if mime in SUPPORTED_DIRECT_MIME or True:
-        buf = io.BytesIO()
-        dl = MediaIoBaseDownload(buf, service.files().get_media(fileId=file_id))
-        done = False
-        while not done:
-            _, done = dl.next_chunk()
-        ext = name.rsplit(".", 1)[-1].lower() if "." in name else "bin"
-        return buf.getvalue(), name, ext
-
-    raise ValueError(f"不支援的檔案格式：{mime}")
+    buf = io.BytesIO()
+    dl = MediaIoBaseDownload(buf, service.files().get_media(fileId=file_id))
+    done = False
+    while not done:
+        _, done = dl.next_chunk()
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else "bin"
+    return buf.getvalue(), name, ext
 
 
 def list_recent_files(creds, max_results: int = 30) -> list[dict]:
