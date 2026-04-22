@@ -1,8 +1,11 @@
 # =========================================================
 # app.py
-# ✅ 穩定版：已補回 Google 登入（OAuth）
-# ✅ 保留 Generate / Import / needs_review 高亮 UI
-# ✅ 與 llm_service.py（乾淨重寫版）完全相容
+# ✅ 完整最終版（單一檔案）
+# ✅ 已補回：完整科目清單 + 教學難度 UI + Fast Mode
+# ✅ 已整合：Google 登入、Generate / Import、Vision、needs_review 高亮
+# ✅ 相容：乾淨重寫版 llm_service.py
+# ---------------------------------------------------------
+# 使用方式：直接以此檔案完整覆蓋你的 app.py，然後重啟 Streamlit
 # =========================================================
 
 import streamlit as st
@@ -19,14 +22,11 @@ from services.vision_service import (
     file_to_data_url,
     supports_vision,
 )
-
-# Google OAuth（你原本已有的模組，安全補回）
 from services.google_oauth import (
     oauth_is_configured,
     get_auth_url,
     exchange_code_for_credentials,
     credentials_to_dict,
-    credentials_from_dict,
 )
 
 # =========================================================
@@ -73,25 +73,37 @@ if oauth_is_configured() and "code" in params and not st.session_state.google_cr
         st.stop()
 
 # =========================================================
-# Sidebar — Google login
+# Sidebar — Google Login
 # =========================================================
 
-st.sidebar.header("🟦 Google 登入（分享 / 表單）")
+st.sidebar.header("🟦 Google 連接（Google Forms / Drive）")
 if not oauth_is_configured():
     st.sidebar.warning("尚未設定 Google OAuth secrets")
 else:
     if st.session_state.google_creds:
         st.sidebar.success("✅ 已登入 Google")
-        if st.sidebar.button("登出 Google"):
+        if st.sidebar.button("🔒 登出 Google"):
             st.session_state.google_creds = None
             st.rerun()
     else:
-        st.sidebar.link_button("登入 Google", get_auth_url())
+        st.sidebar.link_button("🔐 登入 Google", get_auth_url())
 
 st.sidebar.divider()
 
 # =========================================================
-# Sidebar — API config
+# Sidebar — Fast Mode
+# =========================================================
+
+fast_mode = st.sidebar.checkbox(
+    "⚡ 快速模式",
+    value=True,
+    help="較快、較保守輸出；適合日常出題。關閉後題目更豐富。",
+)
+
+st.sidebar.divider()
+
+# =========================================================
+# Sidebar — AI API 設定
 # =========================================================
 
 st.sidebar.header("🔌 AI API 設定")
@@ -117,7 +129,7 @@ cfg = {
     "model": model,
 }
 
-if st.sidebar.button("測試 API"):
+if st.sidebar.button("🧪 測試 API"):
     r = ping_llm(cfg)
     if r.get("ok"):
         st.sidebar.success("API 正常")
@@ -126,18 +138,45 @@ if st.sidebar.button("測試 API"):
         st.sidebar.code(r.get("error"))
 
 # =========================================================
-# Sidebar — 題目設定
+# Sidebar — 教學設定（完整回歸）
 # =========================================================
 
 st.sidebar.header("📘 出題設定")
-subject = st.sidebar.selectbox("科目", list([
-    "中國語文","英國語文","數學","科學","物理","化學","生物","地理","歷史","中國歷史","經濟"
-]))
-level = st.sidebar.selectbox("難度", ["easy","medium","hard","mixed"], index=1)
-question_count = st.sidebar.selectbox("題目數目", [5,8,10,15,20], index=2)
+subject = st.sidebar.selectbox(
+    "科目",
+    [
+        "中國語文", "英國語文", "數學", "公民與社會發展",
+        "科學", "公民、經濟及社會",
+        "物理", "化學", "生物", "地理",
+        "歷史", "中國歷史", "宗教",
+        "資訊及通訊科技（ICT）", "經濟",
+        "企業、會計與財務概論", "旅遊與款待",
+    ],
+)
+
+level_label = st.sidebar.radio(
+    "🎯 難度",
+    [
+        "基礎（理解與記憶）",
+        "標準（應用與理解）",
+        "進階（分析與思考）",
+        "混合（課堂活動建議）",
+    ],
+    index=1,
+)
+
+level_map = {
+    "基礎（理解與記憶）": "easy",
+    "標準（應用與理解）": "medium",
+    "進階（分析與思考）": "hard",
+    "混合（課堂活動建議）": "mixed",
+}
+level = level_map[level_label]
+
+question_count = st.sidebar.selectbox("題目數目", [5, 8, 10, 12, 15, 20], index=2)
 
 st.sidebar.header("🔬 OCR / Vision")
-ocr_mode = st.sidebar.radio("教材擷取模式", ["純文字","Vision"], index=0)
+ocr_mode = st.sidebar.radio("教材擷取模式", ["純文字", "Vision"], index=0)
 
 # =========================================================
 # Tabs
@@ -151,19 +190,22 @@ tab_gen, tab_import = st.tabs(["🪄 生成新題目", "📄 匯入現有題目"
 
 with tab_gen:
     text = st.text_area("貼上教材內容")
-    images = st.file_uploader("（可選）圖片", type=["png","jpg"], accept_multiple_files=True)
+    images = st.file_uploader("（可選）圖片", type=["png", "jpg"], accept_multiple_files=True)
 
     if st.button("生成題目"):
         try:
             if ocr_mode == "Vision" and images and supports_vision(cfg):
                 image_urls = [file_to_data_url(f.read(), f.name) for f in images]
-                items = vision_generate_questions(cfg, text, image_urls, subject, level, question_count)
+                items = vision_generate_questions(
+                    cfg, text, image_urls, subject, level, question_count, fast_mode=fast_mode
+                )
             else:
-                items = generate_questions(cfg, text, subject, level, question_count)
+                items = generate_questions(
+                    cfg, text, subject, level, question_count, fast_mode=fast_mode
+                )
 
             st.success("✅ 題目生成完成")
 
-            # ✅ needs_review 高亮 UI
             for i, q in enumerate(items, start=1):
                 needs_review = bool(q.get("needs_review"))
                 title = f"第 {i} 題"
