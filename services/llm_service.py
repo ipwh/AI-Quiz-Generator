@@ -436,7 +436,25 @@ def ping_llm(cfg: dict, timeout: int = 25) -> dict:
         return {"ok": "OK" in (out or "").upper(), "latency_ms": ms, "output": out, "error": ""}
     except Exception as e:
         ms = int((time.time() - t0) * 1000)
-        return {"ok": False, "latency_ms": ms, "output": "", "error": repr(e)}
+        except Exception as e:
+    ms = int((time.time() - t0) * 1000)
+
+    # ✅ 嘗試取出 HTTP response body
+    body = ""
+    try:
+        resp = getattr(e, "response", None)
+        if resp is not None:
+            body = resp.text or ""
+    except Exception:
+        body = ""
+
+    return {
+        "ok": False,
+        "latency_ms": ms,
+        "output": "",
+        "error": repr(e) + ("\n\n--- response body ---\n" + body if body else ""),
+    }
+
 
 
 # =========================================================
