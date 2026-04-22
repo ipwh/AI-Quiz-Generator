@@ -1,52 +1,101 @@
 import streamlit as st
 
+# =========================================================
+# ui/sidebar.py (修正版)
+# ---------------------------------------------------------
+# ✅ 修正 xAI 400 Model not found：改用 /v1/language-models 取得可用模型清單
+# ✅ 預設優先：grok-4-0709（若清單存在）
+# ✅ 支援：Grok (xAI) + 自訂（OpenAI 相容）+ DeepSeek/OpenAI/Azure
 # ✅ 兼容不同版本 llm_service：可能沒有 ping_llm / get_xai_default_model
+# =========================================================
+
+import requests
+
+# 兼容不同版本 llm_service
 try:
     from services.llm_service import ping_llm
 except Exception:
     ping_llm = None
 
 try:
-    from services.llm_service import get_xai_default_model as _get_xai_default_model
+    from services.llm_service import get_xai_default_model  # 可選：若你的 llm_service 有提供
 except Exception:
-    _get_xai_default_model = None
+    get_xai_default_model = None
 
 
-def _local_detect_xai_model(api_key: str, base_url: str) -> str:
-    """在沒有 get_xai_default_model() 時，本地用 OpenAI-compatible /models 自動偵測 Grok 型號。"""
-    import requests
+# ---------------------------------------------------------
+# xAI: /v1/language-models（列出 chat + image understanding）
+# ---------------------------------------------------------
 
-    url = base_url.rstrip("/") + "/models"
+@st.cache_data(ttl=600, show_spinner=False)
+def _xai_list_language_models(api_key: str, base_url: str) -> list:
+    """讀取 xAI /v1/language-models，回傳 list[dict]。
+
+    xAI 官方提供：/v1/language-models 可列出可用 chat/image understanding 模型及 aliases。
+    """
+    url = base_url.rstrip("/") + "/language-models"
     headers = {"Authorization": f"Bearer {api_key}"}
     r = requests.get(url, headers=headers, timeout=20)
     r.raise_for_status()
     data = r.json() or {}
-    models = data.get("data", []) if isinstance(data, dict) else []
-    ids = []
+
+    # 官方文件字段：models（部分 gateway 可能用 data）
+    models = data.get("models")
+    if isinstance(models, list):
+        return [m for m in models if isinstance(m, dict)]
+
+    models = data.get("data")
+    if isinstance(models, list):
+        return [m for m in models if isinstance(m, dict)]
+
+    return []
+
+
+def _xai_build_model_options(models: list) -> list:
+    """把 models 的 aliases + id 合併成下拉選單，去重並保持順序。"""
+    options = []
     for m in models:
-        mid = m.get("id") if isinstance(m, dict) else None
+        als = m.get("aliases", [])
+        if isinstance(als, list):
+            options.extend([a for a in als if isinstance(a, str)])
+        mid = m.get("id")
+        if isinstance(mid, str):
+            options.append(mid)
+
+    seen = set()
+    uniq = []
+    for x in options:
+        if x and x not in seen:
+            seen.add(x)
+            uniq.append(x)
+    return uniq
+
+
+def _xai_pick_default_model(models: list, preferred: str = "grok-4-0709") -> str:
+    """依序挑選：preferred → 任一 grok alias → 任一 grok id → grok-2-latest。"""
+    ids, aliases = [], []
+    for m in models:
+        mid = m.get("id")
         if isinstance(mid, str):
             ids.append(mid)
+        als = m.get("aliases", [])
+        if isinstance(als, list):
+            for a in als:
+                if isinstance(a, str):
+                    aliases.append(a)
 
-    # 偏好：含 grok、含 latest
-    grok = [i for i in ids if "grok" in i.lower()]
-    if not grok:
-        return "grok-4-latest"
+    if preferred in ids or preferred in aliases:
+        return preferred
 
-    latest = [i for i in grok if "latest" in i.lower()]
-    if latest:
-        # 若多個 latest，取字串排序最後一個
-        return sorted(latest)[-1]
+    for a in aliases:
+        if "grok" in a.lower():
+            return a
 
-    # 否則取字串排序最後一個
-    return sorted(grok)[-1]
+    for mid in ids:
+        if "grok" in mid.lower():
+            return mid
 
-
-@st.cache_data(ttl=600, show_spinner=False)
-def _detect_xai_model_cached(api_key: str, base_url: str) -> str:
-    if _get_xai_default_model:
-        return _get_xai_default_model(api_key, base_url)
-    return _local_detect_xai_model(api_key, base_url)
+    return "grok-2-latest"
 
 
 def render_sidebar() -> dict:
@@ -69,6 +118,7 @@ def render_sidebar() -> dict:
         ["DeepSeek", "OpenAI", "Grok (xAI)", "Azure OpenAI", "自訂（OpenAI 相容）"],
         key="preset",
     )
+
     api_key = st.sidebar.text_input("API Key", type="password", key="api_key")
 
     auto_xai = False
@@ -76,6 +126,7 @@ def render_sidebar() -> dict:
     azure_deployment = ""
     azure_api_version = "2024-02-15-preview"
 
+    # Preset defaults
     if preset == "DeepSeek":
         base_url = "https://api.deepseek.com/v1"
         model = "deepseek-chat"
@@ -86,12 +137,72 @@ def render_sidebar() -> dict:
 
     elif preset == "Grok (xAI)":
         base_url = "https://api.x.ai/v1"
-        model = "grok-4-latest"
+
+        # 你指定預設：grok-4-0709
+        preferred = "grok-4-0709"
+        model = st.session_state.get("xai_selected_model", preferred)
+
         auto_xai = st.sidebar.checkbox(
             "🤖 自動偵測可用最新 Grok 型號（建議）",
             value=True,
             key="auto_xai",
         )
+
+        st.sidebar.caption("建議：先按『🔍 取得可用模型』，再從清單選擇，避免 Model not found。")
+
+        if api_key:
+            # 手動拉清單
+            if st.sidebar.button("🔍 取得可用模型", key="btn_xai_fetch_models"):
+                try:
+                    models = _xai_list_language_models(api_key, base_url)
+                    st.session_state["xai_models_cache"] = models
+                    st.sidebar.success(f"✅ 已載入 {len(models)} 個可用模型")
+                except Exception as e:
+                    st.sidebar.error("❌ 取得模型清單失敗（請檢查 Key/網絡）")
+                    st.sidebar.code(repr(e))
+
+            models = st.session_state.get("xai_models_cache", [])
+
+            # 如果 llm_service 有 get_xai_default_model，就可先用它（保持向後相容）
+            if auto_xai and api_key and get_xai_default_model:
+                try:
+                    detected = get_xai_default_model(api_key, base_url)
+                    if detected:
+                        model = detected
+                        st.session_state["xai_selected_model"] = model
+                        st.sidebar.caption(f"✅ 已自動選用：{model}")
+                except Exception:
+                    pass
+
+            # 優先用 /v1/language-models（你指定）
+            if auto_xai and models:
+                picked = _xai_pick_default_model(models, preferred=preferred)
+                model = picked
+                st.session_state["xai_selected_model"] = model
+                st.sidebar.caption(f"✅ 已自動選用：{model}")
+
+            # 有清單就給下拉
+            if models:
+                options = _xai_build_model_options(models)
+                if model not in options:
+                    model = _xai_pick_default_model(models, preferred=preferred)
+                model = st.sidebar.selectbox(
+                    "Grok 模型（從可用清單選擇）",
+                    options,
+                    index=options.index(model) if model in options else 0,
+                    key="xai_model_selectbox",
+                )
+                st.session_state["xai_selected_model"] = model
+            else:
+                # 沒清單時提供手動輸入（仍可用）
+                model = st.sidebar.text_input(
+                    "Model（建議先按『取得可用模型』）",
+                    value=model,
+                    key="xai_model_manual",
+                )
+                st.session_state["xai_selected_model"] = model
+        else:
+            st.sidebar.info("先填入 xAI API Key 才能載入可用模型清單。")
 
     elif preset == "Azure OpenAI":
         base_url = ""
@@ -104,16 +215,6 @@ def render_sidebar() -> dict:
     else:
         base_url = st.sidebar.text_input("Base URL（含 /v1）", value="", key="custom_base_url")
         model = st.sidebar.text_input("Model", value="", key="custom_model")
-
-    # Grok auto-detect
-    if preset == "Grok (xAI)" and auto_xai and api_key:
-        try:
-            detected = _detect_xai_model_cached(api_key, base_url)
-            if detected and detected != model:
-                model = detected
-                st.sidebar.caption(f"✅ 已自動選用：{model}")
-        except Exception as e:
-            st.sidebar.caption("（自動偵測失敗，將使用 grok-4-latest）")
 
     # API config
     def api_config():
@@ -144,6 +245,16 @@ def render_sidebar() -> dict:
     st.sidebar.header("🧪 API 連線測試")
     cfg_test = api_config()
 
+    # ✅ 把測試 timeout 拉長些：避免 DeepSeek 25s 易 timeout
+    ping_timeout = st.sidebar.slider(
+        "測試超時（秒）",
+        min_value=10,
+        max_value=120,
+        value=45,
+        key="ping_timeout_sec",
+        help="DeepSeek/網絡繁忙時建議 45–90 秒。",
+    )
+
     if st.sidebar.button("🧪 一鍵測試 API（回覆 OK）", key="btn_ping_api"):
         if ping_llm is None:
             st.sidebar.warning("⚠️ 此版本 llm_service 未提供 ping_llm()，已略過測試。")
@@ -151,7 +262,7 @@ def render_sidebar() -> dict:
             st.sidebar.error("請先填妥 API Key／Base URL／Model（Azure 要 Endpoint + Deployment）。")
         else:
             with st.sidebar.spinner("正在測試連線…"):
-                r = ping_llm(cfg_test, timeout=25)
+                r = ping_llm(cfg_test, timeout=int(ping_timeout))
             if r.get("ok"):
                 st.sidebar.success(f"✅ 成功：{r.get('latency_ms', 0)} ms；回覆：{r.get('output','')}")
             else:
@@ -231,4 +342,9 @@ def render_sidebar() -> dict:
         "subject": subject,
         "level_code": level_code,
         "question_count": question_count,
+
+        # debug echoes
+        "preset": preset,
+        "model": model,
+        "base_url": base_url,
     }
