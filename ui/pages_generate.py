@@ -1,17 +1,22 @@
+import re
 import streamlit as st
 
 from extractors.extract import extract_text
-from core.question_mapper import (
-    dicts_to_items,
-    items_to_editor_df,
-    editor_df_to_items,
-)
+from core.question_mapper import dicts_to_items, items_to_editor_df, editor_df_to_items
 from core.validators import validate_questions
 
 from ui.components_editor import render_editor
 from ui.components_export import render_export_panel
 
-DNL = chr(10) * 2      # ✅ 移除了從未使用的 NL = chr(10)
+DNL = "\n\n"
+
+
+def _clean_text(text: str) -> str:
+    if not text:
+        return ""
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", DNL, text)
+    return text.strip()
 
 
 def _split_paragraphs(text: str):
@@ -20,123 +25,177 @@ def _split_paragraphs(text: str):
 
 def _build_text_with_highlights(raw_text: str, marked_idx: set, limit: int):
     paras = _split_paragraphs(raw_text)
-    highlights = [paras[i] for i in range(len(paras)) if i in marked_idx]
-    others = [paras[i] for i in range(len(paras)) if i not in marked_idx]
+    highlighted = [p for i, p in enumerate(paras) if i in marked_idx]
+    others = [p for i, p in enumerate(paras) if i not in marked_idx]
 
-    parts = []
-    if highlights:
-        parts.append("【重點段落（老師標記）】")
-        parts.append(DNL.join(highlights))
-    # ✅ 修正：無論 highlights 是否為空，都要加入其餘教材
+    combined = []
+    if highlighted:
+        combined.append("【重點段落】")
+        combined.extend(highlighted)
     if others:
-        parts.append("【其餘教材】")
-        parts.append(DNL.join(others))
+        combined.append("【其餘內容】")
+        combined.extend(others)
 
-    return DNL.join(parts)[:limit]
+    out = DNL.join(combined)
+    if limit and len(out) > limit:
+        out = out[:limit]
+    return out
+
+
+def _normalize_llm_dicts(data: list):
+    out = []
+    for q in (data or []):
+        qq = dict(q)
+        # options
+        opts = qq.get("options", [])
+        if not isinstance(opts, list):
+            opts = []
+        opts = [str(x) if x is not None else "" for x in opts]
+        opts = (opts + ["", "", "", ""])[:4]
+        qq["options"] = opts
+        # correct
+        corr = qq.get("correct", [])
+        if isinstance(corr, str):
+            corr = [c.strip() for c in corr.split(",") if c.strip()]
+        if isinstance(corr, int):
+            corr = [str(corr)]
+        if not isinstance(corr, list):
+            corr = []
+        corr = [str(x).strip() for x in corr]
+        corr = [c for c in corr if c in {"1", "2", "3", "4"}]
+        qq["correct"] = corr[:1]
+        if "needs_review" not in qq:
+            qq["needs_review"] = False
+        out.append(qq)
+    return out
+
+
+def _extract_multi_files(files) -> str:
+    parts = []
+    for f in files:
+        try:
+            t = extract_text(f) or ""
+        except Exception:
+            t = ""
+        t = _clean_text(t)
+        if t:
+            parts.append(t)
+    return _clean_text(DNL.join(parts))
+
+
+def _ensure_default_select_all(text: str, idx_key: str, hash_key: str):
+    h = str(hash(text or ""))
+    if st.session_state.get(hash_key) != h:
+        paras = _split_paragraphs(text)
+        st.session_state[idx_key] = set(range(len(paras)))
+        st.session_state[hash_key] = h
 
 
 def render_generate_tab(ctx: dict):
-    """
-    生成新題目頁面
-
-    ctx 必須包含：
-    - api_config(): dict
-    - can_call_ai(cfg): bool
-    - generate_questions(cfg, text, subject, level, count, fast_mode, qtype)
-    - subject, level_code, question_count, fast_mode
-    """
-
     st.markdown("## ① 上載教材")
-    st.caption(
-        "支援 PDF/DOCX/TXT/PPTX/XLSX/PNG/JPG。"
-        "掃描／截圖可選擇啟用 LLM 讀圖 OCR（較慢）。"
-    )
+    st.caption("支援 PDF / DOCX / TXT / PPTX / XLSX / PNG / JPG；可配合 OCR 或 Vision 讀圖。")
 
     cfg = ctx["api_config"]()
     can_call_ai = ctx["can_call_ai"]
 
-    files = st.file_uploader(
-        "上載教材檔案", accept_multiple_files=True,
+    uploads = st.file_uploader(
+        "上載教材（可多檔）",
         type=["pdf", "docx", "txt", "pptx", "xlsx", "png", "jpg", "jpeg"],
-        key="files_generate",
+        accept_multiple_files=True,
+        key="gen_files",
     )
 
-    raw_text = ""
-    if files:
-        with st.spinner("📄 正在擷取文字…"):
-            raw_text = "".join(extract_text(f) for f in files)
-        st.info(f"✅ 已擷取 {len(raw_text)} 字")
+    extracted_text = ""
+    if uploads:
+        with st.status("正在擷取教材內容…", expanded=False) as status:
+            status.update(state="running")
+            extracted_text = _extract_multi_files(uploads)
+            status.update(label="教材內容擷取完成", state="complete")
 
-    st.markdown("## ② 重點段落標記（可選）")
-    st.caption("勾選後會把重點段落放到最前面，提高貼題度。")
+    st.session_state["gen_extracted_text"] = extracted_text
 
-    paras = _split_paragraphs(raw_text)
-    with st.expander("⭐ 打開段落清單（最多顯示 80 段）"):
-        c1, c2 = st.columns(2)
+    st.markdown("## ② 老師勾選重點段落（只用勾選內容出題）")
+    limit = 8000 if ctx.get("fast_mode", True) else 10000
+
+    _ensure_default_select_all(extracted_text, idx_key="mark_idx_generate", hash_key="gen_text_hash")
+
+    with st.expander("② 重點段落選擇（預設摺疊）", expanded=False):
+        paras = _split_paragraphs(extracted_text)
+        c1, c2, c3 = st.columns([1, 1, 3])
         with c1:
-            if st.button("✅ 全選重點段落", key="pg_mark_all"):
-                st.session_state.mark_idx = set(range(len(paras)))
+            if st.button("✅ 全選", key="btn_gen_select_all"):
+                st.session_state.mark_idx_generate = set(range(len(paras)))
+                st.rerun()
         with c2:
-            if st.button("⛔ 全不選", key="pg_mark_none"):
-                st.session_state.mark_idx = set()
-        for i, p in enumerate(paras[:80]):
-            checked = i in st.session_state.mark_idx
-            new_checked = st.checkbox(f"第 {i+1} 段", value=checked, key=f"para_{i}")
+            if st.button("⬜ 全不選", key="btn_gen_select_none"):
+                st.session_state.mark_idx_generate = set()
+                st.rerun()
+        with c3:
+            st.caption("預設已全選。可按需要取消。")
+
+        mark_idx = st.session_state.get("mark_idx_generate", set())
+        new_set = set(mark_idx)
+        for i, p in enumerate(paras):
+            checked = (i in new_set)
+            new_checked = st.checkbox(f"段落 {i+1}", value=checked, key=f"gen_para_{i}")
+            st.markdown(p)
             if new_checked:
-                st.session_state.mark_idx.add(i)
+                new_set.add(i)
             else:
-                st.session_state.mark_idx.discard(i)
-            st.write(p[:200] + ("…" if len(p) > 200 else ""))
+                new_set.discard(i)
+        st.session_state.mark_idx_generate = new_set
+
+    used_text = _build_text_with_highlights(extracted_text, st.session_state.get("mark_idx_generate", set()), limit)
+
+    st.info(f"已擷取 {len(extracted_text)} 字；送入 AI {len(used_text)} 字（上限 {limit}）")
+
+    with st.expander("🔎 已選內容預覽（將送入 AI）", expanded=False):
+        st.text(used_text[:5000] + ("\n…（已截斷）" if len(used_text) > 5000 else ""))
 
     st.markdown("## ③ 生成題目")
-    can_generate = bool(raw_text.strip()) and can_call_ai(cfg)
+    if st.button("🪄 生成題目", disabled=not can_call_ai(cfg), key="btn_generate_questions"):
+        try:
+            progress = st.progress(0)
+            with st.spinner("AI 生成題目中…"):
+                progress.progress(25)
+                data = ctx["generate_questions"](
+                    cfg,
+                    used_text,
+                    ctx["subject"],
+                    ctx["level_code"],
+                    ctx["question_count"],
+                    fast_mode=ctx.get("fast_mode", True),
+                    qtype="single",
+                )
+                progress.progress(70)
 
-    clicked = st.button(
-        "🪄 生成題目", key="btn_generate",
-        disabled=not can_generate,
-        help="請先上載教材並完成 AI API 設定" if not can_generate else "開始生成題目",
-    )
+            data = _normalize_llm_dicts(data)
+            items = dicts_to_items(data, subject=ctx["subject"], source="generate")
+            report = validate_questions(items)
 
-    if clicked:
-        limit = 8000 if ctx.get("fast_mode") else 10000
-        used_text = _build_text_with_highlights(raw_text, st.session_state.mark_idx, limit)
+            st.session_state.generated_items = items
+            st.session_state.generated_report = report
+            progress.progress(100)
+            st.success("✅ 題目生成完成")
 
-        with st.spinner("🤖 正在生成題目（約需 10–30 秒）…"):
-            # ✅ 修正：原為破損的 `data = ctx` + 孤立參數，現修正為正確的函數呼叫
-            data = ctx["generate_questions"](
-                cfg,
-                used_text,
-                ctx["subject"],
-                ctx["level_code"],
-                ctx["question_count"],
-                fast_mode=ctx.get("fast_mode", False),
-                qtype="single",
-            )
-
-        items = dicts_to_items(data, subject=ctx["subject"], source="generate")
-        report = validate_questions(items)
-        st.session_state.generated_items = items
-        st.session_state.generated_report = report
-        st.session_state.pop("export_init_generate", None)   # ✅ 確保新題目預設全勾選
+        except Exception as e:
+            st.exception(e)
 
     if st.session_state.get("generated_items"):
         report = st.session_state.get("generated_report", [])
         bad_count = len([x for x in report if not x.get("ok")])
         if bad_count:
-            st.warning(f"⚠️ 有 {bad_count} 題需要教師檢查")
+            st.warning(f"⚠️ 有 {bad_count} 題需要教師檢查（建議先修正再匯出）")
 
-        st.markdown("## ④ 檢視與微調")
+        st.markdown("## ④ 結果（可直接編輯題目與答案）")
         df = items_to_editor_df(st.session_state.generated_items, report=report)
         edited, selected = render_editor(df, key="editor_generate")
 
         edited_items = editor_df_to_items(edited, default_subject=ctx["subject"], source="generate")
+        edited_report = validate_questions(edited_items)
+
         st.session_state.generated_items = edited_items
-        st.session_state.generated_report = validate_questions(edited_items)
+        st.session_state.generated_report = edited_report
 
         st.markdown("## ⑤ 匯出 / Google Form / 電郵分享")
-        render_export_panel(
-            selected,
-            ctx["subject"],
-            st.session_state.get("google_creds"),
-            prefix="generate",
-        )
+        render_export_panel(selected, ctx["subject"], st.session_state.get("google_creds"), prefix="generate")

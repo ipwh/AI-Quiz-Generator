@@ -1,4 +1,3 @@
-
 import streamlit as st
 
 from extractors.extract import extract_text
@@ -11,22 +10,31 @@ from ui.components_export import render_export_panel
 
 def render_import_tab(ctx: dict):
     st.markdown("## ① 上載 / 貼上題目")
-    st.caption("支援 DOCX/TXT 或直接貼上。匯入模式固定為單選（4選1）。")
+    st.caption("支援 PDF/DOCX/TXT/PPTX/XLSX 或直接貼上。匯入模式固定為單選（4選1）。")
 
     cfg = ctx["api_config"]()
     can_call_ai = ctx["can_call_ai"]
 
-    def load_import_file_to_textbox():
-        f = st.session_state.get("import_file")
-        if f is None:
+    def load_import_files_to_text():
+        files = st.session_state.get("import_files")
+        if not files:
             return
-        st.session_state.imported_text = extract_text(f) or ""
+        parts = []
+        for f in files:
+            try:
+                t = extract_text(f) or ""
+            except Exception:
+                t = ""
+            if t.strip():
+                parts.append(t.strip())
+        st.session_state.imported_text = "\n\n".join(parts)
 
     st.file_uploader(
-        "上載 DOCX/TXT（自動載入到文字框）",
-        type=["docx", "txt"],
-        key="import_file",
-        on_change=load_import_file_to_textbox,
+        "上載題目檔案（自動載入到文字框）",
+        type=["pdf", "docx", "txt", "pptx", "xlsx"],
+        accept_multiple_files=True,
+        key="import_files",
+        on_change=load_import_files_to_text,
     )
 
     use_ai_assist = st.checkbox("啟用 AI 協助整理（建議）", value=True, key="use_ai_assist")
@@ -34,13 +42,12 @@ def render_import_tab(ctx: dict):
 
     st.markdown("## ② 整理並轉換")
 
-    if st.button(
-        "✨ 整理並轉換",
-        disabled=not (bool(st.session_state.get("imported_text", "").strip()) and (not use_ai_assist or can_call_ai(cfg))),
-        key="btn_import_parse",
-    ):
-        raw = st.session_state.get("imported_text", "").strip()
+    raw = (st.session_state.get("imported_text", "") or "").strip()
+    disabled = not bool(raw)
+    if use_ai_assist:
+        disabled = disabled or (not can_call_ai(cfg))
 
+    if st.button("✨ 整理並轉換", disabled=disabled, key="btn_import_parse"):
         try:
             with st.spinner("🧠 正在整理…"):
                 if use_ai_assist:
@@ -49,7 +56,7 @@ def render_import_tab(ctx: dict):
                         raw,
                         ctx["subject"],
                         allow_guess=True,
-                        fast_mode=ctx.get("fast_mode", False),
+                        fast_mode=ctx.get("fast_mode", True),
                         qtype="single",
                     )
                 else:
@@ -61,12 +68,7 @@ def render_import_tab(ctx: dict):
             st.session_state.imported_report = report
 
         except Exception as e:
-            st.warning("⚠️ AI 整理失敗，改用本地拆題作備援，請老師核對答案。")
-            data = ctx["parse_import_questions_locally"](raw)
-            items = dicts_to_items(data, subject=ctx["subject"], source="local")
-            report = validate_questions(items)
-            st.session_state.imported_items = items
-            st.session_state.imported_report = report
+            st.error("匯入/整理失敗")
             st.exception(e)
 
     if st.session_state.get("imported_items"):

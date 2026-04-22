@@ -1,15 +1,12 @@
-
 import streamlit as st
 import pandas as pd
 
 
 def render_editor(df: pd.DataFrame, key: str):
     """Render the data editor and return (edited_df, selected_df)."""
-
     if df is None or df.empty:
         return df, df
 
-    # Bulk selection helpers
     c1, c2 = st.columns([1, 1])
     with c1:
         if st.button("✅ 全選匯出", key=f"{key}_export_all"):
@@ -18,7 +15,6 @@ def render_editor(df: pd.DataFrame, key: str):
         if st.button("全部取消匯出", key=f"{key}_export_none"):
             df["export"] = False
 
-    # Disable validation columns (display only)
     disabled_cols = ["subject", "qtype", "validation_ok", "validation_errors"]
     disabled_cols = [c for c in disabled_cols if c in df.columns]
 
