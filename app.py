@@ -6,6 +6,12 @@ import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
 
+from services.vision_service import (
+    vision_generate_questions,
+    file_to_data_url,
+    supports_vision,
+)
+
 from core.question_mapper import dicts_to_items, items_to_editor_df
 from services.llm_service import (
     llm_ocr_extract_text,
@@ -392,10 +398,31 @@ with tab_generate:
                             fast_mode=fast_mode, qtype="single"
                         )
                 else:
-                    data = generate_questions(
-                        cfg, used_text, subject, level_code, question_count,
-                        fast_mode=fast_mode, qtype="single"
-                    )
+                    if ocr_mode == "🤖 LLM Vision 讀圖（圖表/方程式/手寫，最準）" and images:
+                        if not supports_vision(cfg):
+                            st.warning("⚠️ 所選模型不支援 Vision，已改用純文字模式。")
+
+                        image_urls = [file_to_data_url(f.read(), f.name) for f in images]
+
+                        items = vision_generate_questions(
+                            cfg,
+                            used_text,
+                            image_urls,
+                            subject,
+                            level_code,
+                            question_count,
+                            fast_mode=fast_mode,
+                        )
+                    else:
+                        items = generate_questions(
+                            cfg,
+                            used_text,
+                            subject,
+                            level_code,
+                            question_count,
+                            fast_mode=fast_mode,
+                        )
+
 
                 # 強化 Vision 回退提示
                 if ocr_mode == "🤖 LLM Vision 讀圖（圖表/方程式/手寫，最準）" and not vision_used:
