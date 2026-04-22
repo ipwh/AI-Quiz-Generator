@@ -4,7 +4,7 @@ from services.llm_service import ping_llm, get_xai_default_model
 
 
 def render_sidebar() -> dict:
-    """Render sidebar and return ctx dict."""
+    """渲染側邊欄設定，回傳 ctx dict。"""
 
     st.sidebar.header("🔌 AI API 設定")
 
@@ -111,7 +111,9 @@ def render_sidebar() -> dict:
                 st.sidebar.code(r.get("error", ""))
 
     st.sidebar.divider()
+
     st.sidebar.header("🔬 OCR / 讀圖設定（數理科必讀）")
+    st.sidebar.caption("數學／物理／化學／生物建議開啟 Vision 模式以辨識圖表與方程式。")
 
     ocr_mode = st.sidebar.radio(
         "教材擷取模式",
@@ -136,8 +138,8 @@ def render_sidebar() -> dict:
         st.sidebar.info("💡 DeepSeek 不支援 Vision，請改用 Grok 或 GPT-4o 等模型。")
 
     st.sidebar.divider()
-    st.sidebar.header("📘 出題設定")
 
+    st.sidebar.header("📘 出題設定")
     subject = st.sidebar.selectbox(
         "科目",
         [
@@ -161,7 +163,6 @@ def render_sidebar() -> dict:
         "進階（分析與思考）": "hard",
         "混合（課堂活動建議）": "mixed",
     }
-
     level_code = level_map[level_label]
 
     question_count = st.sidebar.selectbox(

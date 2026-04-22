@@ -43,9 +43,16 @@ def _build_text_with_highlights(raw_text: str, marked_idx: set, limit: int):
 
 
 def _normalize_llm_dicts(data: list):
+    """強化：確保 correct 為 1..4；options 必有 4 個；並剔除題幹中的『根據教材/根據文本』等字眼。"""
     out = []
     for q in (data or []):
         qq = dict(q)
+
+        # clean question meta
+        qtext = str(qq.get("question", ""))
+        qtext = re.sub(r"^(根據|根據以下|根據上述|根據教材|根據文本|根據文章|根據資料)(.{0,15})([，,:：\s]+)", "", qtext)
+        qq["question"] = qtext.strip()
+
         # options
         opts = qq.get("options", [])
         if not isinstance(opts, list):
@@ -53,6 +60,7 @@ def _normalize_llm_dicts(data: list):
         opts = [str(x) if x is not None else "" for x in opts]
         opts = (opts + ["", "", "", ""])[:4]
         qq["options"] = opts
+
         # correct
         corr = qq.get("correct", [])
         if isinstance(corr, str):
@@ -64,8 +72,10 @@ def _normalize_llm_dicts(data: list):
         corr = [str(x).strip() for x in corr]
         corr = [c for c in corr if c in {"1", "2", "3", "4"}]
         qq["correct"] = corr[:1]
+
         if "needs_review" not in qq:
             qq["needs_review"] = False
+
         out.append(qq)
     return out
 
@@ -89,6 +99,44 @@ def _ensure_default_select_all(text: str, idx_key: str, hash_key: str):
         paras = _split_paragraphs(text)
         st.session_state[idx_key] = set(range(len(paras)))
         st.session_state[hash_key] = h
+
+
+def _enforce_question_count(ctx, cfg, used_text, target_n, fast_mode):
+    """嚴格匹配題數：若不足，追加生成；若過多，截斷。"""
+    # first call
+    data = ctx["generate_questions"](
+        cfg,
+        used_text,
+        ctx["subject"],
+        ctx["level_code"],
+        target_n,
+        fast_mode=fast_mode,
+        qtype="single",
+    )
+
+    if not isinstance(data, list):
+        data = []
+
+    # if too many
+    if len(data) > target_n:
+        return data[:target_n]
+
+    # if too few: try one more time to top up
+    remaining = target_n - len(data)
+    if remaining > 0:
+        data2 = ctx["generate_questions"](
+            cfg,
+            used_text,
+            ctx["subject"],
+            ctx["level_code"],
+            remaining,
+            fast_mode=fast_mode,
+            qtype="single",
+        )
+        if isinstance(data2, list):
+            data.extend(data2)
+
+    return data[:target_n]
 
 
 def render_generate_tab(ctx: dict):
@@ -115,8 +163,8 @@ def render_generate_tab(ctx: dict):
     st.session_state["gen_extracted_text"] = extracted_text
 
     st.markdown("## ② 老師勾選重點段落（只用勾選內容出題）")
-    limit = 8000 if ctx.get("fast_mode", True) else 10000
 
+    limit = 8000 if ctx.get("fast_mode", True) else 10000
     _ensure_default_select_all(extracted_text, idx_key="mark_idx_generate", hash_key="gen_text_hash")
 
     with st.expander("② 重點段落選擇（預設摺疊）", expanded=False):
@@ -147,25 +195,26 @@ def render_generate_tab(ctx: dict):
 
     used_text = _build_text_with_highlights(extracted_text, st.session_state.get("mark_idx_generate", set()), limit)
 
-    st.info(f"已擷取 {len(extracted_text)} 字；送入 AI {len(used_text)} 字（上限 {limit}）")
+    st.info(
+        f"已從文本擷取 {len(extracted_text)} 字；送入 AI（重點合併後）{len(used_text)} 字（上限 {limit}；快速模式={'開' if ctx.get('fast_mode', True) else '關'}）"
+    )
 
     with st.expander("🔎 已選內容預覽（將送入 AI）", expanded=False):
         st.text(used_text[:5000] + ("\n…（已截斷）" if len(used_text) > 5000 else ""))
 
     st.markdown("## ③ 生成題目")
+
     if st.button("🪄 生成題目", disabled=not can_call_ai(cfg), key="btn_generate_questions"):
         try:
             progress = st.progress(0)
             with st.spinner("AI 生成題目中…"):
-                progress.progress(25)
-                data = ctx["generate_questions"](
+                progress.progress(20)
+                data = _enforce_question_count(
+                    ctx,
                     cfg,
                     used_text,
-                    ctx["subject"],
-                    ctx["level_code"],
                     ctx["question_count"],
                     fast_mode=ctx.get("fast_mode", True),
-                    qtype="single",
                 )
                 progress.progress(70)
 

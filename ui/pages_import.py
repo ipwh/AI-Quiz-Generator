@@ -15,7 +15,7 @@ def render_import_tab(ctx: dict):
     cfg = ctx["api_config"]()
     can_call_ai = ctx["can_call_ai"]
 
-    def load_import_files_to_text():
+    def load_import_file_to_textbox():
         files = st.session_state.get("import_files")
         if not files:
             return
@@ -34,7 +34,7 @@ def render_import_tab(ctx: dict):
         type=["pdf", "docx", "txt", "pptx", "xlsx"],
         accept_multiple_files=True,
         key="import_files",
-        on_change=load_import_files_to_text,
+        on_change=load_import_file_to_textbox,
     )
 
     use_ai_assist = st.checkbox("啟用 AI 協助整理（建議）", value=True, key="use_ai_assist")
@@ -64,11 +64,17 @@ def render_import_tab(ctx: dict):
 
             items = dicts_to_items(data, subject=ctx["subject"], source="import")
             report = validate_questions(items)
+
             st.session_state.imported_items = items
             st.session_state.imported_report = report
 
         except Exception as e:
-            st.error("匯入/整理失敗")
+            st.warning("⚠️ AI 整理失敗，改用本地拆題作備援，請老師核對答案。")
+            data = ctx["parse_import_questions_locally"](raw)
+            items = dicts_to_items(data, subject=ctx["subject"], source="local")
+            report = validate_questions(items)
+            st.session_state.imported_items = items
+            st.session_state.imported_report = report
             st.exception(e)
 
     if st.session_state.get("imported_items"):
@@ -83,6 +89,7 @@ def render_import_tab(ctx: dict):
 
         edited_items = editor_df_to_items(edited, default_subject=ctx["subject"], source="import")
         edited_report = validate_questions(edited_items)
+
         st.session_state.imported_items = edited_items
         st.session_state.imported_report = edited_report
 

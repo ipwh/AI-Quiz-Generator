@@ -9,6 +9,7 @@ from services.google_oauth import credentials_from_dict
 from core.question_mapper import editor_df_to_items, items_to_export_df
 from core.validators import validate_questions, summarize_report
 
+# Google Drive share is optional; do not kill whole panel if missing.
 try:
     from googleapiclient.discovery import build
     from googleapiclient.http import MediaIoBaseUpload
@@ -43,8 +44,6 @@ def _share_file_to_emails(creds, file_id: str, emails: list, role: str = "reader
 
 
 def render_export_panel(selected_df: pd.DataFrame, subject: str, google_creds_dict, prefix: str = "generate"):
-    """Export panel with validator quality gate (lenient default)."""
-
     if selected_df is None or selected_df.empty:
         st.warning("⚠️ 尚未選擇任何題目（請勾選『匯出』欄）。")
         return
@@ -56,10 +55,8 @@ def render_export_panel(selected_df: pd.DataFrame, subject: str, google_creds_di
     if bad_count:
         st.warning(f"⚠️ 有 {bad_count} 題未通過檢查。建議先修正，或只匯出通過檢查的題目。")
         with st.expander("🔎 查看檢查統計與問題清單", expanded=False):
-            st.write("常見問題統計：")
             st.json(err_counts)
             bad_rows = [r for r in report if not r.get("ok")]
-            st.write("未通過的題目（前 20 題）：")
             st.dataframe(pd.DataFrame(bad_rows)[:20], use_container_width=True)
     else:
         st.success("✅ 所有已選題目均通過檢查")
@@ -81,6 +78,7 @@ def render_export_panel(selected_df: pd.DataFrame, subject: str, google_creds_di
         return
 
     export_df = items_to_export_df(export_items)
+
     kahoot_bytes = export_kahoot_excel(export_df)
     docx_bytes = export_wayground_docx(export_df, subject)
 
@@ -90,6 +88,7 @@ def render_export_panel(selected_df: pd.DataFrame, subject: str, google_creds_di
     with c2:
         st.download_button("⬇️ Wayground DOCX", docx_bytes, f"{subject}_wayground.docx", key=f"dl_docx_{prefix}")
 
+    # Google Form
     if google_creds_dict:
         if st.button("🟦 一鍵建立 Google Form Quiz", key=f"btn_form_{prefix}"):
             try:
@@ -107,9 +106,10 @@ def render_export_panel(selected_df: pd.DataFrame, subject: str, google_creds_di
             st.markdown(f"🔗 **編輯連結：** {r.get('editUrl')}")
             st.markdown(f"👥 **作答連結：** {r.get('responderUrl') or '（未提供 responderUri）'}")
 
+        # Email share via Drive (optional)
         st.markdown("### 📧 一鍵電郵分享匯出檔（Google Drive）")
         if not _GOOGLE_API_OK:
-            st.warning("⚠️ 缺少 google-api-python-client，無法上傳 Drive/電郵分享。")
+            st.info("💡 未安裝 google-api-python-client：仍可下載 Excel/DOCX、建立 Google Form；但 Drive 上傳/電郵分享不可用。")
             return
 
         emails_text = st.text_input("收件人電郵（多個用逗號分隔）", value="", key=f"emails_{prefix}")
