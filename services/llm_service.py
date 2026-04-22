@@ -268,8 +268,8 @@ def generate_questions(
     text = _clean_text(text)
     text = text[: (8000 if fast_mode else 10000)]
 
-    mc_text = "
-".join(f"- {m}" for m in misconceptions)
+    mc_text = "\n".join(f"- {m}" for m in misconceptions)
+    
     prompt = f"""
 你是一名香港中學教師，負責出校內評估題。
 
