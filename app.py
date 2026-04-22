@@ -62,7 +62,7 @@ def show_exception(msg, e):
 
 def export_kahoot_excel(items):
     """Kahoot 相容 Excel（A-D + Correct）"""
-    rows = []
+    rows = []
     for q in items:
         opts = q.get("options", []) + [None] * (4 - len(q.get("options", [])))
         correct = q.get("correct", [""])[0]
