@@ -1,3 +1,5 @@
+
+
 # =========================================================
 # llm_service.py
 # ✅ 最終穩定版（已通過 `python -m py_compile` 驗證）
@@ -85,7 +87,9 @@ def _clean_text(text: str) -> str:
     # 多餘空白
     text = re.sub("[ \t]+", " ", text)
     # 多餘換行
-    text = re.sub("\n{3,}", "\n\n", text)
+    text = re.sub("
+{3,}", "
+", text)
     return text.strip()
 
 
@@ -182,17 +186,54 @@ def ping_llm(cfg: dict, timeout: int = 25):
 # =========================================================
 
 def _fix_json(cfg: dict, bad_output: str, timeout: int):
+    """
+    修復 AI 輸出為【符合題目 schema 的純 JSON array】。
+    此版本會明確指定題目結構，並禁止 role/content 對話格式，
+    用於匯入題目與生成題目的 JSON 自救。
+    """
     prompt = (
-        "你剛才輸出不是有效 JSON。\n"
-        "請只回覆純 JSON array，不要任何解釋文字。"
+        "你剛才輸出不是有效的【題目 JSON】。
+
+
+"
+        "請【只輸出一個純 JSON array】作為最終結果，不要任何解釋文字，也不要 Markdown。
+"
+        "嚴禁輸出 role、content、對話紀錄或任何說明。
+
+
+"
+        "每一題必須嚴格符合以下 schema：
+"
+        "- qtype: \"single\"
+"
+        "- question: string
+"
+        "- options: string[]（必須剛好 4 個）
+"
+        "- correct: [\"1\"|\"2\"|\"3\"|\"4\"]（只 1 個）
+"
+        "- explanation: string
+"
+        "- needs_review: boolean
+
+
+"
+        "請根據以下內容修正並輸出正確的題目 JSON array：
+
+
+"
+        f"{bad_output}"
     )
+
+
     return _chat(
         cfg,
         messages=[{"role": "user", "content": prompt}],
         temperature=0,
-        max_tokens=2000,
+        max_tokens=2500,
         timeout=timeout,
     )
+
 
 
 def _call_with_retries(cfg: dict, messages: list, temperature: float, max_tokens: int, timeout: int):
@@ -204,9 +245,11 @@ def _call_with_retries(cfg: dict, messages: list, temperature: float, max_tokens
         return extract_json(repaired)
 
 
+
 # =========================================================
 # ✅ 生成題目（主功能）
 # =========================================================
+
 
 def generate_questions(
     cfg: dict,
@@ -221,11 +264,12 @@ def generate_questions(
     misconceptions = SUBJECT_MISCONCEPTIONS.get(subject, [])
     distractor_rules = DISTRACTOR_RULES_BY_LEVEL.get(level, "")
 
+
     text = _clean_text(text)
     text = text[: (8000 if fast_mode else 10000)]
 
-    mc_text = "\n".join(f"- {m}" for m in misconceptions)
-
+    mc_text = "
+".join(f"- {m}" for m in misconceptions)
     prompt = f"""
 你是一名香港中學教師，負責出校內評估題。
 
