@@ -1,13 +1,60 @@
 import streamlit as st
 
-from services.llm_service import ping_llm, get_xai_default_model
+# ✅ 兼容不同版本 llm_service：可能沒有 ping_llm / get_xai_default_model
+try:
+    from services.llm_service import ping_llm
+except Exception:
+    ping_llm = None
+
+try:
+    from services.llm_service import get_xai_default_model as _get_xai_default_model
+except Exception:
+    _get_xai_default_model = None
+
+
+def _local_detect_xai_model(api_key: str, base_url: str) -> str:
+    """在沒有 get_xai_default_model() 時，本地用 OpenAI-compatible /models 自動偵測 Grok 型號。"""
+    import requests
+
+    url = base_url.rstrip("/") + "/models"
+    headers = {"Authorization": f"Bearer {api_key}"}
+    r = requests.get(url, headers=headers, timeout=20)
+    r.raise_for_status()
+    data = r.json() or {}
+    models = data.get("data", []) if isinstance(data, dict) else []
+    ids = []
+    for m in models:
+        mid = m.get("id") if isinstance(m, dict) else None
+        if isinstance(mid, str):
+            ids.append(mid)
+
+    # 偏好：含 grok、含 latest
+    grok = [i for i in ids if "grok" in i.lower()]
+    if not grok:
+        return "grok-4-latest"
+
+    latest = [i for i in grok if "latest" in i.lower()]
+    if latest:
+        # 若多個 latest，取字串排序最後一個
+        return sorted(latest)[-1]
+
+    # 否則取字串排序最後一個
+    return sorted(grok)[-1]
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _detect_xai_model_cached(api_key: str, base_url: str) -> str:
+    if _get_xai_default_model:
+        return _get_xai_default_model(api_key, base_url)
+    return _local_detect_xai_model(api_key, base_url)
 
 
 def render_sidebar() -> dict:
-    """渲染側邊欄設定，回傳 ctx dict。"""
+    """渲染側邊欄設定，回傳 ctx dict，供 pages_generate.py / pages_import.py 使用。"""
 
     st.sidebar.header("🔌 AI API 設定")
 
+    # Fast Mode
     fast_mode = st.sidebar.checkbox(
         "⚡ 快速模式",
         value=True,
@@ -16,12 +63,12 @@ def render_sidebar() -> dict:
     st.sidebar.caption("關閉快速模式：較慢，但題目更豐富/更有變化。")
     st.sidebar.divider()
 
+    # API Preset
     preset = st.sidebar.selectbox(
         "快速選擇（簡易）",
         ["DeepSeek", "OpenAI", "Grok (xAI)", "Azure OpenAI", "自訂（OpenAI 相容）"],
         key="preset",
     )
-
     api_key = st.sidebar.text_input("API Key", type="password", key="api_key")
 
     auto_xai = False
@@ -58,19 +105,17 @@ def render_sidebar() -> dict:
         base_url = st.sidebar.text_input("Base URL（含 /v1）", value="", key="custom_base_url")
         model = st.sidebar.text_input("Model", value="", key="custom_model")
 
-    @st.cache_data(ttl=600, show_spinner=False)
-    def _detect_xai_model_cached(k: str, u: str) -> str:
-        return get_xai_default_model(k, u)
-
+    # Grok auto-detect
     if preset == "Grok (xAI)" and auto_xai and api_key:
         try:
             detected = _detect_xai_model_cached(api_key, base_url)
             if detected and detected != model:
                 model = detected
                 st.sidebar.caption(f"✅ 已自動選用：{model}")
-        except Exception:
-            pass
+        except Exception as e:
+            st.sidebar.caption("（自動偵測失敗，將使用 grok-4-latest）")
 
+    # API config
     def api_config():
         if preset == "Azure OpenAI":
             return {
@@ -94,12 +139,15 @@ def render_sidebar() -> dict:
             return bool(cfg.get("endpoint")) and bool(cfg.get("deployment"))
         return bool(cfg.get("base_url")) and bool(cfg.get("model"))
 
+    # Ping
     st.sidebar.divider()
     st.sidebar.header("🧪 API 連線測試")
-
     cfg_test = api_config()
+
     if st.sidebar.button("🧪 一鍵測試 API（回覆 OK）", key="btn_ping_api"):
-        if not can_call_ai(cfg_test):
+        if ping_llm is None:
+            st.sidebar.warning("⚠️ 此版本 llm_service 未提供 ping_llm()，已略過測試。")
+        elif not can_call_ai(cfg_test):
             st.sidebar.error("請先填妥 API Key／Base URL／Model（Azure 要 Endpoint + Deployment）。")
         else:
             with st.sidebar.spinner("正在測試連線…"):
@@ -110,8 +158,8 @@ def render_sidebar() -> dict:
                 st.sidebar.error("❌ 失敗：請檢查 Key/Endpoint/Model 或服務狀態")
                 st.sidebar.code(r.get("error", ""))
 
+    # OCR / Vision
     st.sidebar.divider()
-
     st.sidebar.header("🔬 OCR / 讀圖設定（數理科必讀）")
     st.sidebar.caption("數學／物理／化學／生物建議開啟 Vision 模式以辨識圖表與方程式。")
 
@@ -134,12 +182,14 @@ def render_sidebar() -> dict:
             max_value=10,
             value=3,
             key="vision_pdf_max_pages",
+            help="頁數越多越準確，但耗時與費用也越高。",
         )
         st.sidebar.info("💡 DeepSeek 不支援 Vision，請改用 Grok 或 GPT-4o 等模型。")
 
+    # 出題設定
     st.sidebar.divider()
-
     st.sidebar.header("📘 出題設定")
+
     subject = st.sidebar.selectbox(
         "科目",
         [
