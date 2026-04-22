@@ -31,7 +31,7 @@ from services.google_oauth import (
     get_auth_url,
     exchange_code_for_credentials,
     credentials_to_dict,
-    credentials_from_dict,
+    credentials_from_dict,
 )
 
 # =========================================================
