@@ -285,7 +285,7 @@ with tab_gen:
         except Exception as e:
             show_exception("生成失敗", e)
 
-       if isinstance(SS.items, list) and SS.items:
+        if isinstance(SS.items, list) and SS.items:
            st.header("④ 生成結果")
            for i, q in enumerate(SS.items, 1):
                with st.expander(f"第 {i} 題", expanded=True):
