@@ -532,6 +532,16 @@ with tab_import:
             st.session_state.imported_report = []
             st.exception(e)
 
+    if use_ai_assist:
+        items = assist_import_questions(
+            cfg,
+            imported_text,
+            subject,
+            fast_mode=fast_mode,
+        )
+    else:
+        items = parse_import_questions_locally(imported_text)    
+
     if st.session_state.imported_items:
         st.markdown("## ③ 檢視與微調")
         df = items_to_editor_df(st.session_state.imported_items)
