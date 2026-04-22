@@ -181,26 +181,26 @@ with tab_generate:
 
             st.success("✅ 題目生成完成")
 
-for i, q in enumerate(items, start=1):
-    needs_review = bool(q.get("needs_review"))
-    title = f"第 {i} 題"
-
-    if needs_review:
-        with st.expander(f"⚠️ {title}（需要教師確認）", expanded=True):
-            st.markdown(f"**題目：** {q.get('question','')}")
-            opts = q.get('options', [])
-            for idx, opt in enumerate(opts, start=1):
-                st.markdown(f"{idx}. {opt}")
-            st.markdown(f"**建議答案：** {','.join(q.get('correct', []))}")
-            reason = q.get('explanation') or "此題涉及關鍵條件／推論，建議教師覆核。"
-            st.warning(f"需要確認原因：{reason}")
-    else:
-        with st.expander(title, expanded=False):
-            st.markdown(f"**題目：** {q.get('question','')}")
-            opts = q.get('options', [])
-            for idx, opt in enumerate(opts, start=1):
-                st.markdown(f"{idx}. {opt}")
-            st.markdown(f"**答案：** {','.join(q.get('correct', []))}")
+            for i, q in enumerate(items, start=1):
+                needs_review = bool(q.get("needs_review"))
+                title = f"第 {i} 題"
+            
+                if needs_review:
+                    with st.expander(f"⚠️ {title}（需要教師確認）", expanded=True):
+                        st.markdown(f"**題目：** {q.get('question','')}")
+                        opts = q.get('options', [])
+                        for idx, opt in enumerate(opts, start=1):
+                            st.markdown(f"{idx}. {opt}")
+                        st.markdown(f"**建議答案：** {','.join(q.get('correct', []))}")
+                        reason = q.get('explanation') or "此題涉及關鍵條件／推論，建議教師覆核。"
+                        st.warning(f"需要確認原因：{reason}")
+                else:
+                    with st.expander(title, expanded=False):
+                        st.markdown(f"**題目：** {q.get('question','')}")
+                        opts = q.get('options', [])
+                        for idx, opt in enumerate(opts, start=1):
+                            st.markdown(f"{idx}. {opt}")
+                        st.markdown(f"**答案：** {','.join(q.get('correct', []))}")
 
 
         except Exception as e:
@@ -223,26 +223,26 @@ with tab_import:
 
             st.success("✅ 題目生成完成")
 
-for i, q in enumerate(items, start=1):
-    needs_review = bool(q.get("needs_review"))
-    title = f"第 {i} 題"
-
-    if needs_review:
-        with st.expander(f"⚠️ {title}（需要教師確認）", expanded=True):
-            st.markdown(f"**題目：** {q.get('question','')}")
-            opts = q.get('options', [])
-            for idx, opt in enumerate(opts, start=1):
-                st.markdown(f"{idx}. {opt}")
-            st.markdown(f"**建議答案：** {','.join(q.get('correct', []))}")
-            reason = q.get('explanation') or "此題涉及關鍵條件／推論，建議教師覆核。"
-            st.warning(f"需要確認原因：{reason}")
-    else:
-        with st.expander(title, expanded=False):
-            st.markdown(f"**題目：** {q.get('question','')}")
-            opts = q.get('options', [])
-            for idx, opt in enumerate(opts, start=1):
-                st.markdown(f"{idx}. {opt}")
-            st.markdown(f"**答案：** {','.join(q.get('correct', []))}")
+                for i, q in enumerate(items, start=1):
+                    needs_review = bool(q.get("needs_review"))
+                    title = f"第 {i} 題"
+                
+                    if needs_review:
+                        with st.expander(f"⚠️ {title}（需要教師確認）", expanded=True):
+                            st.markdown(f"**題目：** {q.get('question','')}")
+                            opts = q.get('options', [])
+                            for idx, opt in enumerate(opts, start=1):
+                                st.markdown(f"{idx}. {opt}")
+                            st.markdown(f"**建議答案：** {','.join(q.get('correct', []))}")
+                            reason = q.get('explanation') or "此題涉及關鍵條件／推論，建議教師覆核。"
+                            st.warning(f"需要確認原因：{reason}")
+                    else:
+                        with st.expander(title, expanded=False):
+                            st.markdown(f"**題目：** {q.get('question','')}")
+                            opts = q.get('options', [])
+                            for idx, opt in enumerate(opts, start=1):
+                                st.markdown(f"{idx}. {opt}")
+                            st.markdown(f"**答案：** {','.join(q.get('correct', []))}")
 
 
         except Exception as e:
