@@ -285,14 +285,19 @@ with tab_gen:
         except Exception as e:
             show_exception("生成失敗", e)
 
-    if SS.items:
-        st.header("④ 生成結果")
-        for i, q in enumerate(SS.items, 1):
-            with st.expander(f"第 {i} 題", expanded=True):
-                st.markdown(q["question"])
-                for idx, opt in enumerate(q["options"], 1):
-                    st.markdown(f"{idx}. {opt}")
-                st.markdown("答案：" + ",".join(q["correct"]))
+       if isinstance(SS.items, list) and SS.items:
+           st.header("④ 生成結果")
+           for i, q in enumerate(SS.items, 1):
+               with st.expander(f"第 {i} 題", expanded=True):
+                   st.markdown(q.get("question", ""))
+                   for idx, opt in enumerate(q.get("options", []), 1):
+                       st.markdown(f"{idx}. {opt}")
+                   st.markdown("答案：" + ",".join(q.get("correct", [])))
+                f q.get("needs_review"):
+                   st.warning("⚠️ 此題需要教師確認")
+       else:
+           if SS.items is not None:
+               st.error("⚠️ 題目資料出現不一致狀態，請重新生成一次。")
 
 # =========================================================
 # Tab: 匯入現有題目（沿用相同多格式流程）
