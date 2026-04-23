@@ -37,17 +37,10 @@ except Exception:
     from components_export import render_export_panel
 
 # ✅ 正確：你現有 llm_service.py 入面有嘅 function
-try:
-    from services.llm_service import (
-        generate_questions,
-        llm_ocr_extract_text_only,
-    )
-except Exception:
-    from llm_service import (
-        generate_questions,
-        llm_ocr_extract_text_only,
-    )
-
+from services.llm_service import (
+    generate_questions,
+    llm_ocr_extract_text_only,
+)
 DNL = chr(10) * 2
 
 
