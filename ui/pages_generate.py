@@ -13,6 +13,7 @@ from core.validators import validate_questions
 from ui.components_editor import render_editor
 from ui.components_export import render_export_panel
 from services.llm_service import generate_questions, llm_ocr_extract_text_only
+
 DNL = chr(10) * 2
 
 
@@ -42,11 +43,12 @@ def _build_text_with_highlights(raw_text: str, marked_idx: set, limit: int):
 # ============================================================
 
 def render_generate_tab(ctx: dict):
-    """生成新題目頁面（含 Vision OCR、可摺疊重點段落、全選/取消全選）"""
+    """生成新題目頁面（含 Vision OCR、可摺疊重點段落、全選/取消全選）"""
+
     # --------------------------------------------------------
-    # ctx helpers（❗唯一正確寫法）
+    # ctx helpers（唯一正確寫法）
     # --------------------------------------------------------
-    cfg = ctx["api_config"]()          # ✅ 必須有 ()，cfg 先會係 dict
+    cfg = ctx["api_config"]()
     can_call_ai = ctx["can_call_ai"]
     subject = ctx["subject"]
     level_code = ctx["level_code"]
@@ -57,7 +59,8 @@ def render_generate_tab(ctx: dict):
     # ① 上載教材
     # --------------------------------------------------------
     st.markdown("## ① 上載教材")
-    st.caption("支援 PDF / DOCX / TXT / PPTX / XLSX / PNG / JPG；Vision OCR 會自動處理掃描件")
+    st.caption("支援 PDF / DOCX / TXT / PPTX / XLSX / PNG / JPG；Vision OCR 會自動處理掃描件")
+
     file = st.file_uploader(
         "上載教材",
         type=["pdf", "docx", "txt", "pptx", "xlsx", "png", "jpg", "jpeg"],
@@ -65,19 +68,17 @@ def render_generate_tab(ctx: dict):
     )
 
     raw_text = ""
-    images = []
+    images = []
+
     if file:
         payload = extract_payload(file)
         raw_text = payload.get("text", "") or ""
 
-        # Vision OCR：如文字不足，自動轉圖
-        if len(raw_text.strip()) < 50:
-            images = extract_images_for_llm_ocr(file)
+        if len(raw_text.strip()) < 50:
+            images = extract_images_for_llm_ocr(file)
 
-
-        if not raw_text.strip() and not images:
-            st.warning("⚠️ 未能從檔案抽取到文字或圖像內容。")
-
+        if not raw_text.strip() and not images:
+            st.warning("⚠️ 未能從檔案抽取到文字或圖像內容。")
 
     # --------------------------------------------------------
     # ② 標記重點段落（可選）
@@ -86,41 +87,34 @@ def render_generate_tab(ctx: dict):
 
     paras = _split_paragraphs(raw_text)
 
-    # 摺疊顯示 + 全選控制
-    with st.expander("📌 展開／摺疊重點段落選擇", expanded=False):
-        col_a, col_b = st.columns(2)
-        if col_a.button("✅ 全選", key="gen_mark_all"):
-            st.session_state.mark_idx = set(range(len(paras)))
-        if col_b.button("❌ 取消全選", key="gen_mark_none"):
-            st.session_state.mark_idx = set()
+    with st.expander("📌 展開／摺疊重點段落選擇", expanded=False):
+        col_a, col_b = st.columns(2)
+        if col_a.button("✅ 全選", key="gen_mark_all"):
+            st.session_state.mark_idx = set(range(len(paras)))
+        if col_b.button("❌ 取消全選", key="gen_mark_none"):
+            st.session_state.mark_idx = set()
 
-
-        marked = set(st.session_state.get("mark_idx", set()))
-
+        marked = set(st.session_state.get("mark_idx", set()))
 
         for i, p in enumerate(paras):
-            label = p.replace("
-", " ")
+            label = p.replace("\n", " ")
             label = (label[:160] + "…") if len(label) > 160 else label
-            checked = i in marked
-            if st.checkbox(label, value=checked, key=f"gen_mark_{i}"):
+            if st.checkbox(label, value=(i in marked), key=f"gen_mark_{i}"):
                 marked.add(i)
-            else:
-                marked.discard(i)
-        st.session_state.mark_idx = marked
+            else:
+                marked.discard(i)
 
+        st.session_state.mark_idx = marked
 
     # --------------------------------------------------------
     # ③ 生成題目
     # --------------------------------------------------------
     st.markdown("## ③ 生成題目")
 
-
     if not can_call_ai(cfg):
         st.warning("⚠️ 請先在左側填妥 AI API 設定並測試連線。")
 
-    disabled_generate = (not raw_text.strip() and not images) or (not can_call_ai(cfg))
-
+    disabled_generate = (not raw_text.strip() and not images) or (not can_call_ai(cfg))
 
     if st.button("🪄 生成題目", disabled=disabled_generate, key="btn_generate_questions"):
         with st.spinner("🧠 AI 出題中…"):
@@ -130,17 +124,15 @@ def render_generate_tab(ctx: dict):
                 10000,
             )
 
-            # Vision OCR：先抽文字再合併
-            if images:
-                ocr_text = llm_ocr_extract_text_only(
-                    cfg=cfg,
-                    images_data_urls=images,
-                    fast_mode=fast_mode,
-                )
-                combined_text = (text_for_ai + DNL + ocr_text).strip()
-            else:
-                combined_text = text_for_ai
-
+            if images:
+                ocr_text = llm_ocr_extract_text_only(
+                    cfg=cfg,
+                    images_data_urls=images,
+                    fast_mode=fast_mode,
+                )
+                combined_text = (text_for_ai + DNL + ocr_text).strip()
+            else:
+                combined_text = text_for_ai
 
             data = generate_questions(
                 cfg=cfg,
@@ -177,9 +169,6 @@ def render_generate_tab(ctx: dict):
         st.session_state.generated_items = edited_items
         st.session_state.generated_report = validate_questions(edited_items)
 
-        # ----------------------------------------------------
-        # ⑤ 匯出
-        # ----------------------------------------------------
         st.markdown("## ⑤ 匯出 / Google Form / 電郵分享")
         render_export_panel(
             selected_df,
