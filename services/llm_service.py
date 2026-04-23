@@ -1,18 +1,3 @@
-# =========================================================
-# services/llm_service.py
-# FINAL-FULL（穩定可用・已修復 SyntaxError）
-# ---------------------------------------------------------
-# ✅ OpenAI-compatible /v1/chat/completions
-# ✅ 支援：Generate / Import / JSON 修復 / API Ping
-# ✅ 強化：SUBJECT_TRAITS / SUBJECT_MISCONCEPTIONS / SUBJECT_DISTRACTOR_HINTS（全科目）
-# ✅ 附加：Grok 型號自動偵測 get_xai_default_model()
-# ✅ 附加：答案位置分佈平衡（避免 correct 長期偏 2/3）
-# ---------------------------------------------------------
-# 注意：
-# - 嚴格 Python 語法、4 spaces 縮排
-# - 不輸出『根據教材/根據文本』等 meta 字眼
-# =========================================================
-
 from __future__ import annotations
 
 import json
