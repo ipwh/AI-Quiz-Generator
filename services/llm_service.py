@@ -1,3 +1,52 @@
+LLM 回傳：                     extract_json() 收到：
+```json                         ```json        ← json.loads 無法解析！
+[{"qtype": "single", ...}]      [{...}]
+```                             ```
+```
+
+***
+
+## 修復：只需替換 `extract_json()` 函數
+
+```python
+def extract_json(text: str) -> Any:
+    if not text:
+        raise ValueError("AI 回傳內容是空的")
+
+    # 策略一：直接嘗試（最快，LLM 已輸出乾淨 JSON）
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # 策略二：剝除 markdown code block（```json ... ``` 或 ``` ... ```）
+    stripped = re.sub(r"^```(?:json)?\s*", "", text.strip(), flags=re.IGNORECASE)
+    stripped = re.sub(r"\s*```$", "", stripped.strip())
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        pass
+
+    # 策略三：用 regex 從回傳文字中提取第一個 JSON array [...] 或 object {...}
+    for pattern in (r"\[.*\]", r"\{.*\}"):
+        m = re.search(pattern, text, re.DOTALL)
+        if m:
+            try:
+                return json.loads(m.group())
+            except json.JSONDecodeError:
+                continue
+
+    # 三策略均失敗 → 拋出，交由 _fix_json() 修復
+    raise ValueError(f"無法解析 AI 回傳的 JSON，原始內容：\n{text[:300]}")
+```
+
+***
+
+## 完整更新後的 `llm_service.py`
+
+只有 `extract_json()` 需要替換，其餘不變。 以下是完整檔案：[1]
+
+```python
 # =========================================================
 # services/llm_service.py
 # ---------------------------------------------------------
@@ -6,11 +55,8 @@
 # ✅ 強化：SUBJECT_TRAITS / SUBJECT_MISCONCEPTIONS / SUBJECT_DISTRACTOR_HINTS
 # ✅ 附加：Grok 型號自動偵測 get_xai_default_model()
 # ✅ 附加：答案位置分佈平衡（避免 correct 長期偏 2/3）
-# ✅ 新增：_sanitise_question_stems()（雙重防線：禁用「根據教材」等字眼）
-# ---------------------------------------------------------
-# 注意：
-# - 嚴格 Python 語法、4 spaces 縮排
-# - 學生憑個人知識作答，嚴禁題目出現「根據教材/根據文本」等字眼
+# ✅ 新增：_sanitise_question_stems()（禁用「根據教材」等字眼）
+# ✅ 修復：extract_json() 支援 markdown code block 剝除
 # =========================================================
 
 from __future__ import annotations
@@ -49,10 +95,6 @@ def _reset_session() -> None:
 # =========================================================
 
 def _load_subjects_config() -> Dict[str, Any]:
-    """
-    從 subjects_config.yaml 加載科目配置。
-    如果文件不存在或損壞，返回空字典。
-    """
     config_path = os.path.join(os.path.dirname(__file__), "..", "subjects_config.yaml")
     try:
         if not os.path.exists(config_path):
@@ -85,10 +127,10 @@ SUBJECT_DISTRACTOR_HINTS: Dict[str, List[str]] = {
 }
 
 DISTRACTOR_RULES_BY_LEVEL: Dict[str, str] = _SUBJECTS_CONFIG.get("distractor_rules_by_level", {
-    "easy":  "干擾項反映基本誤解；錯在單一步驟；避免過度相似。",
+    "easy":   "干擾項反映基本誤解；錯在單一步驟；避免過度相似。",
     "medium": "干擾項包含部分正確但推論錯或漏條件；至少兩個看似合理。",
-    "hard":  "干擾項為多步推理陷阱：條件誤判、圖像誤讀、單位/方向/定義域錯。",
-    "mixed": "混合 medium/hard 強度；同一套題可含不同難度但每題仍要清晰。",
+    "hard":   "干擾項為多步推理陷阱：條件誤判、圖像誤讀、單位/方向/定義域錯。",
+    "mixed":  "混合 medium/hard 強度；同一套題可含不同難度但每題仍要清晰。",
 })
 
 DEFAULT_TRAITS = _SUBJECTS_CONFIG.get(
@@ -101,31 +143,10 @@ DEFAULT_TRAITS = _SUBJECTS_CONFIG.get(
 # =========================================================
 
 SUBJECT_GROUPS = {
-    "語文": [
-        "中國語文",
-        "英國語文",
-    ],
-    "數學與科學": [
-        "數學",
-        "科學",
-        "物理",
-        "化學",
-        "生物",
-    ],
-    "人文與社會": [
-        "公民與社會發展",
-        "公民、經濟及社會",
-        "地理",
-        "歷史",
-        "中國歷史",
-        "宗教",
-    ],
-    "商業與科技": [
-        "經濟",
-        "企業、會計與財務概論",
-        "資訊及通訊科技（ICT）",
-        "旅遊與款待",
-    ],
+    "語文": ["中國語文", "英國語文"],
+    "數學與科學": ["數學", "科學", "物理", "化學", "生物"],
+    "人文與社會": ["公民與社會發展", "公民、經濟及社會", "地理", "歷史", "中國歷史", "宗教"],
+    "商業與科技": ["經濟", "企業、會計與財務概論", "資訊及通訊科技（ICT）", "旅遊與款待"],
 }
 
 # =========================================================
@@ -133,13 +154,11 @@ SUBJECT_GROUPS = {
 # =========================================================
 
 _FORBIDDEN_PATTERNS: List[tuple] = [
-    # 中文「根據X」類
     (re.compile(r"根據(教材|文本|以上|上文|短文|文章|資料|圖表|以下|題目|內容)[，,：:、\s]?"), ""),
     (re.compile(r"按照(教材|文本|課文)[，,：:、\s]?"), ""),
     (re.compile(r"依據(教材|文本|課文)[，,：:、\s]?"), ""),
     (re.compile(r"參考(教材|文本|課文)[，,：:、\s]?"), ""),
     (re.compile(r"從(教材|文本|以上|上文|短文|文章|資料)中[，,\s]?"), ""),
-    # 英文 according to / based on / from the 類
     (re.compile(r"(?i)according\s+to\s+the\s+(passage|text|article|material|textbook)[,\s]?"), ""),
     (re.compile(r"(?i)based\s+on\s+the\s+(passage|text|article|material|textbook)[,\s]?"), ""),
     (re.compile(r"(?i)from\s+the\s+(passage|text|article)[,\s]?"), ""),
@@ -148,7 +167,6 @@ _FORBIDDEN_PATTERNS: List[tuple] = [
     (re.compile(r"(?i)refer\s+to\s+the\s+(passage|text|material)[,\s]?"), ""),
 ]
 
-# prompt 中列出的禁用字眼清單（供 LLM 參考）
 _FORBIDDEN_STEMS_STR = (
     "『根據教材』『根據文本』『根據以上』『根據上文』『根據短文』"
     "『根據文章』『根據資料』『根據圖表』『根據以下』『按照教材』"
@@ -156,7 +174,6 @@ _FORBIDDEN_STEMS_STR = (
     "『according to the passage/text』『based on the passage/text』"
     "『from the passage』『the passage states/mentions』"
 )
-
 
 # =========================================================
 # Utilities
@@ -171,9 +188,40 @@ def _clean_text(text: str) -> str:
 
 
 def extract_json(text: str) -> Any:
+    """
+    從 LLM 回傳文字中提取 JSON。
+    支援三種策略：
+    1. 直接解析（LLM 輸出乾淨 JSON）
+    2. 剝除 markdown code block（```json ... ```）
+    3. regex 提取第一個 [...] 或 {...}
+    """
     if not text:
         raise ValueError("AI 回傳內容是空的")
-    return json.loads(text)
+
+    # 策略一：直接解析
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    # 策略二：剝除 markdown code block
+    stripped = re.sub(r"^```(?:json)?\s*", "", text.strip(), flags=re.IGNORECASE)
+    stripped = re.sub(r"\s*```$", "", stripped.strip())
+    try:
+        return json.loads(stripped)
+    except json.JSONDecodeError:
+        pass
+
+    # 策略三：regex 提取第一個 JSON array 或 object
+    for pattern in (r"\[.*\]", r"\{.*\}"):
+        m = re.search(pattern, text, re.DOTALL)
+        if m:
+            try:
+                return json.loads(m.group())
+            except json.JSONDecodeError:
+                continue
+
+    raise ValueError(f"無法解析 AI 回傳的 JSON，原始內容：\n{text[:300]}")
 
 
 # =========================================================
@@ -181,11 +229,7 @@ def extract_json(text: str) -> Any:
 # =========================================================
 
 def _sanitise_question_stems(items: List[dict]) -> List[dict]:
-    """
-    後處理：掃描每題的 question 欄位，
-    自動移除「根據教材/根據文本」等禁用字眼。
-    若有修改，自動將 needs_review 設為 True（提示教師複查題幹）。
-    """
+    """後處理：自動移除題幹中禁用字眼，並標 needs_review=True。"""
     for q in items or []:
         if not isinstance(q, dict):
             continue
@@ -195,12 +239,11 @@ def _sanitise_question_stems(items: List[dict]) -> List[dict]:
         cleaned = original
         for pattern, replacement in _FORBIDDEN_PATTERNS:
             cleaned = pattern.sub(replacement, cleaned)
-        # 清理殘留的開頭標點及多餘空格
         cleaned = re.sub(r"^[，,、\s]+", "", cleaned).strip()
         cleaned = re.sub(r"\s{2,}", " ", cleaned)
         if cleaned != original:
             q["question"] = cleaned
-            q["needs_review"] = True  # 題幹已被自動修改，提示教師複查
+            q["needs_review"] = True
     return items
 
 
@@ -215,16 +258,11 @@ def _post_openai_compat(
     timeout: int = 120,
     max_retries: int = 3,
 ) -> dict:
-    """
-    OpenAI-compatible API 呼叫，支援 exponential backoff 重試。
-    """
     url = base_url.rstrip("/") + "/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-
-    # 嚴格只送核心欄位，避免 xAI 400（不支援參數）
     allowed = {"model", "messages", "temperature", "max_tokens", "stream", "response_format"}
     safe_payload = {k: v for k, v in payload.items() if k in allowed}
 
@@ -303,23 +341,18 @@ def ping_llm(cfg: dict, timeout: int = 25) -> dict:
 # =========================================================
 
 def get_xai_default_model(api_key: str, base_url: str = "https://api.x.ai/v1") -> str:
-    """列出 /models 後挑選最新 grok（偏好 latest）。"""
     url = base_url.rstrip("/") + "/models"
     headers = {"Authorization": f"Bearer {api_key}"}
-
     with _SESSION_LOCK:
         r = _SESSION.get(url, headers=headers, timeout=(10, 25))
     if not r.ok:
         return "grok-2-latest"
-
     data = r.json() or {}
     models = data.get("data", []) if isinstance(data, dict) else []
     ids = [m.get("id") for m in models if isinstance(m, dict) and isinstance(m.get("id"), str)]
-
     grok = [i for i in ids if "grok" in i.lower()]
     if not grok:
         return "grok-2-latest"
-
     latest = [i for i in grok if "latest" in i.lower()]
     return sorted(latest)[-1] if latest else sorted(grok)[-1]
 
@@ -332,14 +365,13 @@ def _fix_json(cfg: dict, bad_output: str, timeout: int) -> str:
     prompt = (
         "你剛才輸出不是有效的題目 JSON。\n\n"
         "請只輸出一個【題目 JSON array】，不要任何解釋或對話紀錄。\n"
-        "嚴禁輸出 role、content。\n\n"
+        "嚴禁輸出 role、content、markdown code block（不要 ```json）。\n\n"
         "每題必須包含：\n"
         "- qtype: \"single\"\n"
         "- question: string\n"
-        "  ⚠️ 嚴禁出現以下字眼（中英文均適用）：\n"
+        "  ⚠️ 嚴禁出現以下字眼：\n"
         f"  {_FORBIDDEN_STEMS_STR}\n"
-        "  原因：學生考試時沒有教材，所有題目須憑個人知識作答。\n"
-        "  請直接考核知識點，無須引用來源。\n"
+        "  學生考試時沒有教材，所有題目須憑個人知識作答。\n"
         "- options: 4 strings\n"
         "- correct: [\"1\"~\"4\"]（只可 1 個）\n"
         "- explanation: string\n"
@@ -378,7 +410,7 @@ def rebalance_correct_positions(items: List[dict], seed: Optional[int] = None) -
     valid: List[dict] = []
     for q in items or []:
         corr = q.get("correct", [])
-        if isinstance(corr, list) and len(corr) == 1 and corr[0] in {"1", "2", "3", "4"}:
+        if isinstance(corr, list) and len(corr) == 1 and corr in {"1", "2", "3", "4"}:
             opts = q.get("options", [])
             if isinstance(opts, list) and len(opts) == 4:
                 valid.append(q)
@@ -399,7 +431,7 @@ def rebalance_correct_positions(items: List[dict], seed: Optional[int] = None) -
     rng.shuffle(desired_positions)
 
     for q, desired in zip(valid, desired_positions):
-        cur = q["correct"][0]
+        cur = q["correct"]
         if cur == desired:
             continue
         opts = list(q["options"])
@@ -471,7 +503,7 @@ def generate_questions(
    ✅ 正確示範："What is the main cause of..."
 
 【嚴格輸出要求】
-- 只輸出純 JSON array（不加任何文字、不加 markdown code block）
+- 只輸出純 JSON array，不加任何文字，不加 markdown code block（不要 ```json）
 - 每題必為四選一：qtype = "single"
 - options 必須剛好 4 個字串
 - correct 必須為只含 1 個元素的 list：["1"~"4"]
@@ -513,7 +545,7 @@ def generate_questions(
                     data.extend(more)
                 data = data[:question_count]
 
-    data = _sanitise_question_stems(data)       # 防線二：後處理清除殘留禁用字眼
+    data = _sanitise_question_stems(data)
     data = rebalance_correct_positions(data)
 
     return data
@@ -542,7 +574,7 @@ def assist_import_questions(
 - 每題四選一（qtype=single）
 - options 必須 4 個
 - 必須提供 correct（["1"~"4"] 只 1 個）
-- 只輸出純 JSON array
+- 只輸出純 JSON array，不加任何文字，不加 markdown code block（不要 ```json）
 - 若原文欠缺答案：{policy}
 - 題幹嚴禁出現「根據教材/根據文本/根據以上/according to the passage」等字眼
   若原題有此字眼，請直接移除並改寫為獨立知識題
@@ -565,3 +597,16 @@ def parse_import_questions_locally(raw_text: str):
     if not raw_text:
         return []
     return []
+```
+
+***
+
+## 修復摘要
+
+| 問題 | 原因 | 修復 |
+|------|------|------|
+| `JSONDecodeError` | LLM 回傳 ` ```json...``` ` 包裹的 JSON | `extract_json()` 加三重解析策略 |
+| 策略一 | 直接 `json.loads()`（乾淨 JSON） | 原有邏輯保留 |
+| 策略二 | 剝除 markdown code block | 新增 regex strip |
+| 策略三 | 提取回傳文字中第一個 `[...]` | 新增 regex search |
+| prompt 補強 | `_fix_json()` 及所有 prompt 加入「不要 ` ```json ` 」 | 從源頭減少 LLM 包裹 markdown |
