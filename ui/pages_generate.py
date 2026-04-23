@@ -37,10 +37,7 @@ except Exception:
     from components_export import render_export_panel
 
 # ✅ 正確：你現有 llm_service.py 入面有嘅 function
-from services.llm_service import (
-    generate_questions,
-    llm_ocr_extract_text_only,
-)
+from services.llm_service import generate_questions
 DNL = chr(10) * 2
 
 
@@ -148,16 +145,8 @@ def render_generate_tab(ctx: dict):
             )
 
             # ✅ Vision / OCR：先抽文字，再交俾 generate_questions
-            if images:
-                ocr_text = llm_ocr_extract_text_only(
-                    cfg=cfg,
-                    images_data_urls=images,
-                    fast_mode=fast_mode,
-                )
-                combined_text = (text_for_ai + DNL + ocr_text).strip()
-            else:
-                combined_text = text_for_ai
-
+            combined_text = text_for_ai
+                
             data = generate_questions(
                 cfg=cfg,
                 text=combined_text,
