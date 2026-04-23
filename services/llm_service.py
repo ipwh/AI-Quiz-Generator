@@ -84,7 +84,7 @@ SUBJECT_DISTRACTOR_HINTS: Dict[str, List[str]] = {
 DISTRACTOR_RULES_BY_LEVEL: Dict[str, str] = _SUBJECTS_CONFIG.get("distractor_rules_by_level", {
     "easy":   "干擾項反映基本誤解；錯在單一步驟；避免過度相似。",
     "medium": "干擾項包含部分正確但推論錯或漏條件；至少兩個看似合理。",
-    "hard":   "干擾項為多步推理陷阱：條件誤判、圖像誤讀、單位/方向/定義域錯。",
+    "hard":   "干擾項為多步推理陷阱:條件誤判、圖像誤讀、單位/方向/定義域錯。",
     "mixed":  "混合 medium/hard 強度；同一套題可含不同難度但每題仍要清晰。",
 })
 
@@ -105,14 +105,14 @@ SUBJECT_GROUPS = {
 }
 
 # =========================================================
-# Forbidden stem patterns（防線二：後處理用）
+# Forbidden stem patterns（防線二:後處理用）
 # =========================================================
 
 _FORBIDDEN_PATTERNS: List[tuple] = [
-    (re.compile(r"根據(教材|文本|以上|上文|短文|文章|資料|圖表|以下|題目|內容)[，,：:、\s]?"), ""),
-    (re.compile(r"按照(教材|文本|課文)[，,：:、\s]?"), ""),
-    (re.compile(r"依據(教材|文本|課文)[，,：:、\s]?"), ""),
-    (re.compile(r"參考(教材|文本|課文)[，,：:、\s]?"), ""),
+    (re.compile(r"根據(教材|文本|以上|上文|短文|文章|資料|圖表|以下|題目|內容)[，,::、\s]?"), ""),
+    (re.compile(r"按照(教材|文本|課文)[，,::、\s]?"), ""),
+    (re.compile(r"依據(教材|文本|課文)[，,::、\s]?"), ""),
+    (re.compile(r"參考(教材|文本|課文)[，,::、\s]?"), ""),
     (re.compile(r"從(教材|文本|以上|上文|短文|文章|資料)中[，,\s]?"), ""),
     (re.compile(r"(?i)according\s+to\s+the\s+(passage|text|article|material|textbook)[,\s]?"), ""),
     (re.compile(r"(?i)based\s+on\s+the\s+(passage|text|article|material|textbook)[,\s]?"), ""),
@@ -145,7 +145,7 @@ def _clean_text(text: str) -> str:
 def extract_json(text: str) -> Any:
     """
     從 LLM 回傳文字中提取 JSON。
-    支援三種策略：
+    支援三種策略:
     1. 直接解析（LLM 輸出乾淨 JSON）
     2. 剝除 markdown code block（```json ... ```）
     3. regex 提取第一個 [...] 或 {...}
@@ -153,13 +153,13 @@ def extract_json(text: str) -> Any:
     if not text:
         raise ValueError("AI 回傳內容是空的")
 
-    # 策略一：直接解析
+    # 策略一:直接解析
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
 
-    # 策略二：剝除 markdown code block
+    # 策略二:剝除 markdown code block
     stripped = re.sub(r"^```(?:json)?\s*", "", text.strip(), flags=re.IGNORECASE)
     stripped = re.sub(r"\s*```$", "", stripped.strip())
     try:
@@ -167,7 +167,7 @@ def extract_json(text: str) -> Any:
     except json.JSONDecodeError:
         pass
 
-    # 策略三：regex 提取第一個 JSON array 或 object
+    # 策略三:regex 提取第一個 JSON array 或 object
     for pattern in (r"\[.*\]", r"\{.*\}"):
         m = re.search(pattern, text, re.DOTALL)
         if m:
@@ -176,15 +176,15 @@ def extract_json(text: str) -> Any:
             except json.JSONDecodeError:
                 continue
 
-    raise ValueError(f"無法解析 AI 回傳的 JSON，原始內容：\n{text[:300]}")
+    raise ValueError(f"無法解析 AI 回傳的 JSON，原始內容:\n{text[:300]}")
 
 
 # =========================================================
-# Question stem sanitiser（防線二：後處理）
+# Question stem sanitiser（防線二:後處理）
 # =========================================================
 
 def _sanitise_question_stems(items: List[dict]) -> List[dict]:
-    """後處理：自動移除題幹中禁用字眼，並標 needs_review=True。"""
+    """後處理:自動移除題幹中禁用字眼，並標 needs_review=True。"""
     for q in items or []:
         if not isinstance(q, dict):
             continue
@@ -321,17 +321,17 @@ def _fix_json(cfg: dict, bad_output: str, timeout: int) -> str:
         "你剛才輸出不是有效的題目 JSON。\n\n"
         "請只輸出一個【題目 JSON array】，不要任何解釋或對話紀錄。\n"
         "嚴禁輸出 role、content、markdown code block（不要 ```json）。\n\n"
-        "每題必須包含：\n"
+        "每題必須包含:\n"
         "- qtype: \"single\"\n"
         "- question: string\n"
-        "  ⚠️ 嚴禁出現以下字眼：\n"
+        "  ⚠️ 嚴禁出現以下字眼:\n"
         f"  {_FORBIDDEN_STEMS_STR}\n"
         "  學生考試時沒有教材，所有題目須憑個人知識作答。\n"
         "- options: 4 strings\n"
         "- correct: [\"1\"~\"4\"]（只可 1 個）\n"
         "- explanation: string\n"
         "- needs_review: boolean\n\n"
-        "請根據以下內容修正：\n"
+        "請根據以下內容修正:\n"
         f"{bad_output}"
     )
     return _chat(
@@ -427,7 +427,7 @@ def generate_questions(
 
     prompt = f"""
 你是一名香港中學教師，負責出校內評估題。
-這是知識性選擇題：學生憑個人知識作答，考場內沒有任何教材或閱讀材料。
+這是知識性選擇題:學生憑個人知識作答，考場內沒有任何教材或閱讀材料。
 
 【科目】{subject}
 【難度】{level}
@@ -446,22 +446,22 @@ def generate_questions(
 {distractor_rules}
 
 【絕對禁止——違反即視為廢題，必須重寫】
-❌ 題幹及選項中，嚴禁出現以下任何字眼（中英文均適用）：
+❌ 題幹及選項中，嚴禁出現以下任何字眼（中英文均適用）:
    {_FORBIDDEN_STEMS_STR}
-❌ 原因：學生考試時沒有教材，所有題目須憑個人知識作答。
+❌ 原因:學生考試時沒有教材，所有題目須憑個人知識作答。
 ❌ 若題目概念來自教材內容，請直接考核該知識點，無須引用來源。
 
-   ✅ 錯誤示範：「根據教材，光合作用的產物是什麼？」
-   ✅ 正確示範：「植物進行光合作用時，會同時產生哪兩種物質？」
+   ✅ 錯誤示範:「根據教材，光合作用的產物是什麼？」
+   ✅ 正確示範:「植物進行光合作用時，會同時產生哪兩種物質？」
 
-   ✅ 錯誤示範："According to the passage, what is the main cause of..."
-   ✅ 正確示範："What is the main cause of..."
+   ✅ 錯誤示範:"According to the passage, what is the main cause of..."
+   ✅ 正確示範:"What is the main cause of..."
 
 【嚴格輸出要求】
 - 只輸出純 JSON array，不加任何文字，不加 markdown code block（不要 ```json）
-- 每題必為四選一：qtype = "single"
+- 每題必為四選一:qtype = "single"
 - options 必須剛好 4 個字串
-- correct 必須為只含 1 個元素的 list：["1"~"4"]
+- correct 必須為只含 1 個元素的 list:["1"~"4"]
 - explanation 簡潔指出關鍵理由（1-3 句），並點明錯誤選項的常見誤解
 - needs_review: 若題幹/答案不確定或需教師判斷，請設為 true
 - 正確答案位置請避免長期集中於 B/C（2/3），A/B/C/D 需大致均勻
@@ -487,7 +487,7 @@ def generate_questions(
                 prompt2 = (
                     prompt
                     + f"\n\n【補齊要求】你剛才題數不足，請再補 {remain} 題，只輸出新增題目的 JSON array。"
-                    + f"\n⚠️ 同樣嚴禁出現：{_FORBIDDEN_STEMS_STR}"
+                    + f"\n⚠️ 同樣嚴禁出現:{_FORBIDDEN_STEMS_STR}"
                 )
                 more = _call_with_retries(
                     cfg,
@@ -530,7 +530,7 @@ def assist_import_questions(
 - options 必須 4 個
 - 必須提供 correct（["1"~"4"] 只 1 個）
 - 只輸出純 JSON array，不加任何文字，不加 markdown code block（不要 ```json）
-- 若原文欠缺答案：{policy}
+- 若原文欠缺答案:{policy}
 - 題幹嚴禁出現「根據教材/根據文本/根據以上/according to the passage」等字眼
   若原題有此字眼，請直接移除並改寫為獨立知識題
 
