@@ -158,11 +158,30 @@ def render_sidebar() -> dict:
 
         adv_preset = st.selectbox(
             "LLM Provider",
-            ["— 不切換（用上方 DeepSeek）—", "OpenAI 相容（自訂）", "Grok (xAI)", "Azure OpenAI"],
+            ["— 不切換（用上方 DeepSeek）—", "DeepSeek", "OpenAI 相容（自訂）", "Grok (xAI)", "Azure OpenAI"],
             key="adv_preset",
         )
 
-        if adv_preset == "OpenAI 相容（自訂）":
+        if adv_preset == "DeepSeek":
+            adv_key = st.text_input("DeepSeek API Key", type="password", key="adv_ds_key")
+            adv_model = st.selectbox(
+                "Model",
+                ["deepseek-chat", "deepseek-reasoner"],
+                index=0 if fast_mode else 1,
+                key="adv_ds_model",
+            )
+            st.caption("`deepseek-chat`：快速通用；`deepseek-reasoner`：慢但適合數理推理。")
+            if adv_key:
+                advanced_cfg = {
+                    "type": "openai_compat",
+                    "api_key": adv_key,
+                    "base_url": "https://api.deepseek.com/v1",
+                    "model": adv_model,
+                }
+            else:
+                st.info("請填入 DeepSeek API Key（使用個人帳戶計費）。")
+
+        elif adv_preset == "OpenAI 相容（自訂）":
             adv_key     = st.text_input("API Key", type="password", key="adv_key")
             adv_url     = st.text_input("Base URL（含 /v1）", key="adv_base_url",
                                          placeholder="https://api.openai.com/v1")
