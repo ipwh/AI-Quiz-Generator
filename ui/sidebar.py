@@ -14,6 +14,8 @@ try:
     from services.llm_service import ping_llm
 except Exception:
     ping_llm = None
+    import streamlit as st
+    st.sidebar.error(f"❌ llm_service import 失敗：{e}")
 
 try:
     from services.llm_service import get_xai_default_model
