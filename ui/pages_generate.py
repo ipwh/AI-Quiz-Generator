@@ -2,7 +2,7 @@ import streamlit as st
 import requests
 
 # ============================================================
-# Vision OCR 強化版 Generate Page（安全、可回退、不污染出題流程）
+# Vision OCR 強化版 Generate Page（修正：本地 OCR 不再鎖死流程）
 # ============================================================
 from extractors.extract import extract_payload, extract_images_for_llm_ocr
 from core.question_mapper import dicts_to_items, items_to_editor_df, editor_df_to_items
@@ -42,22 +42,28 @@ def _vision_ocr_text(cfg: dict, images_data_urls: list, fast_mode: bool = True) 
         return ""
 
     prompt = (
-        "你是一個 OCR 文字抽取器。請從圖片中抽取所有可辨識文字，輸出純文字即可。\n"
-        "規則：\n"
-        "- 不要解釋、不要總結、不要加入推測\n"
-        "- 盡量保留段落與換行\n"
+        "你是一個 OCR 文字抽取器。請從圖片中抽取所有可辨識文字，輸出純文字即可。
+"
+        "規則：
+"
+        "- 不要解釋、不要總結、不要加入推測
+"
+        "- 盡量保留段落與換行
+"
     )
+
 
     content = [{"type": "text", "text": prompt}]
     for url in images_data_urls:
         content.append({"type": "image_url", "image_url": {"url": url, "detail": "high"}})
 
+
     temperature = 0.0
     max_tokens = 1200 if fast_mode else 2000
     timeout = 90 if fast_mode else 150
 
+
     try:
-        # Azure OpenAI
         if cfg.get("type") == "azure":
             endpoint = (cfg.get("endpoint") or "").rstrip("/")
             deployment = cfg.get("deployment")
@@ -65,32 +71,17 @@ def _vision_ocr_text(cfg: dict, images_data_urls: list, fast_mode: bool = True) 
             if not endpoint or not deployment:
                 return ""
             url = f"{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
-            headers = {
-                "api-key": cfg.get("api_key", ""),
-                "Content-Type": "application/json",
-            }
-            payload = {
-                "messages": [{"role": "user", "content": content}],
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-            }
-        # OpenAI‑compatible
+            headers = {"api-key": cfg.get("api_key", ""), "Content-Type": "application/json"}
+            payload = {"messages": [{"role": "user", "content": content}], "temperature": temperature, "max_tokens": max_tokens}
         else:
             base_url = (cfg.get("base_url") or "").rstrip("/")
             model = cfg.get("model")
             if not base_url or not model:
                 return ""
             url = f"{base_url}/chat/completions"
-            headers = {
-                "Authorization": f"Bearer {cfg.get('api_key','')}",
-                "Content-Type": "application/json",
-            }
-            payload = {
-                "model": model,
-                "messages": [{"role": "user", "content": content}],
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-            }
+            headers = {"Authorization": f"Bearer {cfg.get('api_key','')}", "Content-Type": "application/json"}
+            payload = {"model": model, "messages": [{"role": "user", "content": content}], "temperature": temperature, "max_tokens": max_tokens}
+
 
         r = requests.post(url, headers=headers, json=payload, timeout=timeout)
         r.raise_for_status()
@@ -106,7 +97,6 @@ def _vision_ocr_text(cfg: dict, images_data_urls: list, fast_mode: bool = True) 
 # ------------------------------------------------------------
 
 def render_generate_tab(ctx: dict):
-    # ctx helpers
     cfg = ctx["api_config"]()
     can_call_ai = ctx["can_call_ai"]
     subject = ctx["subject"]
@@ -121,7 +111,7 @@ def render_generate_tab(ctx: dict):
     # ------------------------
     st.markdown("## ⚙️ 工具")
     if st.button("🧹 清除本頁快取（切換教材/科目前建議）"):
-        for k in ["generated_items", "generated_report", "mark_idx", "gen_mark_initialized"]:
+        for k in ["generated_items", "generated_report", "mark_idx", "gen_mark_initialized", "_vision_text"]:
             st.session_state.pop(k, None)
         st.success("已清除本頁快取")
         st.rerun()
@@ -152,19 +142,30 @@ def render_generate_tab(ctx: dict):
         raw_text = payload.get("text", "") or ""
         images = payload.get("images", []) or []
 
-        # 掃描圖像 fallback
-        if ocr_mode == "🤖 Vision OCR（把圖片轉文字，較準）" and not images:
+        # 若是圖片/掃描件：一定嘗試轉 image 給 Vision
+        if ocr_mode in ("🔬 本地 OCR（掃描 PDF/圖片，離線）", "🤖 Vision OCR（把圖片轉文字，較準）") and not images:
             try:
                 images = extract_images_for_llm_ocr(file, pdf_max_pages=vision_pdf_max_pages)
             except Exception:
                 images = []
 
+        # Vision OCR 真正抽文字（只做一次，避免反覆呼叫）
+        if ocr_mode == "🤖 Vision OCR（把圖片轉文字，較準）" and images and not st.session_state.get("_vision_text"):
+            st.session_state["_vision_text"] = _vision_ocr_text(cfg, images, fast_mode)
+
+
+        # 本地 OCR 也要把文字放回 raw_text（避免流程被鎖死）
+        if ocr_mode == "🔬 本地 OCR（掃描 PDF/圖片，離線）" and not raw_text.strip() and st.session_state.get("_vision_text"):
+            raw_text = st.session_state.get("_vision_text", "")
+
+
         # 文字量提示
         limit = 8000 if fast_mode else 12000
         st.info(f"已擷取文字約 {len(raw_text)} 字；系統上限 {limit} 字（{'快速' if fast_mode else '一般'}模式）")
 
+
     # ------------------------
-    # ② 標記重點段落
+    # ② 標記重點段落（永不鎖死）
     # ------------------------
     st.markdown("## ② 標記重點段落（可選）")
     paras = _split_paragraphs(raw_text)
@@ -186,7 +187,8 @@ def render_generate_tab(ctx: dict):
         st.caption(f"已選 {len(marked)} / 共 {len(paras)} 段")
 
         for i, p in enumerate(paras):
-            label = p.replace("\n", " ")
+            label = p.replace("
+", " ")
             label = (label[:160] + "…") if len(label) > 160 else label
             if st.checkbox(label, value=(i in marked), key=f"gen_mark_{i}"):
                 marked.add(i)
@@ -195,7 +197,7 @@ def render_generate_tab(ctx: dict):
         st.session_state["mark_idx"] = marked
 
     # ------------------------
-    # ③ 生成題目
+    # ③ 生成題目（永不變灰）
     # ------------------------
     st.markdown("## ③ 生成題目")
     if not can_call_ai(cfg):
@@ -208,12 +210,8 @@ def render_generate_tab(ctx: dict):
             text_for_ai = _build_text_with_highlights(raw_text, st.session_state.get("mark_idx", set()), 10000)
 
             # Vision OCR 補文字（安全）
-            if ocr_mode == "🤖 Vision OCR（把圖片轉文字，較準）" and images:
-                ocr_text = _vision_ocr_text(cfg, images, fast_mode)
-                if ocr_text:
-                    text_for_ai = (text_for_ai + DNL + ocr_text).strip()
-                else:
-                    st.info("（提示）Vision OCR 未能取得文字，將改用已抽取的文字出題。")
+            if ocr_mode == "🤖 Vision OCR（把圖片轉文字，較準）" and st.session_state.get("_vision_text"):
+                text_for_ai = (text_for_ai + DNL + st.session_state.get("_vision_text", "")).strip()
 
             data = generate_questions(
                 cfg=cfg,
