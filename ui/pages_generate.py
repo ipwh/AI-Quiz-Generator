@@ -44,7 +44,7 @@ def _build_text_with_highlights(raw_text: str, marked_idx: set, limit: int):
 # ============================================================
 
 def render_generate_tab(ctx: dict):
-    """生成新題目頁面（最終穩定版；避免所有隱形字元與不存在函數）"""
+    """生成新題目頁面（最終穩定版；避免所有隱形字元與不存在函數）"""
 
 
     # --------------------------------------------------------
@@ -61,7 +61,7 @@ def render_generate_tab(ctx: dict):
     # ① 上載教材
     # --------------------------------------------------------
     st.markdown("## ① 上載教材")
-    st.caption("支援 PDF / DOCX / TXT / PPTX / XLSX / PNG / JPG")
+    st.caption("支援 PDF / DOCX / TXT / PPTX / XLSX / PNG / JPG")
 
 
     file = st.file_uploader(
@@ -75,16 +75,16 @@ def render_generate_tab(ctx: dict):
     if file:
         payload = extract_payload(file)
         raw_text = payload.get("text", "") or ""
-        if not raw_text.strip():
-            st.warning("⚠️ 未能從檔案抽取到文字內容。若為掃描件，請先轉成可選取文字的 PDF。")
+        if not raw_text.strip():
+            st.warning("⚠️ 未能從檔案抽取到文字內容。若為掃描件，請先轉成可選取文字的 PDF。")
 
 
     # --------------------------------------------------------
-    # ② 標記重點段落（可選）
+    # ② 標記重點段落（可選）
     # --------------------------------------------------------
     st.markdown("## ② 標記重點段落（可選）")
 
-    paras = _split_paragraphs(raw_text)
+    paras = _split_paragraphs(raw_text)
 
     with st.expander("📌 展開／摺疊重點段落選擇", expanded=False):
         col_a, col_b = st.columns(2)
@@ -96,10 +96,9 @@ def render_generate_tab(ctx: dict):
         marked = set(st.session_state.get("mark_idx", set()))
 
         for i, p in enumerate(paras):
-            label = p.replace("\
-", " ")
-            if len(label) > 160:
-                label = label[:160] + "…"
+            label = p.replace("\n", " ")
+            if len(label) > 160:
+                label = label[:160] + "…"
             if st.checkbox(label, value=(i in marked), key=f"gen_mark_{i}"):
                 marked.add(i)
             else:
@@ -115,7 +114,7 @@ def render_generate_tab(ctx: dict):
     if not can_call_ai(cfg):
         st.warning("⚠️ 請先在左側填妥 AI API 設定並測試連線。")
 
-    disabled_generate = (not raw_text.strip()) or (not can_call_ai(cfg))
+    disabled_generate = (not raw_text.strip()) or (not can_call_ai(cfg))
 
 
     if st.button("🪄 生成題目", disabled=disabled_generate, key="btn_generate_questions"):
