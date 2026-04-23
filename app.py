@@ -40,10 +40,10 @@ if oauth_is_configured() and "code" in params and not st.session_state.get("goog
     try:
         code = params.get("code")
         state = params.get("state")
-        if isinstance(code, list):
-            code = code[0]
-        if isinstance(state, list):
-            state = state[0]
+        if isinstance(code, list):
+            code = code[0]
+        if isinstance(state, list):
+            state = state[0]
         creds = exchange_code_for_credentials(code=code, returned_state=state)
         st.session_state["google_creds"] = credentials_to_dict(creds)
         st.query_params.clear()
