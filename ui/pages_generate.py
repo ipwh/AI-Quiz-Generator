@@ -3,12 +3,11 @@ import requests
 
 # ============================================================
 # Vision OCR 強化版 Generate Page（方案 C：真正 OCR 級別）
-# - OpenCV 前處理（去斜 / 提升對比）
-# - Tesseract 本地 OCR 作為強力後備
-# - Vision OCR 只作補文字（安全、不污染）
-# - 修正語法與換行，確保可被 app.py 正確 import
+# - OpenCV 前處理（提升對比 / 二值化）
+# - Tesseract 本地 OCR 作為強力後備（離線）
+# - Vision OCR（LLM）只作補文字（安全、不污染出題）
+# - 修正所有字串與換行，確保可被 app.py 正確 import
 # ============================================================
-
 
 from extractors.extract import extract_payload, extract_images_for_llm_ocr
 from core.question_mapper import dicts_to_items, items_to_editor_df, editor_df_to_items
@@ -25,13 +24,11 @@ try:
 except Exception:
     _HAS_CV = False
 
-
 try:
     import pytesseract
     _HAS_TESS = True
 except Exception:
     _HAS_TESS = False
-
 
 DNL = chr(10) * 2
 
@@ -40,10 +37,8 @@ DNL = chr(10) * 2
 # Helpers
 # ------------------------------------------------------------
 
-
 def _split_paragraphs(text: str):
     return [p.strip() for p in (text or "").split(DNL) if p.strip()]
-
 
 
 def _build_text_with_highlights(raw_text: str, marked_idx: set, limit: int):
@@ -62,7 +57,6 @@ def _build_text_with_highlights(raw_text: str, marked_idx: set, limit: int):
 
 
 # -------- Vision OCR (LLM) --------
-
 
 def _vision_ocr_text(cfg: dict, images_data_urls: list, fast_mode: bool = True) -> str:
     """Best-effort Vision OCR via LLM Vision. Return empty string on failure."""
@@ -97,17 +91,27 @@ def _vision_ocr_text(cfg: dict, images_data_urls: list, fast_mode: bool = True) 
                 return ""
             url = f"{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
             headers = {"api-key": cfg.get("api_key", ""), "Content-Type": "application/json"}
-            payload = {"messages": [{"role": "user", "content": content}], "temperature": temperature, "max_tokens": max_tokens}
+            payload = {
+                "messages": [{"role": "user", "content": content}],
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
         else:
             base_url = (cfg.get("base_url") or "").rstrip("/")
             model = cfg.get("model")
             if not base_url or not model:
                 return ""
             url = f"{base_url}/chat/completions"
-            headers = {"Authorization": f"Bearer {cfg.get('api_key','')}", "Content-Type": "application/json"}
-            payload = {"model": model, "messages": [{"role": "user", "content": content}], "temperature": temperature, "max_tokens": max_tokens}
-
-
+            headers = {
+                "Authorization": f"Bearer {cfg.get('api_key','')}",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": content}],
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
         r = requests.post(url, headers=headers, json=payload, timeout=timeout)
         r.raise_for_status()
         data = r.json()
@@ -119,19 +123,14 @@ def _vision_ocr_text(cfg: dict, images_data_urls: list, fast_mode: bool = True) 
 
 # -------- True OCR (OpenCV + Tesseract) --------
 
-
 def _preprocess_image_for_ocr(img_bgr):
     if not _HAS_CV:
         return img_bgr
     gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-    # increase contrast
     clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     gray = clahe.apply(gray)
-    # binarize
     _, th = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     return th
-
-
 
 
 def _tesseract_ocr_from_images(images_bgr) -> str:
@@ -150,12 +149,9 @@ def _tesseract_ocr_from_images(images_bgr) -> str:
 ".join(texts).strip()
 
 
-
-
 # ------------------------------------------------------------
 # Page
 # ------------------------------------------------------------
-
 
 def render_generate_tab(ctx: dict):
     cfg = ctx["api_config"]()
@@ -167,17 +163,22 @@ def render_generate_tab(ctx: dict):
     ocr_mode = ctx.get("ocr_mode")
     vision_pdf_max_pages = int(ctx.get("vision_pdf_max_pages", 3))
 
-
     # ------------------------
     # 工具：清除快取
     # ------------------------
     st.markdown("## ⚙️ 工具")
     if st.button("🧹 清除本頁快取（切換教材/科目前建議）"):
-        for k in ["generated_items", "generated_report", "mark_idx", "gen_mark_initialized", "_vision_text", "_tess_text"]:
+        for k in [
+            "generated_items",
+            "generated_report",
+            "mark_idx",
+            "gen_mark_initialized",
+            "_vision_text",
+            "_tess_text",
+        ]:
             st.session_state.pop(k, None)
         st.success("已清除本頁快取")
         st.rerun()
-
 
     # ------------------------
     # ① 上載教材
@@ -190,6 +191,8 @@ def render_generate_tab(ctx: dict):
     )
 
     raw_text, images, images_bgr = "", [], []
+
+
     if file:
         try:
             payload = extract_payload(
@@ -205,7 +208,10 @@ def render_generate_tab(ctx: dict):
         images = payload.get("images", []) or []
 
         # 掃描件：轉 image
-        if ocr_mode in ("🔬 本地 OCR（掃描 PDF/圖片，離線）", "🤖 Vision OCR（把圖片轉文字，較準）") and not images:
+        if ocr_mode in (
+            "🔬 本地 OCR（掃描 PDF/圖片，離線）",
+            "🤖 Vision OCR（把圖片轉文字，較準）",
+        ) and not images:
             try:
                 images = extract_images_for_llm_ocr(file, pdf_max_pages=vision_pdf_max_pages)
             except Exception:
@@ -216,7 +222,7 @@ def render_generate_tab(ctx: dict):
             import base64
             for u in images:
                 try:
-                    header, b64 = u.split(",", 1)
+                    _, b64 = u.split(",", 1)
                     data = base64.b64decode(b64)
                     arr = np.frombuffer(data, dtype=np.uint8)
                     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
@@ -224,26 +230,43 @@ def render_generate_tab(ctx: dict):
                         images_bgr.append(img)
                 except Exception:
                     pass
+
+
         # Vision OCR (LLM)
-        if ocr_mode == "🤖 Vision OCR（把圖片轉文字，較準）" and images and not st.session_state.get("_vision_text"):
+        if (
+            ocr_mode == "🤖 Vision OCR（把圖片轉文字，較準）"
+            and images
+            and not st.session_state.get("_vision_text")
+        ):
             st.session_state["_vision_text"] = _vision_ocr_text(cfg, images, fast_mode)
 
+
         # True OCR (Tesseract) as fallback
-        if ocr_mode == "🔬 本地 OCR（掃描 PDF/圖片，離線）" and images_bgr and not st.session_state.get("_tess_text"):
+        if (
+            ocr_mode == "🔬 本地 OCR（掃描 PDF/圖片，離線）"
+            and images_bgr
+            and not st.session_state.get("_tess_text")
+        ):
             st.session_state["_tess_text"] = _tesseract_ocr_from_images(images_bgr)
+
+
         # Ensure raw_text not empty
         if not raw_text.strip():
-            raw_text = st.session_state.get("_vision_text") or st.session_state.get("_tess_text") or ""
-
-
+            raw_text = (
+                st.session_state.get("_vision_text")
+                or st.session_state.get("_tess_text")
+                or ""
+            )
         limit = 8000 if fast_mode else 12000
-        st.info(f"已擷取文字約 {len(raw_text)} 字；系統上限 {limit} 字（{'快速' if fast_mode else '一般'}模式）")
-
+        st.info(
+            f"已擷取文字約 {len(raw_text)} 字；系統上限 {limit} 字（{'快速' if fast_mode else '一般'}模式）"
+        )
     # ------------------------
     # ② 標記重點段落
     # ------------------------
     st.markdown("## ② 標記重點段落（可選）")
     paras = _split_paragraphs(raw_text)
+
 
     with st.expander("📌 重點段落選擇（預設全選）", expanded=False):
         if paras and not st.session_state.get("gen_mark_initialized"):
@@ -282,8 +305,9 @@ def render_generate_tab(ctx: dict):
 
     if st.button("🪄 生成題目", disabled=disabled):
         with st.spinner("🧠 AI 出題中…"):
-            text_for_ai = _build_text_with_highlights(raw_text, st.session_state.get("mark_idx", set()), 10000)
-
+            text_for_ai = _build_text_with_highlights(
+                raw_text, st.session_state.get("mark_idx", set()), 10000
+            )
             data = generate_questions(
                 cfg=cfg,
                 text=text_for_ai,
@@ -303,11 +327,21 @@ def render_generate_tab(ctx: dict):
     # ------------------------
     if st.session_state.get("generated_items"):
         st.markdown("## ④ 檢視與微調")
-        df = items_to_editor_df(st.session_state["generated_items"], report=st.session_state.get("generated_report", []))
+        df = items_to_editor_df(
+            st.session_state["generated_items"],
+            report=st.session_state.get("generated_report", []),
+        )
         edited_df, selected_df = render_editor(df, key="editor_generate")
-        edited_items = editor_df_to_items(edited_df, default_subject=subject, source="generate")
+        edited_items = editor_df_to_items(
+            edited_df, default_subject=subject, source="generate"
+        )
         st.session_state["generated_items"] = edited_items
         st.session_state["generated_report"] = validate_questions(edited_items)
 
         st.markdown("## ⑤ 匯出 / Google Form / 電郵分享")
-        render_export_panel(selected_df, subject, st.session_state.get("google_creds"), prefix="generate")
+        render_export_panel(
+            selected_df,
+            subject,
+            st.session_state.get("google_creds"),
+            prefix="generate",
+        )
