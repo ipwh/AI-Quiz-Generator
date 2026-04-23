@@ -1,18 +1,14 @@
-# =========================================================
 # services/llm_service.py
 # ---------------------------------------------------------
 # OpenAI-compatible /v1/chat/completions
 # Support: Generate / Import / JSON repair / API Ping
 # Enhanced: SUBJECT_TRAITS / SUBJECT_MISCONCEPTIONS / SUBJECT_DISTRACTOR_HINTS
 # Added: Grok model auto-detect get_xai_default_model()
-# Added: Answer position rebalance
+# Added: Answer position rebalance (with robust type normalisation)
 # Added: _sanitise_question_stems() - forbid "according to passage" etc.
 # Fixed: extract_json() supports markdown code block stripping
+# Fixed: rebalance_correct_positions() handles int/float correct values
 # ---------------------------------------------------------
-# Rules:
-# - Strict Python syntax, 4-space indent
-# - Students answer from personal knowledge only
-# =========================================================
 
 from __future__ import annotations
 
@@ -82,15 +78,15 @@ SUBJECT_DISTRACTOR_HINTS: Dict[str, List[str]] = {
 }
 
 DISTRACTOR_RULES_BY_LEVEL: Dict[str, str] = _SUBJECTS_CONFIG.get("distractor_rules_by_level", {
-    "easy":   "干擾項反映基本誤解；錯在單一步驟；避免過度相似。",
-    "medium": "干擾項包含部分正確但推論錯或漏條件；至少兩個看似合理。",
-    "hard":   "干擾項為多步推理陷阱:條件誤判、圖像誤讀、單位/方向/定義域錯。",
-    "mixed":  "混合 medium/hard 強度；同一套題可含不同難度但每題仍要清晰。",
+    "easy":   "Distractors reflect basic misconceptions; error in a single step; avoid excessive similarity.",
+    "medium": "Distractors partially correct but wrong inference or missing condition; at least two plausible.",
+    "hard":   "Distractors are multi-step traps: wrong condition, misread diagram, unit/direction/domain error.",
+    "mixed":  "Mix medium/hard intensity; same set may have varying difficulty but each item must be clear.",
 })
 
 DEFAULT_TRAITS = _SUBJECTS_CONFIG.get(
     "default_traits",
-    "請按內容出題，語句自然，題目須憑個人知識作答。",
+    "Set questions based on content. Use natural language. Students answer from personal knowledge only.",
 )
 
 # =========================================================
@@ -98,22 +94,22 @@ DEFAULT_TRAITS = _SUBJECTS_CONFIG.get(
 # =========================================================
 
 SUBJECT_GROUPS = {
-    "語文": ["中國語文", "英國語文"],
-    "數學與科學": ["數學", "科學", "物理", "化學", "生物"],
-    "人文與社會": ["公民與社會發展", "公民、經濟及社會", "地理", "歷史", "中國歷史", "宗教"],
-    "商業與科技": ["經濟", "企業、會計與財務概論", "資訊及通訊科技（ICT）", "旅遊與款待"],
+    "Language": ["Chinese Language", "English Language"],
+    "Math & Science": ["Mathematics", "Science", "Physics", "Chemistry", "Biology"],
+    "Humanities": ["Citizenship and Social Development", "Geography", "History", "Chinese History", "Religion"],
+    "Business & Tech": ["Economics", "BAFS", "ICT", "Tourism & Hospitality"],
 }
 
 # =========================================================
-# Forbidden stem patterns（防線二:後處理用）
+# Forbidden stem patterns (post-processing defence)
 # =========================================================
 
 _FORBIDDEN_PATTERNS: List[tuple] = [
-    (re.compile(r"根據(教材|文本|以上|上文|短文|文章|資料|圖表|以下|題目|內容)[，,::、\s]?"), ""),
-    (re.compile(r"按照(教材|文本|課文)[，,::、\s]?"), ""),
-    (re.compile(r"依據(教材|文本|課文)[，,::、\s]?"), ""),
-    (re.compile(r"參考(教材|文本|課文)[，,::、\s]?"), ""),
-    (re.compile(r"從(教材|文本|以上|上文|短文|文章|資料)中[，,\s]?"), ""),
+    (re.compile(r"\u6839\u636e(\u6559\u6750|\u6587\u672c|\u4ee5\u4e0a|\u4e0a\u6587|\u77ed\u6587|\u6587\u7ae0|\u8cc7\u6599|\u5716\u8868|\u4ee5\u4e0b|\u984c\u76ee|\u5185\u5bb9)[\uff0c,\uff1a:\u3001\s]?"), ""),
+    (re.compile(r"\u6309\u7167(\u6559\u6750|\u6587\u672c|\u8ab2\u6587)[\uff0c,\uff1a:\u3001\s]?"), ""),
+    (re.compile(r"\u4f9d\u64da(\u6559\u6750|\u6587\u672c|\u8ab2\u6587)[\uff0c,\uff1a:\u3001\s]?"), ""),
+    (re.compile(r"\u53c3\u8003(\u6559\u6750|\u6587\u672c|\u8ab2\u6587)[\uff0c,\uff1a:\u3001\s]?"), ""),
+    (re.compile(r"\u5f9e(\u6559\u6750|\u6587\u672c|\u4ee5\u4e0a|\u4e0a\u6587|\u77ed\u6587|\u6587\u7ae0|\u8cc7\u6599)\u4e2d[\uff0c,\s]?"), ""),
     (re.compile(r"(?i)according\s+to\s+the\s+(passage|text|article|material|textbook)[,\s]?"), ""),
     (re.compile(r"(?i)based\s+on\s+the\s+(passage|text|article|material|textbook)[,\s]?"), ""),
     (re.compile(r"(?i)from\s+the\s+(passage|text|article)[,\s]?"), ""),
@@ -123,11 +119,9 @@ _FORBIDDEN_PATTERNS: List[tuple] = [
 ]
 
 _FORBIDDEN_STEMS_STR = (
-    "『根據教材』『根據文本』『根據以上』『根據上文』『根據短文』"
-    "『根據文章』『根據資料』『根據圖表』『根據以下』『按照教材』"
-    "『依據課文』『從文章中』"
-    "『according to the passage/text』『based on the passage/text』"
-    "『from the passage』『the passage states/mentions』"
+    "'according to the passage/text' 'based on the passage/text' "
+    "'from the passage' 'the passage states/mentions' "
+    "'refer to the passage'"
 )
 
 # =========================================================
@@ -144,22 +138,19 @@ def _clean_text(text: str) -> str:
 
 def extract_json(text: str) -> Any:
     """
-    從 LLM 回傳文字中提取 JSON。
-    支援三種策略:
-    1. 直接解析（LLM 輸出乾淨 JSON）
-    2. 剝除 markdown code block（```json ... ```）
-    3. regex 提取第一個 [...] 或 {...}
+    Extract JSON from LLM output.
+    Strategy 1: direct json.loads
+    Strategy 2: strip markdown code block (```json ... ```)
+    Strategy 3: regex extract first [...] or {...}
     """
     if not text:
-        raise ValueError("AI 回傳內容是空的")
+        raise ValueError("AI returned empty content")
 
-    # 策略一:直接解析
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
 
-    # 策略二:剝除 markdown code block
     stripped = re.sub(r"^```(?:json)?\s*", "", text.strip(), flags=re.IGNORECASE)
     stripped = re.sub(r"\s*```$", "", stripped.strip())
     try:
@@ -167,7 +158,6 @@ def extract_json(text: str) -> Any:
     except json.JSONDecodeError:
         pass
 
-    # 策略三:regex 提取第一個 JSON array 或 object
     for pattern in (r"\[.*\]", r"\{.*\}"):
         m = re.search(pattern, text, re.DOTALL)
         if m:
@@ -176,15 +166,15 @@ def extract_json(text: str) -> Any:
             except json.JSONDecodeError:
                 continue
 
-    raise ValueError(f"無法解析 AI 回傳的 JSON，原始內容:\n{text[:300]}")
+    raise ValueError(f"Cannot parse AI JSON output:\n{text[:300]}")
 
 
 # =========================================================
-# Question stem sanitiser（防線二:後處理）
+# Question stem sanitiser (post-processing)
 # =========================================================
 
 def _sanitise_question_stems(items: List[dict]) -> List[dict]:
-    """後處理:自動移除題幹中禁用字眼，並標 needs_review=True。"""
+    """Remove forbidden stems from question field. Marks modified items as needs_review=True."""
     for q in items or []:
         if not isinstance(q, dict):
             continue
@@ -194,7 +184,7 @@ def _sanitise_question_stems(items: List[dict]) -> List[dict]:
         cleaned = original
         for pattern, replacement in _FORBIDDEN_PATTERNS:
             cleaned = pattern.sub(replacement, cleaned)
-        cleaned = re.sub(r"^[，,、\s]+", "", cleaned).strip()
+        cleaned = re.sub(r"^[\uff0c,\u3001\s]+", "", cleaned).strip()
         cleaned = re.sub(r"\s{2,}", " ", cleaned)
         if cleaned != original:
             q["question"] = cleaned
@@ -279,7 +269,7 @@ def ping_llm(cfg: dict, timeout: int = 25) -> dict:
     try:
         out = _chat(
             cfg,
-            messages=[{"role": "user", "content": "只輸出 OK 兩字。"}],
+            messages=[{"role": "user", "content": "Reply OK only."}],
             temperature=0.0,
             max_tokens=5,
             timeout=timeout,
@@ -318,20 +308,16 @@ def get_xai_default_model(api_key: str, base_url: str = "https://api.x.ai/v1") -
 
 def _fix_json(cfg: dict, bad_output: str, timeout: int) -> str:
     prompt = (
-        "你剛才輸出不是有效的題目 JSON。\n\n"
-        "請只輸出一個【題目 JSON array】，不要任何解釋或對話紀錄。\n"
-        "嚴禁輸出 role、content、markdown code block（不要 ```json）。\n\n"
-        "每題必須包含:\n"
+        "Your previous output was not valid JSON.\n\n"
+        "Output ONLY a valid JSON array of question objects. No explanation, no markdown code blocks.\n\n"
+        "Each item must have:\n"
         "- qtype: \"single\"\n"
-        "- question: string\n"
-        "  ⚠️ 嚴禁出現以下字眼:\n"
-        f"  {_FORBIDDEN_STEMS_STR}\n"
-        "  學生考試時沒有教材，所有題目須憑個人知識作答。\n"
-        "- options: 4 strings\n"
-        "- correct: [\"1\"~\"4\"]（只可 1 個）\n"
+        "- question: string (NO phrases like 'according to the passage/text')\n"
+        "- options: exactly 4 strings\n"
+        "- correct: list with exactly 1 element, value must be \"1\", \"2\", \"3\", or \"4\"\n"
         "- explanation: string\n"
         "- needs_review: boolean\n\n"
-        "請根據以下內容修正:\n"
+        "Fix the following:\n"
         f"{bad_output}"
     )
     return _chat(
@@ -357,7 +343,7 @@ def _call_with_retries(cfg: dict, messages: list, temperature: float, max_tokens
 # =========================================================
 
 def rebalance_correct_positions(items: List[dict], seed: Optional[int] = None) -> List[dict]:
-    """只改 options 排列 + 同步 correct，以平衡 A/B/C/D 分佈。"""
+    """Shuffle option order to balance A/B/C/D distribution. Handles int/float/str correct values."""
     if seed is None:
         seed = int(time.time()) % 100000
     rng = random.Random(seed)
@@ -365,10 +351,14 @@ def rebalance_correct_positions(items: List[dict], seed: Optional[int] = None) -
     valid: List[dict] = []
     for q in items or []:
         corr = q.get("correct", [])
-        if isinstance(corr, list) and len(corr) == 1 and corr [0] in {"1", "2", "3", "4"}:
-            opts = q.get("options", [])
-            if isinstance(opts, list) and len(opts) == 4:
-                valid.append(q)
+        if isinstance(corr, list) and len(corr) == 1:
+            # Normalise: int 1 / float 1.0 / str "1" all become str "1"
+            corr_str = str(corr[0]).strip().split(".")[0]  # handles "1.0" -> "1"
+            if corr_str in {"1", "2", "3", "4"}:
+                q["correct"] = [corr_str]  # normalise in-place
+                opts = q.get("options", [])
+                if isinstance(opts, list) and len(opts) == 4:
+                    valid.append(q)
 
     n = len(valid)
     if n == 0:
@@ -386,7 +376,7 @@ def rebalance_correct_positions(items: List[dict], seed: Optional[int] = None) -
     rng.shuffle(desired_positions)
 
     for q, desired in zip(valid, desired_positions):
-        cur = q["correct"]
+        cur = q["correct"][0]  # guaranteed str "1"~"4" after normalisation above
         if cur == desired:
             continue
         opts = list(q["options"])
@@ -425,48 +415,44 @@ def generate_questions(
     mc_text = "\n".join(f"- {m}" for m in misconceptions[:12])
     sd_text = "\n".join(f"- {d}" for d in templates[:6])
 
-    prompt = f"""
-你是一名香港中學教師，負責出校內評估題。
-這是知識性選擇題:學生憑個人知識作答，考場內沒有任何教材或閱讀材料。
+    prompt = f"""You are a Hong Kong secondary school teacher creating internal assessment questions.
+This is a knowledge-based multiple choice quiz. Students answer from personal knowledge only - there is NO reading passage or textbook in the exam room.
 
-【科目】{subject}
-【難度】{level}
-【題目數目】必須剛好 {question_count} 題
+[Subject] {subject}
+[Difficulty] {level}
+[Number of questions] Exactly {question_count}
 
-【科目特性】
+[Subject traits]
 {traits}
 
-【常見誤概念（用作干擾項設計）】
+[Common misconceptions (use for distractor design)]
 {mc_text}
 
-【科目專屬干擾項模板（必須參考）】
+[Subject-specific distractor templates (must reference)]
 {sd_text}
 
-【干擾項強度】
+[Distractor intensity]
 {distractor_rules}
 
-【絕對禁止——違反即視為廢題，必須重寫】
-❌ 題幹及選項中，嚴禁出現以下任何字眼（中英文均適用）:
-   {_FORBIDDEN_STEMS_STR}
-❌ 原因:學生考試時沒有教材，所有題目須憑個人知識作答。
-❌ 若題目概念來自教材內容，請直接考核該知識點，無須引用來源。
+[ABSOLUTE PROHIBITION - violation = question is void and must be rewritten]
+Do NOT use any of the following phrases in question stems or options:
+{_FORBIDDEN_STEMS_STR}
+Reason: Students have no textbook. All questions must be answerable from personal knowledge.
+Test the knowledge point directly without citing a source.
 
-   ✅ 錯誤示範:「根據教材，光合作用的產物是什麼？」
-   ✅ 正確示範:「植物進行光合作用時，會同時產生哪兩種物質？」
+Correct: "What gas is released by plants during photosynthesis?"
+Wrong:   "According to the passage, what gas is released during photosynthesis?"
 
-   ✅ 錯誤示範:"According to the passage, what is the main cause of..."
-   ✅ 正確示範:"What is the main cause of..."
+[Strict output requirements]
+- Output ONLY a raw JSON array. No extra text. No markdown code blocks. No ```json wrapper.
+- Each item: qtype = "single"
+- options: exactly 4 strings
+- correct: list with exactly 1 element, value must be string "1", "2", "3", or "4"
+- explanation: concise key reasoning (1-3 sentences), note common errors in wrong options
+- needs_review: true if question stem or answer is uncertain
+- Distribute correct answers evenly across A/B/C/D positions
 
-【嚴格輸出要求】
-- 只輸出純 JSON array，不加任何文字，不加 markdown code block（不要 ```json）
-- 每題必為四選一:qtype = "single"
-- options 必須剛好 4 個字串
-- correct 必須為只含 1 個元素的 list:["1"~"4"]
-- explanation 簡潔指出關鍵理由（1-3 句），並點明錯誤選項的常見誤解
-- needs_review: 若題幹/答案不確定或需教師判斷，請設為 true
-- 正確答案位置請避免長期集中於 B/C（2/3），A/B/C/D 需大致均勻
-
-【內容（供出題參考，非學生閱讀材料）】
+[Content for reference - NOT a student reading passage]
 {text}
 """
 
@@ -486,8 +472,7 @@ def generate_questions(
             if remain > 0:
                 prompt2 = (
                     prompt
-                    + f"\n\n【補齊要求】你剛才題數不足，請再補 {remain} 題，只輸出新增題目的 JSON array。"
-                    + f"\n⚠️ 同樣嚴禁出現:{_FORBIDDEN_STEMS_STR}"
+                    + f"\n\n[Top-up] You generated too few questions. Add {remain} more. Output ONLY the new questions as a JSON array."
                 )
                 more = _call_with_retries(
                     cfg,
@@ -519,22 +504,25 @@ def assist_import_questions(
     qtype: str = "single",
 ):
     raw_text = _clean_text(raw_text)
-    policy = "可合理推斷並標 needs_review=true" if allow_guess else "請標 needs_review=true 並把 correct 留空"
+    policy = (
+        "infer the answer and mark needs_review=true"
+        if allow_guess
+        else "leave correct empty and mark needs_review=true"
+    )
 
-    prompt = f"""
-你是一名香港中學教師，正在把現有題目整理成標準 JSON。
+    prompt = f"""You are a Hong Kong secondary school teacher converting existing questions to standard JSON.
 
-【科目】{subject}
-【要求】
-- 每題四選一（qtype=single）
-- options 必須 4 個
-- 必須提供 correct（["1"~"4"] 只 1 個）
-- 只輸出純 JSON array，不加任何文字，不加 markdown code block（不要 ```json）
-- 若原文欠缺答案:{policy}
-- 題幹嚴禁出現「根據教材/根據文本/根據以上/according to the passage」等字眼
-  若原題有此字眼，請直接移除並改寫為獨立知識題
+[Subject] {subject}
+[Requirements]
+- Each question: 4-option single choice (qtype=single)
+- options: exactly 4 strings
+- correct: list with exactly 1 element, string "1"~"4"
+- Output ONLY a raw JSON array. No markdown code blocks. No ```json wrapper.
+- If answer is missing: {policy}
+- Question stems must NOT contain 'according to the passage/text' or similar phrases.
+  If the original question has such phrases, remove them and rewrite as a standalone knowledge question.
 
-【原始題目】
+[Original questions]
 {raw_text}
 """
 
