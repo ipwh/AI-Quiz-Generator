@@ -72,7 +72,7 @@ if oauth_is_configured() and "code" in params and not st.session_state.google_cr
 st.set_page_config(page_title="AI 多項選擇題題目生成器", layout="wide")
 st.title("🏫 AI 多項選擇題題目生成器，支援Kahoot / Wayground / Google Forms / 一鍵分享檔案")
 
-with st.expander("👣 使用流程）", expanded=True):
+with st.expander("👣 使用流程", expanded=True):
     st.markdown("""
 1. **（可選）連接 Google**：左側最上方點「🔐 連接 Google（登入）」，之後可一鍵建立 Google Forms／Drive 分享／電郵分享。
 2. **設定 AI（必需）**：學校已預設使用DeepSeek，無需設定即可開始。老師亦可在自行選擇其他LLM並輸入 AI API Key。
