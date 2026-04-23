@@ -1,43 +1,19 @@
 import streamlit as st
 
-# ─────────────────────────────────────────────────────────────
-# Robust imports（支援 root / package 兩種結構）
-# ─────────────────────────────────────────────────────────────
-try:
-    from extractors.extract import extract_payload
-except Exception:
-    from extract import extract_payload
-
-try:
-    from core.question_mapper import (
-        dicts_to_items,
-        items_to_editor_df,
-        editor_df_to_items,
-    )
-except Exception:
-    from question_mapper import (
-        dicts_to_items,
-        items_to_editor_df,
-        editor_df_to_items,
-    )
-
-try:
-    from core.validators import validate_questions
-except Exception:
-    from validators import validate_questions
-
-try:
-    from ui.components_editor import render_editor
-except Exception:
-    from components_editor import render_editor
-
-try:
-    from ui.components_export import render_export_panel
-except Exception:
-    from components_export import render_export_panel
-
-# ✅ 正確：你現有 llm_service.py 入面有嘅 function
+# ============================================================
+# 嚴格使用唯一正確的 import（不再使用任何 fallback）
+# ============================================================
+from extractors.extract import extract_payload
+from core.question_mapper import (
+    dicts_to_items,
+    items_to_editor_df,
+    editor_df_to_items,
+)
+from core.validators import validate_questions
+from ui.components_editor import render_editor
+from ui.components_export import render_export_panel
 from services.llm_service import generate_questions
+
 DNL = chr(10) * 2
 
 
@@ -62,23 +38,28 @@ def _build_text_with_highlights(raw_text: str, marked_idx: set, limit: int):
     return text[:limit] if limit else text
 
 
-def render_generate_tab(ctx: dict):
-    """生成新題目頁面（與 pages_import.py 對稱）"""
+# ============================================================
+# Generate Page（最終穩定版）
+# ============================================================
 
-    # ctx helpers
-    cfg = ctx["apiconfig"
+def render_generate_tab(ctx: dict):
+    """生成新題目頁面（最終穩定版，無 fallback、無 Vision/OCR 直呼）"""
+
+    # --------------------------------------------------------
+    # ctx helpers（❗唯一正確寫法）
+    # --------------------------------------------------------
+    cfg = ctx["api_config"]()          # ✅ 必須有 ()，cfg 先會係 dict
     can_call_ai = ctx["can_call_ai"]
     subject = ctx["subject"]
     level_code = ctx["level_code"]
     question_count = ctx["question_count"]
     fast_mode = ctx.get("fast_mode", True)
 
-
-    # ─────────────────────────────────────────────────────────
+    # --------------------------------------------------------
     # ① 上載教材
-    # ─────────────────────────────────────────────────────────
+    # --------------------------------------------------------
     st.markdown("## ① 上載教材")
-    st.caption("支援 PDF / DOCX / TXT / PPTX / XLSX / PNG / JPG；可配合 OCR 或 Vision 讀圖。")
+    st.caption("支援 PDF / DOCX / TXT / PPTX / XLSX / PNG / JPG")
 
     file = st.file_uploader(
         "上載教材",
@@ -87,34 +68,21 @@ def render_generate_tab(ctx: dict):
     )
 
     raw_text = ""
-    images = []
 
     if file:
-        # Sidebar 使用 key="ocr_mode" 及 "vision_pdf_max_pages"
-        ocr_mode = st.session_state.get("ocr_mode", "📄 純文字（一般文件，最快）")
-        enable_ocr = (ocr_mode == "🔬 本地 OCR（掃描 PDF/圖片，離線）")
-        enable_vision = (ocr_mode == "🤖 LLM Vision 讀圖（圖表/方程式/手寫，最準）")
-        vision_pdf_max_pages = int(st.session_state.get("vision_pdf_max_pages", 3) or 3)
-
-        payload = extract_payload(
-            file,
-            enable_ocr=enable_ocr,
-            enable_vision=enable_vision,
-            vision_pdf_max_pages=vision_pdf_max_pages,
-        )
+        payload = extract_payload(file)
         raw_text = payload.get("text", "") or ""
-        images = payload.get("images", []) or []
+        if not raw_text.strip():
+            st.warning("⚠️ 未能從檔案抽取到文字內容。")
 
-        if not raw_text.strip() and not images:
-            st.warning("⚠️ 未能從檔案抽取到文字／圖片，請嘗試切換 OCR / Vision 模式。")
-
-    # ─────────────────────────────────────────────────────────
-    # ② 標記重點段落
-    # ─────────────────────────────────────────────────────────
+    # --------------------------------------------------------
+    # ② 標記重點段落（可選）
+    # --------------------------------------------------------
     st.markdown("## ② 標記重點段落（可選）")
-    paras = _split_paragraphs(raw_text)
 
+    paras = _split_paragraphs(raw_text)
     marked = set()
+
     if paras:
         st.caption("勾選後，AI 會優先根據『重點段落』出題。")
         for i, p in enumerate(paras):
@@ -123,19 +91,19 @@ def render_generate_tab(ctx: dict):
             if st.checkbox(label, key=f"gen_mark_{i}"):
                 marked.add(i)
     else:
-        st.info("提示：若教材是掃描件，請切換到『本地 OCR』或『LLM Vision』。")
+        st.info("尚未有可標記的段落。")
 
     st.session_state.mark_idx = marked
 
-    # ─────────────────────────────────────────────────────────
+    # --------------------------------------------------------
     # ③ 生成題目
-    # ─────────────────────────────────────────────────────────
+    # --------------------------------------------------------
     st.markdown("## ③ 生成題目")
 
     if not can_call_ai(cfg):
         st.warning("⚠️ 請先在左側填妥 AI API 設定並測試連線。")
 
-    disabled_generate = (not raw_text.strip() and not images) or (not can_call_ai(cfg))
+    disabled_generate = (not raw_text.strip()) or (not can_call_ai(cfg))
 
     if st.button("🪄 生成題目", disabled=disabled_generate, key="btn_generate_questions"):
         with st.spinner("🧠 AI 出題中…"):
@@ -145,12 +113,9 @@ def render_generate_tab(ctx: dict):
                 10000,
             )
 
-            # ✅ Vision / OCR：先抽文字，再交俾 generate_questions
-            combined_text = text_for_ai
-                
             data = generate_questions(
                 cfg=cfg,
-                text=combined_text,
+                text=text_for_ai,
                 subject=subject,
                 level=level_code,
                 question_count=question_count,
@@ -163,9 +128,9 @@ def render_generate_tab(ctx: dict):
             st.session_state.generated_items = items
             st.session_state.generated_report = report
 
-    # ─────────────────────────────────────────────────────────
+    # --------------------------------------------------------
     # ④ 檢視與微調
-    # ─────────────────────────────────────────────────────────
+    # --------------------------------------------------------
     if st.session_state.get("generated_items"):
         st.markdown("## ④ 檢視與微調")
 
@@ -179,12 +144,13 @@ def render_generate_tab(ctx: dict):
             default_subject=subject,
             source="generate",
         )
+
         st.session_state.generated_items = edited_items
         st.session_state.generated_report = validate_questions(edited_items)
 
-        # ─────────────────────────────────────────────────────────
+        # ----------------------------------------------------
         # ⑤ 匯出
-        # ─────────────────────────────────────────────────────────
+        # ----------------------------------------------------
         st.markdown("## ⑤ 匯出 / Google Form / 電郵分享")
         render_export_panel(
             selected_df,
