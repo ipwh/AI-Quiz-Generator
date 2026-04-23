@@ -76,7 +76,7 @@ def render_generate_tab(ctx: dict):
     """生成新題目頁面（與 pages_import.py 對稱）"""
 
     # ctx helpers
-    cfg = ctx["api_config"
+    cfg = ctx["api_config"]
     can_call_ai = ctx["can_call_ai"]
     subject = ctx["subject"]
     level_code = ctx["level_code"]
