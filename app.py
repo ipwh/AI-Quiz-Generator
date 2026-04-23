@@ -1,65 +1,236 @@
+import time
+import requests
 import streamlit as st
 
-# Session state init
-try:
-    from session_state import init_session_state
-except Exception:
-    from core.session_state import init_session_state
+# DeepSeek OpenAI-compatible: base_url 可用 /v1；模型 alias deepseek-chat / deepseek-reasoner [3](blob:https://m365.cloud.microsoft/84970d9c-a5f8-4ea8-8475-a54fc91ea9fc)
+DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
+DEEPSEEK_MODEL_FAST = "deepseek-chat"
+DEEPSEEK_MODEL_QUALITY = "deepseek-reasoner"
 
-from ui.sidebar import render_sidebar
-from ui.pages_generate import render_generate_tab
-from ui.pages_import import render_import_tab
+SUBJECTS = [
+    "中國語文", "英國語文", "數學", "公民與社會發展", "科學", "公民、經濟及社會",
+    "物理", "化學", "生物", "地理", "歷史", "中國歷史", "宗教",
+    "資訊及通訊科技（ICT）", "經濟", "企業、會計與財務概論", "旅遊與款待",
+]
 
-from services.google_oauth import (
-    oauth_is_configured,
-    get_auth_url,
-    exchange_code_for_credentials,
-    credentials_to_dict,
-)
+SUBJECT_GROUPS = {
+    "語文": ["中國語文", "英國語文"],
+    "數學與科學": ["數學", "科學", "物理", "化學", "生物"],
+    "人文與社會": ["公民與社會發展", "公民、經濟及社會", "地理", "歷史", "中國歷史", "宗教"],
+    "商業與科技": ["資訊及通訊科技（ICT）", "經濟", "企業、會計與財務概論", "旅遊與款待"],
+}
 
-st.set_page_config(page_title="AI 題目生成器", layout="wide")
-st.title("🏫 AI 題目生成器")
-init_session_state()
 
-# OAuth callback
-params = st.query_params
-if oauth_is_configured() and "code" in params and not st.session_state.get("google_creds"):
+def _build_subject_options():
+    opts = []
+    for group, items in SUBJECT_GROUPS.items():
+        opts.append(f"— {group} —")
+        opts.extend(items)
+    # 保險：任何未被分組但存在 SUBJECTS
+    for s in SUBJECTS:
+        if s not in opts:
+            opts.append(s)
+    return opts
+
+
+def _ping_deepseek(api_key: str, model: str):
+    """
+    真實 DeepSeek ping：POST /chat/completions
+    回傳：ok/latency_ms/output/error/status_code/body（失敗時保證有 error）
+    """
+    t0 = time.time()
+    url = DEEPSEEK_BASE_URL.rstrip("/") + "/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": "ping"}],
+        "max_tokens": 5,
+        "temperature": 0,
+        "stream": False,
+    }
+
     try:
-        code = params.get("code")
-        state = params.get("state")
-        if isinstance(code, list):
-            code = code[0]
-        if isinstance(state, list):
-            state = state[0]
-        creds = exchange_code_for_credentials(code=code, returned_state=state)
-        st.session_state["google_creds"] = credentials_to_dict(creds)
-        st.query_params.clear()
-        st.rerun()
+        r = requests.post(url, headers=headers, json=payload, timeout=25)
+        latency = int((time.time() - t0) * 1000)
+        body_text = r.text or ""
+
+        if r.status_code >= 400:
+            err_msg = ""
+            try:
+                j = r.json()
+                if isinstance(j, dict):
+                    err = j.get("error")
+                    if isinstance(err, dict):
+                        err_msg = err.get("message") or ""
+                    elif isinstance(err, str):
+                        err_msg = err
+            except Exception:
+                pass
+            if not err_msg:
+                err_msg = f"HTTP {r.status_code}"
+
+            return {
+                "ok": False,
+                "latency_ms": latency,
+                "output": "",
+                "error": err_msg,
+                "status_code": r.status_code,
+                "body": body_text[:1200],
+            }
+
+        j = r.json()
+        out = ""
+        try:
+            out = j["choices"][0]["message"]["content"]
+        except Exception:
+            out = ""
+        return {
+            "ok": True,
+            "latency_ms": latency,
+            "output": out,
+            "error": "",
+            "status_code": r.status_code,
+        }
+
     except Exception as e:
-        st.query_params.clear()
-        st.error("Google 登入失敗，請重新嘗試。")
-        st.exception(e)
-        st.stop()
+        latency = int((time.time() - t0) * 1000)
+        msg = str(e) or e.__class__.__name__
+        return {
+            "ok": False,
+            "latency_ms": latency,
+            "output": "",
+            "error": msg,
+            "status_code": None,
+        }
 
-# Google login always at top
-st.sidebar.header("🟦 Google 連接（Forms / Drive 分享）")
-if not oauth_is_configured():
-    st.sidebar.warning("尚未設定 Google OAuth（Secrets: google_oauth_client + APP_URL）")
-else:
-    if st.session_state.get("google_creds"):
-        st.sidebar.success("✅ 已連接 Google")
-        if st.sidebar.button("🔒 登出 Google", key="btn_logout_google"):
-            st.session_state["google_creds"] = None
-            st.rerun()
-    else:
-        st.sidebar.link_button("🔐 連接 Google（登入）", get_auth_url())
 
-st.sidebar.divider()
+def render_sidebar() -> dict:
+    st.sidebar.header("⚙️ 基本設定")
 
-ctx = render_sidebar()
+    # ✅ 用 form：避免每次改 slider/選項就 rerun → sidebar 跳到底 [1](blob:https://m365.cloud.microsoft/83df097b-4c01-4af8-98a9-d0ee12d1874c)[2](blob:https://m365.cloud.microsoft/513ef1ea-5972-4ba9-a711-34373e71a1c1)
+    with st.sidebar.form("sidebar_form", clear_on_submit=False):
+        fast_mode = st.checkbox(
+            "⚡ 快速模式",
+            value=st.session_state.get("fast_mode", True),
+            help="開啟：較快、較保守；關閉：較慢但更豐富。",
+        )
 
-tab_g, tab_i = st.tabs(["🪄 生成新題目", "📄 匯入現有題目"])
-with tab_g:
-    render_generate_tab(ctx)
-with tab_i:
-    render_import_tab(ctx)
+        st.divider()
+        st.subheader("🤖 AI（預設 DeepSeek）")
+        api_key = st.text_input(
+            "DeepSeek API Key",
+            type="password",
+            value=st.session_state.get("api_key", ""),
+        )
+
+        model = DEEPSEEK_MODEL_FAST if fast_mode else DEEPSEEK_MODEL_QUALITY
+        st.caption(f"✅ 自動模型：{model}（{'快速' if fast_mode else '高質'}）")
+
+        st.divider()
+        st.subheader("🔍 OCR / Vision")
+        ocr_mode = st.radio(
+            "教材擷取模式",
+            ["📄 純文字", "🔬 本地 OCR（掃描 PDF / 圖片）", "🤖 Vision OCR（LLM 讀圖）"],
+            index=["📄 純文字", "🔬 本地 OCR（掃描 PDF / 圖片）", "🤖 Vision OCR（LLM 讀圖）"].index(
+                st.session_state.get("ocr_mode", "📄 純文字")
+            ),
+        )
+
+        vision_pdf_max_pages = int(st.session_state.get("vision_pdf_max_pages", 3))
+        if ocr_mode == "🤖 Vision OCR（LLM 讀圖）":
+            vision_pdf_max_pages = st.slider(
+                "Vision PDF 最大頁數",
+                min_value=1,
+                max_value=10,
+                value=vision_pdf_max_pages,
+                step=1,
+                help="頁數越多越準確，但耗時與成本較高。",
+            )
+
+        st.divider()
+        st.subheader("📘 出題設定")
+
+        subject_options = _build_subject_options()
+        default_subject = st.session_state.get("subject", "中國語文")
+        if default_subject not in subject_options:
+            default_subject = "中國語文"
+
+        subject = st.selectbox(
+            "科目",
+            subject_options,
+            index=subject_options.index(default_subject),
+        )
+        if subject.startswith("— "):
+            subject = "中國語文"
+
+        level_code = st.selectbox(
+            "題目難度",
+            ["easy", "medium", "hard"],
+            index=["easy", "medium", "hard"].index(st.session_state.get("level_code", "medium")),
+            format_func=lambda x: {
+                "easy": "容易（基礎概念、直接題）",
+                "medium": "中等（理解＋應用）",
+                "hard": "困難（高階思維、綜合題）",
+            }[x],
+        )
+
+        question_count = st.slider(
+            "題目數量",
+            min_value=3,
+            max_value=20,
+            value=int(st.session_state.get("question_count", 10)),
+            step=1,
+        )
+
+        apply_btn = st.form_submit_button("✅ 套用設定")
+
+    if apply_btn:
+        st.session_state["fast_mode"] = fast_mode
+        st.session_state["api_key"] = api_key
+        st.session_state["ocr_mode"] = ocr_mode
+        st.session_state["vision_pdf_max_pages"] = vision_pdf_max_pages
+        st.session_state["subject"] = subject
+        st.session_state["level_code"] = level_code
+        st.session_state["question_count"] = question_count
+        st.rerun()
+
+    st.sidebar.divider()
+    with st.sidebar.expander("🧪 API 連線測試（DeepSeek）", expanded=False):
+        if st.button("🧪 測試 DeepSeek", key="btn_ping_deepseek"):
+            key = st.session_state.get("api_key", "")
+            fm = st.session_state.get("fast_mode", True)
+            m = DEEPSEEK_MODEL_FAST if fm else DEEPSEEK_MODEL_QUALITY
+            if not key:
+                st.error("請先輸入 API Key，再按測試。")
+            else:
+                with st.spinner("測試中…"):
+                    r = _ping_deepseek(key, m)
+                if r.get("ok"):
+                    st.success(f"✅ OK（{r.get('latency_ms')} ms）")
+                    st.code(r.get("output", ""))
+                else:
+                    st.error(f"❌ 失敗（{r.get('latency_ms')} ms）：{r.get('error')}")
+                    if r.get("body"):
+                        st.code(r.get("body"))
+
+    def api_config() -> dict:
+        fm = st.session_state.get("fast_mode", True)
+        m = DEEPSEEK_MODEL_FAST if fm else DEEPSEEK_MODEL_QUALITY
+        return {"api_key": st.session_state.get("api_key", ""), "base_url": DEEPSEEK_BASE_URL, "model": m}
+
+    def can_call_ai(cfg: dict) -> bool:
+        return bool(cfg.get("api_key")) and bool(cfg.get("base_url")) and bool(cfg.get("model"))
+
+    return {
+        "api_config": api_config,
+        "can_call_ai": can_call_ai,
+        "subject": st.session_state.get("subject", "中國語文"),
+        "level_code": st.session_state.get("level_code", "medium"),
+        "question_count": int(st.session_state.get("question_count", 10)),
+        "fast_mode": st.session_state.get("fast_mode", True),
+        "ocr_mode": st.session_state.get("ocr_mode", "📄 純文字"),
+        "vision_pdf_max_pages": int(st.session_state.get("vision_pdf_max_pages", 3)),
+    }
