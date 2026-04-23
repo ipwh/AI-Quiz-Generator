@@ -1,236 +1,350 @@
-import time
-import requests
 import streamlit as st
 
-# DeepSeek OpenAI-compatible: base_url 可用 /v1；模型 alias deepseek-chat / deepseek-reasoner [3](blob:https://m365.cloud.microsoft/84970d9c-a5f8-4ea8-8475-a54fc91ea9fc)
-DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
-DEEPSEEK_MODEL_FAST = "deepseek-chat"
-DEEPSEEK_MODEL_QUALITY = "deepseek-reasoner"
+# =========================================================
+# ui/sidebar.py (修正版)
+# ---------------------------------------------------------
+# ✅ 修正 xAI 400 Model not found：改用 /v1/language-models 取得可用模型清單
+# ✅ 預設優先：grok-4-0709（若清單存在）
+# ✅ 支援：Grok (xAI) + 自訂（OpenAI 相容）+ DeepSeek/OpenAI/Azure
+# ✅ 兼容不同版本 llm_service：可能沒有 ping_llm / get_xai_default_model
+# =========================================================
 
-SUBJECTS = [
-    "中國語文", "英國語文", "數學", "公民與社會發展", "科學", "公民、經濟及社會",
-    "物理", "化學", "生物", "地理", "歷史", "中國歷史", "宗教",
-    "資訊及通訊科技（ICT）", "經濟", "企業、會計與財務概論", "旅遊與款待",
-]
+import requests
 
-SUBJECT_GROUPS = {
-    "語文": ["中國語文", "英國語文"],
-    "數學與科學": ["數學", "科學", "物理", "化學", "生物"],
-    "人文與社會": ["公民與社會發展", "公民、經濟及社會", "地理", "歷史", "中國歷史", "宗教"],
-    "商業與科技": ["資訊及通訊科技（ICT）", "經濟", "企業、會計與財務概論", "旅遊與款待"],
-}
+# 兼容不同版本 llm_service
+try:
+    from services.llm_service import ping_llm
+except Exception:
+    ping_llm = None
 
-
-def _build_subject_options():
-    opts = []
-    for group, items in SUBJECT_GROUPS.items():
-        opts.append(f"— {group} —")
-        opts.extend(items)
-    # 保險：任何未被分組但存在 SUBJECTS
-    for s in SUBJECTS:
-        if s not in opts:
-            opts.append(s)
-    return opts
+try:
+    from services.llm_service import get_xai_default_model  # 可選：若你的 llm_service 有提供
+except Exception:
+    get_xai_default_model = None
 
 
-def _ping_deepseek(api_key: str, model: str):
+# ---------------------------------------------------------
+# xAI: /v1/language-models（列出 chat + image understanding）
+# ---------------------------------------------------------
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _xai_list_language_models(api_key: str, base_url: str) -> list:
+    """讀取 xAI /v1/language-models，回傳 list[dict]。
+
+    xAI 官方提供：/v1/language-models 可列出可用 chat/image understanding 模型及 aliases。
     """
-    真實 DeepSeek ping：POST /chat/completions
-    回傳：ok/latency_ms/output/error/status_code/body（失敗時保證有 error）
-    """
-    t0 = time.time()
-    url = DEEPSEEK_BASE_URL.rstrip("/") + "/chat/completions"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": "ping"}],
-        "max_tokens": 5,
-        "temperature": 0,
-        "stream": False,
-    }
+    url = base_url.rstrip("/") + "/language-models"
+    headers = {"Authorization": f"Bearer {api_key}"}
+    r = requests.get(url, headers=headers, timeout=20)
+    r.raise_for_status()
+    data = r.json() or {}
 
-    try:
-        r = requests.post(url, headers=headers, json=payload, timeout=25)
-        latency = int((time.time() - t0) * 1000)
-        body_text = r.text or ""
+    # 官方文件字段：models（部分 gateway 可能用 data）
+    models = data.get("models")
+    if isinstance(models, list):
+        return [m for m in models if isinstance(m, dict)]
 
-        if r.status_code >= 400:
-            err_msg = ""
-            try:
-                j = r.json()
-                if isinstance(j, dict):
-                    err = j.get("error")
-                    if isinstance(err, dict):
-                        err_msg = err.get("message") or ""
-                    elif isinstance(err, str):
-                        err_msg = err
-            except Exception:
-                pass
-            if not err_msg:
-                err_msg = f"HTTP {r.status_code}"
+    models = data.get("data")
+    if isinstance(models, list):
+        return [m for m in models if isinstance(m, dict)]
 
-            return {
-                "ok": False,
-                "latency_ms": latency,
-                "output": "",
-                "error": err_msg,
-                "status_code": r.status_code,
-                "body": body_text[:1200],
-            }
+    return []
 
-        j = r.json()
-        out = ""
-        try:
-            out = j["choices"][0]["message"]["content"]
-        except Exception:
-            out = ""
-        return {
-            "ok": True,
-            "latency_ms": latency,
-            "output": out,
-            "error": "",
-            "status_code": r.status_code,
-        }
 
-    except Exception as e:
-        latency = int((time.time() - t0) * 1000)
-        msg = str(e) or e.__class__.__name__
-        return {
-            "ok": False,
-            "latency_ms": latency,
-            "output": "",
-            "error": msg,
-            "status_code": None,
-        }
+def _xai_build_model_options(models: list) -> list:
+    """把 models 的 aliases + id 合併成下拉選單，去重並保持順序。"""
+    options = []
+    for m in models:
+        als = m.get("aliases", [])
+        if isinstance(als, list):
+            options.extend([a for a in als if isinstance(a, str)])
+        mid = m.get("id")
+        if isinstance(mid, str):
+            options.append(mid)
+
+    seen = set()
+    uniq = []
+    for x in options:
+        if x and x not in seen:
+            seen.add(x)
+            uniq.append(x)
+    return uniq
+
+
+def _xai_pick_default_model(models: list, preferred: str = "grok-4-0709") -> str:
+    """依序挑選：preferred → 任一 grok alias → 任一 grok id → grok-2-latest。"""
+    ids, aliases = [], []
+    for m in models:
+        mid = m.get("id")
+        if isinstance(mid, str):
+            ids.append(mid)
+        als = m.get("aliases", [])
+        if isinstance(als, list):
+            for a in als:
+                if isinstance(a, str):
+                    aliases.append(a)
+
+    if preferred in ids or preferred in aliases:
+        return preferred
+
+    for a in aliases:
+        if "grok" in a.lower():
+            return a
+
+    for mid in ids:
+        if "grok" in mid.lower():
+            return mid
+
+    return "grok-2-latest"
 
 
 def render_sidebar() -> dict:
-    st.sidebar.header("⚙️ 基本設定")
+    """渲染側邊欄設定，回傳 ctx dict，供 pages_generate.py / pages_import.py 使用。"""
 
-    # ✅ 用 form：避免每次改 slider/選項就 rerun → sidebar 跳到底 [1](blob:https://m365.cloud.microsoft/83df097b-4c01-4af8-98a9-d0ee12d1874c)[2](blob:https://m365.cloud.microsoft/513ef1ea-5972-4ba9-a711-34373e71a1c1)
-    with st.sidebar.form("sidebar_form", clear_on_submit=False):
-        fast_mode = st.checkbox(
-            "⚡ 快速模式",
-            value=st.session_state.get("fast_mode", True),
-            help="開啟：較快、較保守；關閉：較慢但更豐富。",
-        )
+    st.sidebar.header("🔌 AI API 設定")
 
-        st.divider()
-        st.subheader("🤖 AI（預設 DeepSeek）")
-        api_key = st.text_input(
-            "DeepSeek API Key",
-            type="password",
-            value=st.session_state.get("api_key", ""),
-        )
-
-        model = DEEPSEEK_MODEL_FAST if fast_mode else DEEPSEEK_MODEL_QUALITY
-        st.caption(f"✅ 自動模型：{model}（{'快速' if fast_mode else '高質'}）")
-
-        st.divider()
-        st.subheader("🔍 OCR / Vision")
-        ocr_mode = st.radio(
-            "教材擷取模式",
-            ["📄 純文字", "🔬 本地 OCR（掃描 PDF / 圖片）", "🤖 Vision OCR（LLM 讀圖）"],
-            index=["📄 純文字", "🔬 本地 OCR（掃描 PDF / 圖片）", "🤖 Vision OCR（LLM 讀圖）"].index(
-                st.session_state.get("ocr_mode", "📄 純文字")
-            ),
-        )
-
-        vision_pdf_max_pages = int(st.session_state.get("vision_pdf_max_pages", 3))
-        if ocr_mode == "🤖 Vision OCR（LLM 讀圖）":
-            vision_pdf_max_pages = st.slider(
-                "Vision PDF 最大頁數",
-                min_value=1,
-                max_value=10,
-                value=vision_pdf_max_pages,
-                step=1,
-                help="頁數越多越準確，但耗時與成本較高。",
-            )
-
-        st.divider()
-        st.subheader("📘 出題設定")
-
-        subject_options = _build_subject_options()
-        default_subject = st.session_state.get("subject", "中國語文")
-        if default_subject not in subject_options:
-            default_subject = "中國語文"
-
-        subject = st.selectbox(
-            "科目",
-            subject_options,
-            index=subject_options.index(default_subject),
-        )
-        if subject.startswith("— "):
-            subject = "中國語文"
-
-        level_code = st.selectbox(
-            "題目難度",
-            ["easy", "medium", "hard"],
-            index=["easy", "medium", "hard"].index(st.session_state.get("level_code", "medium")),
-            format_func=lambda x: {
-                "easy": "容易（基礎概念、直接題）",
-                "medium": "中等（理解＋應用）",
-                "hard": "困難（高階思維、綜合題）",
-            }[x],
-        )
-
-        question_count = st.slider(
-            "題目數量",
-            min_value=3,
-            max_value=20,
-            value=int(st.session_state.get("question_count", 10)),
-            step=1,
-        )
-
-        apply_btn = st.form_submit_button("✅ 套用設定")
-
-    if apply_btn:
-        st.session_state["fast_mode"] = fast_mode
-        st.session_state["api_key"] = api_key
-        st.session_state["ocr_mode"] = ocr_mode
-        st.session_state["vision_pdf_max_pages"] = vision_pdf_max_pages
-        st.session_state["subject"] = subject
-        st.session_state["level_code"] = level_code
-        st.session_state["question_count"] = question_count
-        st.rerun()
-
+    # Fast Mode
+    fast_mode = st.sidebar.checkbox(
+        "⚡ 快速模式",
+        value=True,
+        help="較快、較保守：較短輸出與較短超時；適合日常快速出題。",
+    )
+    st.sidebar.caption("關閉快速模式：較慢，但題目更豐富/更有變化。")
     st.sidebar.divider()
-    with st.sidebar.expander("🧪 API 連線測試（DeepSeek）", expanded=False):
-        if st.button("🧪 測試 DeepSeek", key="btn_ping_deepseek"):
-            key = st.session_state.get("api_key", "")
-            fm = st.session_state.get("fast_mode", True)
-            m = DEEPSEEK_MODEL_FAST if fm else DEEPSEEK_MODEL_QUALITY
-            if not key:
-                st.error("請先輸入 API Key，再按測試。")
-            else:
-                with st.spinner("測試中…"):
-                    r = _ping_deepseek(key, m)
-                if r.get("ok"):
-                    st.success(f"✅ OK（{r.get('latency_ms')} ms）")
-                    st.code(r.get("output", ""))
-                else:
-                    st.error(f"❌ 失敗（{r.get('latency_ms')} ms）：{r.get('error')}")
-                    if r.get("body"):
-                        st.code(r.get("body"))
 
-    def api_config() -> dict:
-        fm = st.session_state.get("fast_mode", True)
-        m = DEEPSEEK_MODEL_FAST if fm else DEEPSEEK_MODEL_QUALITY
-        return {"api_key": st.session_state.get("api_key", ""), "base_url": DEEPSEEK_BASE_URL, "model": m}
+    # API Preset
+    preset = st.sidebar.selectbox(
+        "快速選擇（簡易）",
+        ["DeepSeek", "OpenAI", "Grok (xAI)", "Azure OpenAI", "自訂（OpenAI 相容）"],
+        key="preset",
+    )
+
+    api_key = st.sidebar.text_input("API Key", type="password", key="api_key")
+
+    auto_xai = False
+    azure_endpoint = ""
+    azure_deployment = ""
+    azure_api_version = "2024-02-15-preview"
+
+    # Preset defaults
+    if preset == "DeepSeek":
+        base_url = "https://api.deepseek.com/v1"
+        model = "deepseek-chat"
+
+    elif preset == "OpenAI":
+        base_url = "https://api.openai.com/v1"
+        model = "gpt-4o-mini"
+
+    elif preset == "Grok (xAI)":
+        base_url = "https://api.x.ai/v1"
+
+        # 你指定預設：grok-4-0709
+        preferred = "grok-4-0709"
+        model = st.session_state.get("xai_selected_model", preferred)
+
+        auto_xai = st.sidebar.checkbox(
+            "🤖 自動偵測可用最新 Grok 型號（建議）",
+            value=True,
+            key="auto_xai",
+        )
+
+        st.sidebar.caption("建議：先按『🔍 取得可用模型』，再從清單選擇，避免 Model not found。")
+
+        if api_key:
+            # 手動拉清單
+            if st.sidebar.button("🔍 取得可用模型", key="btn_xai_fetch_models"):
+                try:
+                    models = _xai_list_language_models(api_key, base_url)
+                    st.session_state["xai_models_cache"] = models
+                    st.sidebar.success(f"✅ 已載入 {len(models)} 個可用模型")
+                except Exception as e:
+                    st.sidebar.error("❌ 取得模型清單失敗（請檢查 Key/網絡）")
+                    st.sidebar.code(repr(e))
+
+            models = st.session_state.get("xai_models_cache", [])
+
+            # 如果 llm_service 有 get_xai_default_model，就可先用它（保持向後相容）
+            if auto_xai and api_key and get_xai_default_model:
+                try:
+                    detected = get_xai_default_model(api_key, base_url)
+                    if detected:
+                        model = detected
+                        st.session_state["xai_selected_model"] = model
+                        st.sidebar.caption(f"✅ 已自動選用：{model}")
+                except Exception:
+                    pass
+
+            # 優先用 /v1/language-models（你指定）
+            if auto_xai and models:
+                picked = _xai_pick_default_model(models, preferred=preferred)
+                model = picked
+                st.session_state["xai_selected_model"] = model
+                st.sidebar.caption(f"✅ 已自動選用：{model}")
+
+            # 有清單就給下拉
+            if models:
+                options = _xai_build_model_options(models)
+                if model not in options:
+                    model = _xai_pick_default_model(models, preferred=preferred)
+                model = st.sidebar.selectbox(
+                    "Grok 模型（從可用清單選擇）",
+                    options,
+                    index=options.index(model) if model in options else 0,
+                    key="xai_model_selectbox",
+                )
+                st.session_state["xai_selected_model"] = model
+            else:
+                # 沒清單時提供手動輸入（仍可用）
+                model = st.sidebar.text_input(
+                    "Model（建議先按『取得可用模型』）",
+                    value=model,
+                    key="xai_model_manual",
+                )
+                st.session_state["xai_selected_model"] = model
+        else:
+            st.sidebar.info("先填入 xAI API Key 才能載入可用模型清單。")
+
+    elif preset == "Azure OpenAI":
+        base_url = ""
+        model = ""
+        with st.sidebar.expander("⚙️ Azure 設定", expanded=True):
+            azure_endpoint = st.text_input("Azure Endpoint", value="", key="azure_endpoint")
+            azure_deployment = st.text_input("Deployment name", value="", key="azure_deployment")
+            azure_api_version = st.text_input("API version", value=azure_api_version, key="azure_api_version")
+
+    else:
+        base_url = st.sidebar.text_input("Base URL（含 /v1）", value="", key="custom_base_url")
+        model = st.sidebar.text_input("Model", value="", key="custom_model")
+
+    # API config
+    def api_config():
+        if preset == "Azure OpenAI":
+            return {
+                "type": "azure",
+                "api_key": api_key,
+                "endpoint": azure_endpoint,
+                "deployment": azure_deployment,
+                "api_version": azure_api_version,
+            }
+        return {
+            "type": "openai_compat",
+            "api_key": api_key,
+            "base_url": base_url,
+            "model": model,
+        }
 
     def can_call_ai(cfg: dict) -> bool:
-        return bool(cfg.get("api_key")) and bool(cfg.get("base_url")) and bool(cfg.get("model"))
+        if not cfg.get("api_key"):
+            return False
+        if cfg.get("type") == "azure":
+            return bool(cfg.get("endpoint")) and bool(cfg.get("deployment"))
+        return bool(cfg.get("base_url")) and bool(cfg.get("model"))
+
+    # Ping
+    st.sidebar.divider()
+    st.sidebar.header("🧪 API 連線測試")
+    cfg_test = api_config()
+
+    # ✅ 把測試 timeout 拉長些：避免 DeepSeek 25s 易 timeout
+    ping_timeout = st.sidebar.slider(
+        "測試超時（秒）",
+        min_value=10,
+        max_value=120,
+        value=45,
+        key="ping_timeout_sec",
+        help="DeepSeek/網絡繁忙時建議 45–90 秒。",
+    )
+
+    if st.sidebar.button("🧪 一鍵測試 API（回覆 OK）", key="btn_ping_api"):
+        if ping_llm is None:
+            st.sidebar.warning("⚠️ 此版本 llm_service 未提供 ping_llm()，已略過測試。")
+        elif not can_call_ai(cfg_test):
+            st.sidebar.error("請先填妥 API Key／Base URL／Model（Azure 要 Endpoint + Deployment）。")
+        else:
+            with st.sidebar.spinner("正在測試連線…"):
+                r = ping_llm(cfg_test, timeout=int(ping_timeout))
+            if r.get("ok"):
+                st.sidebar.success(f"✅ 成功：{r.get('latency_ms', 0)} ms；回覆：{r.get('output','')}")
+            else:
+                st.sidebar.error("❌ 失敗：請檢查 Key/Endpoint/Model 或服務狀態")
+                st.sidebar.code(r.get("error", ""))
+
+    # OCR / Vision
+    st.sidebar.divider()
+    st.sidebar.header("🔬 OCR / 讀圖設定（數理科必讀）")
+    st.sidebar.caption("數學／物理／化學／生物建議開啟 Vision 模式以辨識圖表與方程式。")
+
+    ocr_mode = st.sidebar.radio(
+        "教材擷取模式",
+        [
+            "📄 純文字（一般文件，最快）",
+            "🔬 本地 OCR（掃描 PDF/圖片，離線）",
+            "🤖 LLM Vision 讀圖（圖表/方程式/手寫，最準）",
+        ],
+        index=0,
+        key="ocr_mode",
+    )
+
+    vision_pdf_max_pages = 3
+    if ocr_mode == "🤖 LLM Vision 讀圖（圖表/方程式/手寫，最準）":
+        vision_pdf_max_pages = st.sidebar.slider(
+            "Vision PDF 最多讀取頁數",
+            min_value=1,
+            max_value=10,
+            value=3,
+            key="vision_pdf_max_pages",
+            help="頁數越多越準確，但耗時與費用也越高。",
+        )
+        st.sidebar.info("💡 DeepSeek 不支援 Vision，請改用 Grok 或 GPT-4o 等模型。")
+
+    # 出題設定
+    st.sidebar.divider()
+    st.sidebar.header("📘 出題設定")
+
+    subject = st.sidebar.selectbox(
+        "科目",
+        [
+            "中國語文", "英國語文", "數學", "公民與社會發展", "科學", "公民、經濟及社會",
+            "物理", "化學", "生物", "地理", "歷史", "中國歷史", "宗教",
+            "資訊及通訊科技（ICT）", "經濟", "企業、會計與財務概論", "旅遊與款待",
+        ],
+        key="subject",
+    )
+
+    level_label = st.sidebar.radio(
+        "🎯 難度",
+        ["基礎（理解與記憶）", "標準（應用與理解）", "進階（分析與思考）", "混合（課堂活動建議）"],
+        index=1,
+        key="level_label",
+    )
+
+    level_map = {
+        "基礎（理解與記憶）": "easy",
+        "標準（應用與理解）": "medium",
+        "進階（分析與思考）": "hard",
+        "混合（課堂活動建議）": "mixed",
+    }
+    level_code = level_map[level_label]
+
+    question_count = st.sidebar.selectbox(
+        "🧮 題目數目（生成用）",
+        [5, 8, 10, 12, 15, 20],
+        index=2,
+        key="question_count",
+    )
 
     return {
+        "fast_mode": fast_mode,
+        "ocr_mode": ocr_mode,
+        "vision_pdf_max_pages": vision_pdf_max_pages,
         "api_config": api_config,
         "can_call_ai": can_call_ai,
-        "subject": st.session_state.get("subject", "中國語文"),
-        "level_code": st.session_state.get("level_code", "medium"),
-        "question_count": int(st.session_state.get("question_count", 10)),
-        "fast_mode": st.session_state.get("fast_mode", True),
-        "ocr_mode": st.session_state.get("ocr_mode", "📄 純文字"),
-        "vision_pdf_max_pages": int(st.session_state.get("vision_pdf_max_pages", 3)),
+        "subject": subject,
+        "level_code": level_code,
+        "question_count": question_count,
+
+        # debug echoes
+        "preset": preset,
+        "model": model,
+        "base_url": base_url,
     }
