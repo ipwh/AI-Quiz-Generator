@@ -1,7 +1,7 @@
 import streamlit as st
 
 # ============================================================
-# App entry (single source of truth, ASCII-only)
+# App entry (single source of truth)
 # ============================================================
 
 # Session state init (root or core)
@@ -10,7 +10,7 @@ try:
 except Exception:
     from core.session_state import init_session_state
 
-# Sidebar settings renderer
+# Sidebar settings renderer (AI/OCR/subject)
 from ui.sidebar import render_sidebar
 
 # Pages (single source)
@@ -68,6 +68,8 @@ else:
             st.rerun()
     else:
         st.sidebar.link_button("🔐 連接 Google（登入）", get_auth_url())
+
+st.sidebar.divider()
 
 # ------------------------------------------------------------
 # Sidebar (AI / subject settings BELOW Google login)
