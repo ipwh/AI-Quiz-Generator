@@ -1,10 +1,12 @@
-import streamlit as st
+# =========================================================
+# app.py (FINAL-FULL, modular, strict old-behavior)
+# - 主入口：根目錄 app.py
+# - Google OAuth callback + Google 連接區塊（在 sidebar 最上方）
+# - 呼叫 ui/sidebar.py 建 ctx
+# - Tabs 呼叫 ui/pages_generate.py, ui/pages_import.py
+# =========================================================
 
-# Session state init
-try:
-    from session_state import init_session_state
-except Exception:
-    from core.session_state import init_session_state
+import streamlit as st
 
 from ui.sidebar import render_sidebar
 from ui.pages_generate import render_generate_tab
@@ -17,13 +19,33 @@ from services.google_oauth import (
     credentials_to_dict,
 )
 
-st.set_page_config(page_title="AI 題目生成器", layout="wide")
-st.title("🏫 AI 題目生成器")
-init_session_state()
+from services.llm_service import (
+    generate_questions,
+    assist_import_questions,
+    parse_import_questions_locally,
+)
 
-# OAuth callback
+
+def _adapt_kwargs(fn, **kwargs):
+    """Call fn with only supported kwargs (signature-safe)."""
+    try:
+        import inspect
+        sig = inspect.signature(fn)
+        allowed = set(sig.parameters.keys())
+        filtered = {k: v for k, v in kwargs.items() if k in allowed}
+        return fn(**filtered)
+    except Exception:
+        return fn(**kwargs)
+
+
+# ------------------------- Session -------------------------
+if "google_creds" not in st.session_state:
+    st.session_state.google_creds = None
+
+
+# ------------------------- OAuth callback -------------------------
 params = st.query_params
-if oauth_is_configured() and "code" in params and not st.session_state.get("google_creds"):
+if oauth_is_configured() and "code" in params and not st.session_state.google_creds:
     try:
         code = params.get("code")
         state = params.get("state")
@@ -32,34 +54,72 @@ if oauth_is_configured() and "code" in params and not st.session_state.get("goog
         if isinstance(state, list):
             state = state[0]
         creds = exchange_code_for_credentials(code=code, returned_state=state)
-        st.session_state["google_creds"] = credentials_to_dict(creds)
+        st.session_state.google_creds = credentials_to_dict(creds)
         st.query_params.clear()
         st.rerun()
-    except Exception as e:
+    except ValueError as e:
+        st.sidebar.error(f"❌ OAuth 認證失敗：無效的狀態參數。詳情：{str(e)}")
         st.query_params.clear()
-        st.error("Google 登入失敗，請重新嘗試。")
-        st.exception(e)
-        st.stop()
+    except KeyError as e:
+        st.sidebar.error(f"❌ OAuth 認證失敗：缺少必要參數 {str(e)}")
+        st.query_params.clear()
+    except Exception as e:
+        st.sidebar.error(f"❌ Google 連接錯誤：{str(e)[:100]}")
+        st.query_params.clear()
 
-# Google login always at top
-st.sidebar.header("🟦 Google 連接（Forms / Drive 分享）")
+
+# ------------------------- Page -------------------------
+st.set_page_config(page_title="AI 題目生成器", layout="wide")
+st.title("🏫 AI 題目生成器")
+
+
+# ------------------------- Google connect (sidebar top) -------------------------
+st.sidebar.header("🟦 Google 連接（Google Forms / Google Drive / 電郵分享）")
 if not oauth_is_configured():
-    st.sidebar.warning("尚未設定 Google OAuth（Secrets: google_oauth_client + APP_URL）")
+    st.sidebar.warning("⚠️ 尚未設定 Google OAuth（Secrets: google_oauth_client + APP_URL）")
 else:
-    if st.session_state.get("google_creds"):
+    if st.session_state.google_creds:
         st.sidebar.success("✅ 已連接 Google")
         if st.sidebar.button("🔒 登出 Google", key="btn_logout_google"):
-            st.session_state["google_creds"] = None
+            st.session_state.google_creds = None
             st.rerun()
     else:
         st.sidebar.link_button("🔐 連接 Google（登入）", get_auth_url())
+        st.sidebar.caption("提示：請以學校電郵登入，方便統一管理與分享。")
 
 st.sidebar.divider()
 
+
+# ------------------------- Sidebar ctx -------------------------
 ctx = render_sidebar()
 
-tab_g, tab_i = st.tabs(["🪄 生成新題目", "📄 匯入現有題目"])
-with tab_g:
+
+# ------------------------- Inject services (保持舊版介面) -------------------------
+ctx.update({
+    "generate_questions": lambda cfg, text, subject, level_code, question_count, **kw: _adapt_kwargs(
+        generate_questions,
+        cfg=cfg,
+        text=text,
+        subject=subject,
+        level=level_code,
+        question_count=question_count,
+        fast_mode=kw.get("fast_mode", True),
+        qtype=kw.get("qtype", "single"),
+    ),
+    "assist_import_questions": lambda cfg, raw, subject, **kw: _adapt_kwargs(
+        assist_import_questions,
+        cfg=cfg,
+        raw_text=raw,
+        subject=subject,
+        fast_mode=kw.get("fast_mode", True),
+    ),
+    "parse_import_questions_locally": parse_import_questions_locally,
+})
+
+
+# ------------------------- Tabs -------------------------
+tab1, tab2 = st.tabs(["🪄 生成新題目", "📄 匯入現有題目"])
+with tab1:
     render_generate_tab(ctx)
-with tab_i:
+with tab2:
     render_import_tab(ctx)
