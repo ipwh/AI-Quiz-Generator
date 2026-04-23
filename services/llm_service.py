@@ -365,7 +365,7 @@ def rebalance_correct_positions(items: List[dict], seed: Optional[int] = None) -
     valid: List[dict] = []
     for q in items or []:
         corr = q.get("correct", [])
-        if isinstance(corr, list) and len(corr) == 1 and corr in {"1", "2", "3", "4"}:
+        if isinstance(corr, list) and len(corr) == 1 and corr [0] in {"1", "2", "3", "4"}:
             opts = q.get("options", [])
             if isinstance(opts, list) and len(opts) == 4:
                 valid.append(q)
