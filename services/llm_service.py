@@ -16,10 +16,12 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 import re
 import time
 import threading
+import yaml
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -43,180 +45,55 @@ def _reset_session() -> None:
 
 
 # =========================================================
-# SUBJECT TRAITS / MISCONCEPTIONS / DISTRACTOR HINTS
+# Load Subject Configuration from YAML
 # =========================================================
 
-SUBJECT_TRAITS: Dict[str, str] = {
-    "中國語文": "篇章理解、語境推斷、主旨、作者態度、修辭與寫作意圖。題幹自然，避免『根據教材』字眼。",
-    "英國語文": "Reading comprehension, inference, tone/attitude, vocabulary in context, cohesion. Avoid meta phrasing.",
-    "數學": "概念理解、運算步驟、條件限制、單位與定義域。題目清楚已知/所求。",
-    "公民與社會發展": "概念（法治、身份、全球化、可持續）、資料判讀、立場辨析、政策取捨。",
-    "科學": "概念理解、變量控制、公平測試、數據解讀、由證據推論。",
-    "物理": "定律應用、受力分析、能量/動量、圖像解讀、單位與方向。",
-    "化學": "粒子模型、方程式與配平、計量、反應條件、實驗設計與安全。",
-    "生物": "結構與功能、恆常性、遺傳演化、生態與人類影響、數據解讀。",
-    "地理": "成因→過程→影響→管理、空間分佈、案例比較、地圖/數據判讀。",
-    "歷史": "時序、因果、史料解讀、觀點與偏見、短/長期影響。",
-    "中國歷史": "朝代脈絡、制度與社會、延續/變革、史料與論證。",
-    "宗教": "宗教概念、倫理抉擇、教義理解、比較觀點與反思。",
-    "資訊及通訊科技（ICT）": "系統概念、資料表示、網絡與安全、演算法思維、硬/軟件與應用。",
-    "經濟": "供需、彈性、外部性、市場失靈、政策影響與圖像解讀。",
-    "企業、會計與財務概論": "會計原則、報表解讀、成本/定價、比率、現金流。",
-    "公民、經濟及社會": "公民身份、經濟基本概念、社會議題、資料解讀與價值判斷。",
-    "旅遊與款待": "旅遊系統、服務質素、營運、安全與風險、可持續、客戶體驗。",
-}
+def _load_subjects_config() -> Dict[str, Any]:
+    """
+    從 subjects_config.yaml 加載科目配置。
+    如果文件不存在或損壞，返回空字典。
+    """
+    config_path = os.path.join(os.path.dirname(__file__), "..", "subjects_config.yaml")
+    try:
+        if not os.path.exists(config_path):
+            return {}
+        with open(config_path, "r", encoding="utf-8") as f:
+            return yaml.safe_load(f) or {}
+    except Exception:
+        return {}
 
-DEFAULT_TRAITS = "請按內容出題，語句自然，避免使用『根據教材/根據文本/根據以上』等提示語。"
+
+_SUBJECTS_CONFIG = _load_subjects_config()
+
+# 從配置中提取科目數據
+_SUBJECTS_DATA = _SUBJECTS_CONFIG.get("subjects", {})
+
+SUBJECT_TRAITS: Dict[str, str] = {
+    subject: data.get("traits", "")
+    for subject, data in _SUBJECTS_DATA.items()
+    if isinstance(data, dict)
+}
 
 SUBJECT_MISCONCEPTIONS: Dict[str, List[str]] = {
-    "中國語文": ["斷章取義", "過度推論", "把描述當立場", "忽略語境", "修辭作用誤判", "轉折/因果混淆"],
-    "英國語文": ["near-synonym trap", "opposite tone", "wrong referent", "overgeneralization", "negation trap"],
-    "數學": ["漏條件/定義域", "單位/比例錯", "運算次序/符號錯", "四捨五入/有效數字錯", "概念混淆"],
-    "公民與社會發展": ["概念混淆", "把立場當事實", "以偏概全", "忽略持份者差異", "忽略政策取捨"],
-    "科學": ["相關≠因果", "未控制變量", "結論超出數據", "精確度/準確度混淆", "樣本不足"],
-    "物理": ["方向/向量錯", "單位混淆", "忽略摩擦/損耗", "圖像斜率/面積誤讀", "作用力反作用力混淆"],
-    "化學": ["未配平", "摩爾/質量/體積混淆", "濃度概念錯", "強弱vs濃度", "限量試劑錯"],
-    "生物": ["目的論", "層級混淆", "相關≠因果", "負回饋方向反", "能量流向概念錯"],
-    "地理": ["單一原因化", "天氣/氣候混淆", "尺度/地點忽略", "結果當原因", "只講一面"],
-    "歷史": ["時序混淆", "後果當原因", "以今論古", "單一因素決定論", "史料立場忽略"],
-    "中國歷史": ["朝代先後混淆", "制度名詞混淆", "結果當原因", "中央/地方混淆", "以偏概全"],
-    "宗教": ["個人意見當教義", "混淆宗教概念", "只講規條忽略情境", "忽略價值衝突"],
-    "資訊及通訊科技（ICT）": ["加密vs雜湊", "IPvsMAC", "備份vs同步", "授權vs認證", "安全措施角色混淆"],
-    "經濟": ["需求vs需求量", "曲線移動方向錯", "稅負歸宿誤判", "彈性判斷反", "福利變化誤判"],
-    "企業、會計與財務概論": ["利潤vs現金流", "收入vs收款", "資產/費用/支出混淆", "比率公式代錯", "折舊/應收應付理解錯"],
-    "公民、經濟及社會": ["道德判斷當事實", "以偏概全", "因果倒置", "忽略多方持份者", "概念字面化"],
-    "旅遊與款待": ["短期成本忽略口碑", "服務補救不當", "忽略安全風險", "忽略可持續/承載量", "忽略顧客差異"],
+    subject: data.get("misconceptions", [])
+    for subject, data in _SUBJECTS_DATA.items()
+    if isinstance(data, dict)
 }
 
-DISTRACTOR_RULES_BY_LEVEL: Dict[str, str] = {
+SUBJECT_DISTRACTOR_HINTS: Dict[str, List[str]] = {
+    subject: data.get("distractor_hints", [])
+    for subject, data in _SUBJECTS_DATA.items()
+    if isinstance(data, dict)
+}
+
+DISTRACTOR_RULES_BY_LEVEL: Dict[str, str] = _SUBJECTS_CONFIG.get("distractor_rules_by_level", {
     "easy": "干擾項反映基本誤解；錯在單一步驟；避免過度相似。",
     "medium": "干擾項包含部分正確但推論錯或漏條件；至少兩個看似合理。",
     "hard": "干擾項為多步推理陷阱：條件誤判、圖像誤讀、單位/方向/定義域錯。",
     "mixed": "混合 medium/hard 強度；同一套題可含不同難度但每題仍要清晰。",
-}
+})
 
-# ✅ 全科目專屬干擾項模板（加強版）
-SUBJECT_DISTRACTOR_HINTS: Dict[str, List[str]] = {
-    "中國語文": [
-        "斷章取義（取片段偏離主旨）",
-        "過度推論（推到文中沒有）",
-        "把描述當立場（敘述誤當態度）",
-        "修辭作用誤判（手法對但作用錯）",
-        "轉折/因果混淆",
-    ],
-    "英國語文": [
-        "near-synonym trap",
-        "opposite tone",
-        "wrong referent",
-        "overgeneralization",
-        "negation trap",
-    ],
-    "數學": [
-        "漏條件/定義域",
-        "單位/比例錯",
-        "運算次序/符號錯",
-        "四捨五入/有效數字錯",
-        "概念混淆（面積/周界、平均/中位等）",
-    ],
-    "公民與社會發展": [
-        "概念混淆（法治/人治、公平/平等、權利/責任）",
-        "把立場當事實",
-        "以偏概全（個案推普遍）",
-        "忽略持份者差異",
-        "忽略政策取捨（只講好/只講壞）",
-    ],
-    "科學": [
-        "相關≠因果",
-        "未控制變量",
-        "結論超出數據",
-        "精確度/準確度混淆",
-        "樣本/重複不足",
-    ],
-    "物理": [
-        "方向/向量（正負號反）",
-        "單位混淆（N/J/W 等）",
-        "忽略摩擦/損耗（理想化錯用）",
-        "圖像斜率/面積誤讀",
-        "作用力反作用力混淆",
-    ],
-    "化學": [
-        "方程式未配平/係數錯",
-        "摩爾/質量/體積混淆",
-        "濃度概念錯（稀釋/體積變化）",
-        "酸鹼強弱 vs 濃度",
-        "限量試劑判斷錯",
-    ],
-    "生物": [
-        "目的論（把適應當有意圖）",
-        "層級混淆（細胞/器官/系統）",
-        "相關≠因果",
-        "負回饋方向反",
-        "能量流向/生態概念錯",
-    ],
-    "地理": [
-        "單一原因化（忽略多因素互動）",
-        "天氣/氣候混淆",
-        "尺度/地點條件忽略",
-        "結果當原因",
-        "只講一面（忽略取捨/持份者）",
-    ],
-    "歷史": [
-        "時序/年代混淆",
-        "後果當原因",
-        "以今論古",
-        "單一因素決定論",
-        "史料立場忽略（把主張當事實）",
-    ],
-    "中國歷史": [
-        "朝代先後混淆",
-        "制度名詞混淆",
-        "結果當原因",
-        "中央/地方權力混淆",
-        "以偏概全（以一例概括一代）",
-    ],
-    "宗教": [
-        "把個人意見當教義",
-        "混淆不同宗教概念",
-        "只講規條忽略情境",
-        "忽略價值衝突",
-        "描述當評價",
-    ],
-    "資訊及通訊科技（ICT）": [
-        "加密 vs 雜湊",
-        "IP vs MAC",
-        "備份 vs 同步",
-        "授權 vs 認證",
-        "安全措施角色混淆（防火牆/防毒/權限）",
-    ],
-    "經濟": [
-        "需求 vs 需求量",
-        "曲線移動方向錯（把價格變動當移動）",
-        "稅負歸宿誤判（只看法定承擔者）",
-        "彈性判斷反",
-        "福利變化誤判（剩餘/死重損失）",
-    ],
-    "企業、會計與財務概論": [
-        "利潤 vs 現金流",
-        "收入 vs 收款",
-        "資產/費用/支出混淆",
-        "比率公式代錯",
-        "折舊/應收應付理解錯",
-    ],
-    "公民、經濟及社會": [
-        "道德判斷當事實",
-        "以偏概全",
-        "因果倒置",
-        "忽略多方持份者",
-        "概念字面化（忽略情境/證據）",
-    ],
-    "旅遊與款待": [
-        "只顧短期成本忽略口碑/品牌",
-        "服務補救不當（推卸責任/欠同理）",
-        "忽略安全與風險",
-        "忽略可持續/承載量",
-        "忽略顧客需求差異",
-    ],
-}
+DEFAULT_TRAITS = _SUBJECTS_CONFIG.get("default_traits", "請按內容出題，語句自然，避免使用『根據教材/根據文本/根據以上』等提示語。")
 
 
 # =========================================================
@@ -248,6 +125,23 @@ def _post_openai_compat(
     timeout: int = 120,
     max_retries: int = 3,
 ) -> dict:
+    """
+    OpenAI-compatible API 呼叫，支援 exponential backoff 重試。
+    
+    Args:
+        api_key: API 金鑰
+        base_url: 基礎 URL（例：https://api.openai.com/v1）
+        payload: 請求 payload
+        timeout: 請求超時秒數
+        max_retries: 最大重試次數
+    
+    Returns:
+        API 回應字典
+    
+    Raises:
+        requests.HTTPError: API 返回非 2xx 狀態碼
+        requests.RequestException: 網絡錯誤、超時等
+    """
     url = base_url.rstrip("/") + "/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -259,7 +153,7 @@ def _post_openai_compat(
     safe_payload = {k: v for k, v in payload.items() if k in allowed}
 
     last_err: Optional[Exception] = None
-    for _ in range(max_retries):
+    for attempt in range(max_retries):
         try:
             with _SESSION_LOCK:
                 r = _SESSION.post(url, headers=headers, json=safe_payload, timeout=(10, timeout))
@@ -269,9 +163,29 @@ def _post_openai_compat(
                     response=r,
                 )
             return r.json()
-        except Exception as e:
+        except (requests.Timeout, requests.ConnectionError) as e:
             last_err = e
-            time.sleep(0.6)
+            if attempt < max_retries - 1:
+                # Exponential backoff: 1s, 2s, 4s
+                wait_time = 2 ** attempt
+                time.sleep(wait_time)
+            continue
+        except requests.HTTPError as e:
+            # 4xx 錯誤（客戶端錯誤）不重試
+            if 400 <= e.response.status_code < 500:
+                raise
+            # 5xx 錯誤（服務器錯誤）重試
+            last_err = e
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt
+                time.sleep(wait_time)
+            continue
+        except Exception as e:
+            # 其他異常只重試一次
+            last_err = e
+            if attempt < max_retries - 1:
+                time.sleep(1)
+            continue
 
     raise last_err  # type: ignore
 
