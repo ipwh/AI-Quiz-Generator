@@ -37,7 +37,7 @@ def _build_text_with_highlights(raw_text: str, marked_idx: set, limit: int):
 
 
 def _vision_ocr_text(cfg: dict, images_data_urls: list, fast_mode: bool = True) -> str:
-    """Best‑effort Vision OCR: 專責抽文字，不直接出題。任何失敗都回傳空字串。"""
+    """Best-effort Vision OCR: extract text only. Return empty string on failure."""
     if not images_data_urls or not isinstance(cfg, dict):
         return ""
 
@@ -52,16 +52,13 @@ def _vision_ocr_text(cfg: dict, images_data_urls: list, fast_mode: bool = True) 
 "
     )
 
-
     content = [{"type": "text", "text": prompt}]
     for url in images_data_urls:
         content.append({"type": "image_url", "image_url": {"url": url, "detail": "high"}})
 
-
     temperature = 0.0
     max_tokens = 1200 if fast_mode else 2000
     timeout = 90 if fast_mode else 150
-
 
     try:
         if cfg.get("type") == "azure":
@@ -72,7 +69,11 @@ def _vision_ocr_text(cfg: dict, images_data_urls: list, fast_mode: bool = True) 
                 return ""
             url = f"{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
             headers = {"api-key": cfg.get("api_key", ""), "Content-Type": "application/json"}
-            payload = {"messages": [{"role": "user", "content": content}], "temperature": temperature, "max_tokens": max_tokens}
+            payload = {
+                "messages": [{"role": "user", "content": content}],
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
         else:
             base_url = (cfg.get("base_url") or "").rstrip("/")
             model = cfg.get("model")
@@ -80,9 +81,12 @@ def _vision_ocr_text(cfg: dict, images_data_urls: list, fast_mode: bool = True) 
                 return ""
             url = f"{base_url}/chat/completions"
             headers = {"Authorization": f"Bearer {cfg.get('api_key','')}", "Content-Type": "application/json"}
-            payload = {"model": model, "messages": [{"role": "user", "content": content}], "temperature": temperature, "max_tokens": max_tokens}
-
-
+            payload = {
+                "model": model,
+                "messages": [{"role": "user", "content": content}],
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            }
         r = requests.post(url, headers=headers, json=payload, timeout=timeout)
         r.raise_for_status()
         data = r.json()
@@ -142,27 +146,33 @@ def render_generate_tab(ctx: dict):
         raw_text = payload.get("text", "") or ""
         images = payload.get("images", []) or []
 
-        # 若是圖片/掃描件：一定嘗試轉 image 給 Vision
-        if ocr_mode in ("🔬 本地 OCR（掃描 PDF/圖片，離線）", "🤖 Vision OCR（把圖片轉文字，較準）") and not images:
+        # 掃描件：強制轉成 image 給 Vision
+        if ocr_mode in (
+            "🔬 本地 OCR（掃描 PDF/圖片，離線）",
+            "🤖 Vision OCR（把圖片轉文字，較準）",
+        ) and not images:
             try:
                 images = extract_images_for_llm_ocr(file, pdf_max_pages=vision_pdf_max_pages)
             except Exception:
                 images = []
 
-        # Vision OCR 真正抽文字（只做一次，避免反覆呼叫）
-        if ocr_mode == "🤖 Vision OCR（把圖片轉文字，較準）" and images and not st.session_state.get("_vision_text"):
+        # Vision OCR：只抽一次，避免重複請求
+        if (
+            ocr_mode == "🤖 Vision OCR（把圖片轉文字，較準）"
+            and images
+            and not st.session_state.get("_vision_text")
+        ):
             st.session_state["_vision_text"] = _vision_ocr_text(cfg, images, fast_mode)
 
-
-        # 本地 OCR 也要把文字放回 raw_text（避免流程被鎖死）
-        if ocr_mode == "🔬 本地 OCR（掃描 PDF/圖片，離線）" and not raw_text.strip() and st.session_state.get("_vision_text"):
+        # 本地 OCR fallback：確保 raw_text 不為空        if (
+            ocr_mode == "🔬 本地 OCR（掃描 PDF/圖片，離線）"
+            and not raw_text.strip()
+            and st.session_state.get("_vision_text")
+        ):
             raw_text = st.session_state.get("_vision_text", "")
 
-
-        # 文字量提示
         limit = 8000 if fast_mode else 12000
         st.info(f"已擷取文字約 {len(raw_text)} 字；系統上限 {limit} 字（{'快速' if fast_mode else '一般'}模式）")
-
 
     # ------------------------
     # ② 標記重點段落（永不鎖死）
@@ -232,11 +242,19 @@ def render_generate_tab(ctx: dict):
     # ------------------------
     if st.session_state.get("generated_items"):
         st.markdown("## ④ 檢視與微調")
-        df = items_to_editor_df(st.session_state["generated_items"], report=st.session_state.get("generated_report", []))
+        df = items_to_editor_df(
+            st.session_state["generated_items"],
+            report=st.session_state.get("generated_report", []),
+        )
         edited_df, selected_df = render_editor(df, key="editor_generate")
         edited_items = editor_df_to_items(edited_df, default_subject=subject, source="generate")
         st.session_state["generated_items"] = edited_items
         st.session_state["generated_report"] = validate_questions(edited_items)
 
         st.markdown("## ⑤ 匯出 / Google Form / 電郵分享")
-        render_export_panel(selected_df, subject, st.session_state.get("google_creds"), prefix="generate")
+        render_export_panel(
+            selected_df,
+            subject,
+            st.session_state.get("google_creds"),
+            prefix="generate",
+        )
