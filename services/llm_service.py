@@ -1,3 +1,18 @@
+# =========================================================
+# services/llm_service.py
+# ---------------------------------------------------------
+# ✅ OpenAI-compatible /v1/chat/completions
+# ✅ 支援：Generate / Import / JSON 修復 / API Ping
+# ✅ 強化：SUBJECT_TRAITS / SUBJECT_MISCONCEPTIONS / SUBJECT_DISTRACTOR_HINTS
+# ✅ 附加：Grok 型號自動偵測 get_xai_default_model()
+# ✅ 附加：答案位置分佈平衡（避免 correct 長期偏 2/3）
+# ✅ 新增：_sanitise_question_stems()（雙重防線：禁用「根據教材」等字眼）
+# ---------------------------------------------------------
+# 注意：
+# - 嚴格 Python 語法、4 spaces 縮排
+# - 學生憑個人知識作答，嚴禁題目出現「根據教材/根據文本」等字眼
+# =========================================================
+
 from __future__ import annotations
 
 import json
@@ -49,8 +64,6 @@ def _load_subjects_config() -> Dict[str, Any]:
 
 
 _SUBJECTS_CONFIG = _load_subjects_config()
-
-# 從配置中提取科目數據
 _SUBJECTS_DATA = _SUBJECTS_CONFIG.get("subjects", {})
 
 SUBJECT_TRAITS: Dict[str, str] = {
@@ -72,14 +85,16 @@ SUBJECT_DISTRACTOR_HINTS: Dict[str, List[str]] = {
 }
 
 DISTRACTOR_RULES_BY_LEVEL: Dict[str, str] = _SUBJECTS_CONFIG.get("distractor_rules_by_level", {
-    "easy": "干擾項反映基本誤解；錯在單一步驟；避免過度相似。",
+    "easy":  "干擾項反映基本誤解；錯在單一步驟；避免過度相似。",
     "medium": "干擾項包含部分正確但推論錯或漏條件；至少兩個看似合理。",
-    "hard": "干擾項為多步推理陷阱：條件誤判、圖像誤讀、單位/方向/定義域錯。",
+    "hard":  "干擾項為多步推理陷阱：條件誤判、圖像誤讀、單位/方向/定義域錯。",
     "mixed": "混合 medium/hard 強度；同一套題可含不同難度但每題仍要清晰。",
 })
 
-DEFAULT_TRAITS = _SUBJECTS_CONFIG.get("default_traits", "請按內容出題，語句自然，避免使用『根據教材/根據文本/根據以上』等提示語。")
-
+DEFAULT_TRAITS = _SUBJECTS_CONFIG.get(
+    "default_traits",
+    "請按內容出題，語句自然，題目須憑個人知識作答。",
+)
 
 # =========================================================
 # Subject Groups for UI Display
@@ -113,6 +128,35 @@ SUBJECT_GROUPS = {
     ],
 }
 
+# =========================================================
+# Forbidden stem patterns（防線二：後處理用）
+# =========================================================
+
+_FORBIDDEN_PATTERNS: List[tuple] = [
+    # 中文「根據X」類
+    (re.compile(r"根據(教材|文本|以上|上文|短文|文章|資料|圖表|以下|題目|內容)[，,：:、\s]?"), ""),
+    (re.compile(r"按照(教材|文本|課文)[，,：:、\s]?"), ""),
+    (re.compile(r"依據(教材|文本|課文)[，,：:、\s]?"), ""),
+    (re.compile(r"參考(教材|文本|課文)[，,：:、\s]?"), ""),
+    (re.compile(r"從(教材|文本|以上|上文|短文|文章|資料)中[，,\s]?"), ""),
+    # 英文 according to / based on / from the 類
+    (re.compile(r"(?i)according\s+to\s+the\s+(passage|text|article|material|textbook)[,\s]?"), ""),
+    (re.compile(r"(?i)based\s+on\s+the\s+(passage|text|article|material|textbook)[,\s]?"), ""),
+    (re.compile(r"(?i)from\s+the\s+(passage|text|article)[,\s]?"), ""),
+    (re.compile(r"(?i)the\s+(passage|text)\s+(states?|mentions?|says?|tells?\s+us)[,\s]?"), ""),
+    (re.compile(r"(?i)as\s+(stated|mentioned|described)\s+in\s+the\s+(passage|text)[,\s]?"), ""),
+    (re.compile(r"(?i)refer\s+to\s+the\s+(passage|text|material)[,\s]?"), ""),
+]
+
+# prompt 中列出的禁用字眼清單（供 LLM 參考）
+_FORBIDDEN_STEMS_STR = (
+    "『根據教材』『根據文本』『根據以上』『根據上文』『根據短文』"
+    "『根據文章』『根據資料』『根據圖表』『根據以下』『按照教材』"
+    "『依據課文』『從文章中』"
+    "『according to the passage/text』『based on the passage/text』"
+    "『from the passage』『the passage states/mentions』"
+)
+
 
 # =========================================================
 # Utilities
@@ -133,6 +177,34 @@ def extract_json(text: str) -> Any:
 
 
 # =========================================================
+# Question stem sanitiser（防線二：後處理）
+# =========================================================
+
+def _sanitise_question_stems(items: List[dict]) -> List[dict]:
+    """
+    後處理：掃描每題的 question 欄位，
+    自動移除「根據教材/根據文本」等禁用字眼。
+    若有修改，自動將 needs_review 設為 True（提示教師複查題幹）。
+    """
+    for q in items or []:
+        if not isinstance(q, dict):
+            continue
+        original = q.get("question", "")
+        if not isinstance(original, str):
+            continue
+        cleaned = original
+        for pattern, replacement in _FORBIDDEN_PATTERNS:
+            cleaned = pattern.sub(replacement, cleaned)
+        # 清理殘留的開頭標點及多餘空格
+        cleaned = re.sub(r"^[，,、\s]+", "", cleaned).strip()
+        cleaned = re.sub(r"\s{2,}", " ", cleaned)
+        if cleaned != original:
+            q["question"] = cleaned
+            q["needs_review"] = True  # 題幹已被自動修改，提示教師複查
+    return items
+
+
+# =========================================================
 # OpenAI-compatible call
 # =========================================================
 
@@ -145,20 +217,6 @@ def _post_openai_compat(
 ) -> dict:
     """
     OpenAI-compatible API 呼叫，支援 exponential backoff 重試。
-    
-    Args:
-        api_key: API 金鑰
-        base_url: 基礎 URL（例：https://api.openai.com/v1）
-        payload: 請求 payload
-        timeout: 請求超時秒數
-        max_retries: 最大重試次數
-    
-    Returns:
-        API 回應字典
-    
-    Raises:
-        requests.HTTPError: API 返回非 2xx 狀態碼
-        requests.RequestException: 網絡錯誤、超時等
     """
     url = base_url.rstrip("/") + "/chat/completions"
     headers = {
@@ -177,33 +235,28 @@ def _post_openai_compat(
                 r = _SESSION.post(url, headers=headers, json=safe_payload, timeout=(10, timeout))
             if not r.ok:
                 raise requests.HTTPError(
-                    f"{r.status_code} Client Error: {r.reason} for url: {r.url}\n\n--- response body ---\n{r.text}",
+                    f"{r.status_code} Client Error: {r.reason} for url: {r.url}"
+                    f"\n\n--- response body ---\n{r.text}",
                     response=r,
                 )
             return r.json()
         except (requests.Timeout, requests.ConnectionError) as e:
             last_err = e
             if attempt < max_retries - 1:
-                # Exponential backoff: 1s, 2s, 4s
-                wait_time = 2 ** attempt
-                time.sleep(wait_time)
-            continue
+                time.sleep(2 ** attempt)
+                continue
         except requests.HTTPError as e:
-            # 4xx 錯誤（客戶端錯誤）不重試
             if 400 <= e.response.status_code < 500:
                 raise
-            # 5xx 錯誤（服務器錯誤）重試
             last_err = e
             if attempt < max_retries - 1:
-                wait_time = 2 ** attempt
-                time.sleep(wait_time)
-            continue
+                time.sleep(2 ** attempt)
+                continue
         except Exception as e:
-            # 其他異常只重試一次
             last_err = e
             if attempt < max_retries - 1:
                 time.sleep(1)
-            continue
+                continue
 
     raise last_err  # type: ignore
 
@@ -282,7 +335,11 @@ def _fix_json(cfg: dict, bad_output: str, timeout: int) -> str:
         "嚴禁輸出 role、content。\n\n"
         "每題必須包含：\n"
         "- qtype: \"single\"\n"
-        "- question: string（不要以『根據教材/根據文本』開頭）\n"
+        "- question: string\n"
+        "  ⚠️ 嚴禁出現以下字眼（中英文均適用）：\n"
+        f"  {_FORBIDDEN_STEMS_STR}\n"
+        "  原因：學生考試時沒有教材，所有題目須憑個人知識作答。\n"
+        "  請直接考核知識點，無須引用來源。\n"
         "- options: 4 strings\n"
         "- correct: [\"1\"~\"4\"]（只可 1 個）\n"
         "- explanation: string\n"
@@ -290,7 +347,6 @@ def _fix_json(cfg: dict, bad_output: str, timeout: int) -> str:
         "請根據以下內容修正：\n"
         f"{bad_output}"
     )
-
     return _chat(
         cfg,
         messages=[{"role": "user", "content": prompt}],
@@ -315,7 +371,6 @@ def _call_with_retries(cfg: dict, messages: list, temperature: float, max_tokens
 
 def rebalance_correct_positions(items: List[dict], seed: Optional[int] = None) -> List[dict]:
     """只改 options 排列 + 同步 correct，以平衡 A/B/C/D 分佈。"""
-
     if seed is None:
         seed = int(time.time()) % 100000
     rng = random.Random(seed)
@@ -347,15 +402,12 @@ def rebalance_correct_positions(items: List[dict], seed: Optional[int] = None) -
         cur = q["correct"][0]
         if cur == desired:
             continue
-
         opts = list(q["options"])
         cur_idx = int(cur) - 1
         desired_idx = int(desired) - 1
-
         correct_opt = opts[cur_idx]
         rest = [o for i, o in enumerate(opts) if i != cur_idx]
         rest.insert(desired_idx, correct_opt)
-
         q["options"] = rest
         q["correct"] = [desired]
 
@@ -388,6 +440,7 @@ def generate_questions(
 
     prompt = f"""
 你是一名香港中學教師，負責出校內評估題。
+這是知識性選擇題：學生憑個人知識作答，考場內沒有任何教材或閱讀材料。
 
 【科目】{subject}
 【難度】{level}
@@ -405,17 +458,28 @@ def generate_questions(
 【干擾項強度】
 {distractor_rules}
 
+【絕對禁止——違反即視為廢題，必須重寫】
+❌ 題幹及選項中，嚴禁出現以下任何字眼（中英文均適用）：
+   {_FORBIDDEN_STEMS_STR}
+❌ 原因：學生考試時沒有教材，所有題目須憑個人知識作答。
+❌ 若題目概念來自教材內容，請直接考核該知識點，無須引用來源。
+
+   ✅ 錯誤示範：「根據教材，光合作用的產物是什麼？」
+   ✅ 正確示範：「植物進行光合作用時，會同時產生哪兩種物質？」
+
+   ✅ 錯誤示範："According to the passage, what is the main cause of..."
+   ✅ 正確示範："What is the main cause of..."
+
 【嚴格輸出要求】
-- 只輸出純 JSON array（不加任何文字）
+- 只輸出純 JSON array（不加任何文字、不加 markdown code block）
 - 每題必為四選一：qtype = "single"
 - options 必須剛好 4 個字串
-- correct 必須為只含 1 個元素的 list： ["1"~"4"]
-- question 請用自然題幹，不要以「根據教材/根據文本/根據以上」等字眼開頭
-- explanation 簡潔指出關鍵理由（1-3 句）
+- correct 必須為只含 1 個元素的 list：["1"~"4"]
+- explanation 簡潔指出關鍵理由（1-3 句），並點明錯誤選項的常見誤解
 - needs_review: 若題幹/答案不確定或需教師判斷，請設為 true
 - 正確答案位置請避免長期集中於 B/C（2/3），A/B/C/D 需大致均勻
 
-【內容】
+【內容（供出題參考，非學生閱讀材料）】
 {text}
 """
 
@@ -433,7 +497,11 @@ def generate_questions(
         elif len(data) < question_count:
             remain = question_count - len(data)
             if remain > 0:
-                prompt2 = prompt + f"\n\n【補齊要求】你剛才題數不足，請再補 {remain} 題，只輸出新增題目的 JSON array。"
+                prompt2 = (
+                    prompt
+                    + f"\n\n【補齊要求】你剛才題數不足，請再補 {remain} 題，只輸出新增題目的 JSON array。"
+                    + f"\n⚠️ 同樣嚴禁出現：{_FORBIDDEN_STEMS_STR}"
+                )
                 more = _call_with_retries(
                     cfg,
                     messages=[{"role": "user", "content": prompt2}],
@@ -443,9 +511,10 @@ def generate_questions(
                 )
                 if isinstance(more, list):
                     data.extend(more)
-            data = data[:question_count]
+                data = data[:question_count]
 
-        data = rebalance_correct_positions(data)
+    data = _sanitise_question_stems(data)       # 防線二：後處理清除殘留禁用字眼
+    data = rebalance_correct_positions(data)
 
     return data
 
@@ -475,6 +544,8 @@ def assist_import_questions(
 - 必須提供 correct（["1"~"4"] 只 1 個）
 - 只輸出純 JSON array
 - 若原文欠缺答案：{policy}
+- 題幹嚴禁出現「根據教材/根據文本/根據以上/according to the passage」等字眼
+  若原題有此字眼，請直接移除並改寫為獨立知識題
 
 【原始題目】
 {raw_text}
