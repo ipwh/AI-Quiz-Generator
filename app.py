@@ -1,23 +1,15 @@
 import streamlit as st
 
-# ============================================================
-# App entry (single source of truth)
-# ============================================================
-
-# Session state init (root or core)
+# Session state init
 try:
     from session_state import init_session_state
 except Exception:
     from core.session_state import init_session_state
 
-# Sidebar settings renderer (AI/OCR/subject)
 from ui.sidebar import render_sidebar
-
-# Pages (single source)
 from ui.pages_generate import render_generate_tab
 from ui.pages_import import render_import_tab
 
-# Google OAuth helpers
 from services.google_oauth import (
     oauth_is_configured,
     get_auth_url,
@@ -25,16 +17,11 @@ from services.google_oauth import (
     credentials_to_dict,
 )
 
-# ------------------------------------------------------------
-# Page init
-# ------------------------------------------------------------
 st.set_page_config(page_title="AI 題目生成器", layout="wide")
 st.title("🏫 AI 題目生成器")
 init_session_state()
 
-# ------------------------------------------------------------
-# OAuth callback (Google)
-# ------------------------------------------------------------
+# OAuth callback
 params = st.query_params
 if oauth_is_configured() and "code" in params and not st.session_state.get("google_creds"):
     try:
@@ -54,9 +41,7 @@ if oauth_is_configured() and "code" in params and not st.session_state.get("goog
         st.exception(e)
         st.stop()
 
-# ------------------------------------------------------------
-# Sidebar (Google login ALWAYS at top)
-# ------------------------------------------------------------
+# Google login always at top
 st.sidebar.header("🟦 Google 連接（Forms / Drive 分享）")
 if not oauth_is_configured():
     st.sidebar.warning("尚未設定 Google OAuth（Secrets: google_oauth_client + APP_URL）")
@@ -71,14 +56,8 @@ else:
 
 st.sidebar.divider()
 
-# ------------------------------------------------------------
-# Sidebar (AI / subject settings BELOW Google login)
-# ------------------------------------------------------------
 ctx = render_sidebar()
 
-# ------------------------------------------------------------
-# Main tabs
-# ------------------------------------------------------------
 tab_g, tab_i = st.tabs(["🪄 生成新題目", "📄 匯入現有題目"])
 with tab_g:
     render_generate_tab(ctx)
