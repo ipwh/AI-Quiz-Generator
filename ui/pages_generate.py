@@ -1,9 +1,9 @@
 import streamlit as st
 
 # ============================================================
-# 嚴格使用唯一正確的 import（不再使用任何 fallback）
+# 嚴格使用唯一正確的 import（移除不存在的 Vision OCR function）
 # ============================================================
-from extractors.extract import extract_payload, extract_images_for_llm_ocr
+from extractors.extract import extract_payload
 from core.question_mapper import (
     dicts_to_items,
     items_to_editor_df,
@@ -12,8 +12,7 @@ from core.question_mapper import (
 from core.validators import validate_questions
 from ui.components_editor import render_editor
 from ui.components_export import render_export_panel
-from services.llm_service import generate_questions, llm_ocr_extract_text_only
-
+from services.llm_service import generate_questions
 DNL = chr(10) * 2
 
 
@@ -39,12 +38,11 @@ def _build_text_with_highlights(raw_text: str, marked_idx: set, limit: int):
 
 
 # ============================================================
-# Generate Page（最終穩定版 + Vision OCR + UX 改善）
+# Generate Page（最終穩定版，不依賴 Vision OCR）
 # ============================================================
 
 def render_generate_tab(ctx: dict):
-    """生成新題目頁面（含 Vision OCR、可摺疊重點段落、全選/取消全選）"""
-
+    """生成新題目頁面（最終穩定版；避免引用不存在的 OCR 函數）"""
     # --------------------------------------------------------
     # ctx helpers（唯一正確寫法）
     # --------------------------------------------------------
@@ -59,8 +57,7 @@ def render_generate_tab(ctx: dict):
     # ① 上載教材
     # --------------------------------------------------------
     st.markdown("## ① 上載教材")
-    st.caption("支援 PDF / DOCX / TXT / PPTX / XLSX / PNG / JPG；Vision OCR 會自動處理掃描件")
-
+    st.caption("支援 PDF / DOCX / TXT / PPTX / XLSX / PNG / JPG")
     file = st.file_uploader(
         "上載教材",
         type=["pdf", "docx", "txt", "pptx", "xlsx", "png", "jpg", "jpeg"],
@@ -68,24 +65,19 @@ def render_generate_tab(ctx: dict):
     )
 
     raw_text = ""
-    images = []
 
     if file:
         payload = extract_payload(file)
         raw_text = payload.get("text", "") or ""
-
-        if len(raw_text.strip()) < 50:
-            images = extract_images_for_llm_ocr(file)
-
-        if not raw_text.strip() and not images:
-            st.warning("⚠️ 未能從檔案抽取到文字或圖像內容。")
-
+        if not raw_text.strip():
+            st.warning("⚠️ 未能從檔案抽取到文字內容。若為掃描件，請先轉成可選取文字的 PDF。")
     # --------------------------------------------------------
-    # ② 標記重點段落（可選）
+    # ② 標記重點段落（可選，預設摺疊 + 全選控制）
     # --------------------------------------------------------
     st.markdown("## ② 標記重點段落（可選）")
 
-    paras = _split_paragraphs(raw_text)
+    paras = _split_paragraphs(raw_text)
+
 
     with st.expander("📌 展開／摺疊重點段落選擇", expanded=False):
         col_a, col_b = st.columns(2)
@@ -97,7 +89,8 @@ def render_generate_tab(ctx: dict):
         marked = set(st.session_state.get("mark_idx", set()))
 
         for i, p in enumerate(paras):
-            label = p.replace("\n", " ")
+            label = p.replace("
+", " ")
             label = (label[:160] + "…") if len(label) > 160 else label
             if st.checkbox(label, value=(i in marked), key=f"gen_mark_{i}"):
                 marked.add(i)
@@ -114,8 +107,7 @@ def render_generate_tab(ctx: dict):
     if not can_call_ai(cfg):
         st.warning("⚠️ 請先在左側填妥 AI API 設定並測試連線。")
 
-    disabled_generate = (not raw_text.strip() and not images) or (not can_call_ai(cfg))
-
+    disabled_generate = (not raw_text.strip()) or (not can_call_ai(cfg))
     if st.button("🪄 生成題目", disabled=disabled_generate, key="btn_generate_questions"):
         with st.spinner("🧠 AI 出題中…"):
             text_for_ai = _build_text_with_highlights(
@@ -124,19 +116,9 @@ def render_generate_tab(ctx: dict):
                 10000,
             )
 
-            if images:
-                ocr_text = llm_ocr_extract_text_only(
-                    cfg=cfg,
-                    images_data_urls=images,
-                    fast_mode=fast_mode,
-                )
-                combined_text = (text_for_ai + DNL + ocr_text).strip()
-            else:
-                combined_text = text_for_ai
-
             data = generate_questions(
                 cfg=cfg,
-                text=combined_text,
+                text=text_for_ai,
                 subject=subject,
                 level=level_code,
                 question_count=question_count,
