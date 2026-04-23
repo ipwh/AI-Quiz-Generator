@@ -69,8 +69,8 @@ if oauth_is_configured() and "code" in params and not st.session_state.google_cr
 
 
 # ------------------------- Page -------------------------
-st.set_page_config(page_title="AI 題目生成器", layout="wide")
-st.title("🏫 AI 題目生成器")
+st.set_page_config(page_title="AI 多項選擇題題目生成器", layout="wide")
+st.title("🏫 AI 多項選擇題題目生成器，支援Kahoot / Wayground / Google Forms / 一鍵分享檔案")
 
 
 # ------------------------- Google connect (sidebar top) -------------------------
@@ -85,7 +85,7 @@ else:
             st.rerun()
     else:
         st.sidebar.link_button("🔐 連接 Google（登入）", get_auth_url())
-        st.sidebar.caption("提示：請以學校電郵登入，方便統一管理與分享。")
+        st.sidebar.caption("提示：請以學校電郵登入，以建立Google Forms及分享檔案。")
 
 st.sidebar.divider()
 
