@@ -234,4 +234,3 @@ def render_sidebar() -> dict:
         "ocr_mode": st.session_state.get("ocr_mode", "📄 純文字"),
         "vision_pdf_max_pages": int(st.session_state.get("vision_pdf_max_pages", 3)),
     }
-``
