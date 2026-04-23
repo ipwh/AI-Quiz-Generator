@@ -14,8 +14,8 @@ except Exception:
 from ui.sidebar import render_sidebar
 
 # Pages (single source)
-from ui.pages_generate import render_generate_tab
-from ui.pages_import import render_import_tab
+from ui/pages_generate import render_generate_tab
+from ui/pages_import import render_import_tab
 
 # Google OAuth helpers
 from services.google_oauth import (
