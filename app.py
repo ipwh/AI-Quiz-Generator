@@ -1,46 +1,23 @@
 import streamlit as st
 
-# ─────────────────────────────────────────────────────────────
-# Robust imports (support both "root files" and "package folders")
-# ─────────────────────────────────────────────────────────────
+# ============================================================
+# App entry (single source of truth)
+# ============================================================
+
+# Session state init (root or core)
 try:
-    from session_state import init_session_state  # root/session_state.py
+    from session_state import init_session_state
 except Exception:
-    try:
-        from core.session_state import init_session_state  # core/session_state.py
-    except Exception:
-        def init_session_state():
-            # 最小備援（避免因 init 失敗而整個 app 起唔到）
-            defaults = {
-                "google_creds": None,
-                "generated_items": [],
-                "generated_report": [],
-                "mark_idx": set(),
-                "form_result_generate": None,
-                "_export_panel_rendered_generate": False,
-                "imported_items": [],
-                "imported_report": [],
-                "imported_text": "",
-                "form_result_import": None,
-                "_export_panel_rendered_import": False,
-                "current_section": None,
-            }
-            for k, v in defaults.items():
-                if k not in st.session_state:
-                    st.session_state[k] = v
+    from core.session_state import init_session_state
 
-try:
-    from sidebar import render_sidebar  # root/sidebar.py
-except Exception:
-    from ui.sidebar import render_sidebar  # ui/sidebar.py
+# Sidebar (single source)
+from ui.sidebar import render_sidebar
 
+# Pages (single source — NO try/except)
+from ui.pages_generate import render_generate_tab
+from ui.pages_import import render_import_tab
 
-    from pages_generate import render_generate_tab
-    from ui.pages_generate import render_generate_tab
-
-    from pages_import import render_import_tab
-    from ui.pages_import import render_import_tab
-
+# Google OAuth helpers
 from services.google_oauth import (
     oauth_is_configured,
     get_auth_url,
@@ -48,16 +25,16 @@ from services.google_oauth import (
     credentials_to_dict,
 )
 
-# ─────────────────────────────────────────────────────────────
+# ------------------------------------------------------------
 # Page init
-# ─────────────────────────────────────────────────────────────
+# ------------------------------------------------------------
 st.set_page_config(page_title="AI 題目生成器", layout="wide")
 st.title("🏫 AI 題目生成器")
 init_session_state()
 
-# ─────────────────────────────────────────────────────────────
+# ------------------------------------------------------------
 # OAuth callback (Google)
-# ─────────────────────────────────────────────────────────────
+# ------------------------------------------------------------
 params = st.query_params
 if oauth_is_configured() and "code" in params and not st.session_state.get("google_creds"):
     try:
@@ -73,18 +50,18 @@ if oauth_is_configured() and "code" in params and not st.session_state.get("goog
         st.rerun()
     except Exception as e:
         st.query_params.clear()
-        st.error("Google 登入失敗。請重新按『連接 Google（登入）』一次。")
+        st.error("Google 登入失敗，請重新嘗試。")
         st.exception(e)
         st.stop()
 
-# ─────────────────────────────────────────────────────────────
-# Sidebar (AI settings) + Google connect
-# ─────────────────────────────────────────────────────────────
+# ------------------------------------------------------------
+# Sidebar (AI settings + Google connect at top)
+# ------------------------------------------------------------
 ctx = render_sidebar()
 
 st.sidebar.header("🟦 Google 連接（Forms / Drive 分享）")
 if not oauth_is_configured():
-    st.sidebar.warning("⚠️ 尚未設定 Google OAuth（Secrets: google_oauth_client + APP_URL）")
+    st.sidebar.warning("尚未設定 Google OAuth（Secrets: google_oauth_client + APP_URL）")
 else:
     if st.session_state.get("google_creds"):
         st.sidebar.success("✅ 已連接 Google")
@@ -94,9 +71,9 @@ else:
     else:
         st.sidebar.link_button("🔐 連接 Google（登入）", get_auth_url())
 
-# ─────────────────────────────────────────────────────────────
+# ------------------------------------------------------------
 # Main tabs
-# ─────────────────────────────────────────────────────────────
+# ------------------------------------------------------------
 tab_g, tab_i = st.tabs(["🪄 生成新題目", "📄 匯入現有題目"])
 with tab_g:
     render_generate_tab(ctx)
