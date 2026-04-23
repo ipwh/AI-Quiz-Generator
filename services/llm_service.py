@@ -555,13 +555,3 @@ def parse_import_questions_locally(raw_text: str):
 ```
 
 ***
-
-## 修復摘要
-
-| 問題 | 原因 | 修復 |
-|------|------|------|
-| `JSONDecodeError` | LLM 回傳 ` ```json...``` ` 包裹的 JSON | `extract_json()` 加三重解析策略 |
-| 策略一 | 直接 `json.loads()`（乾淨 JSON） | 原有邏輯保留 |
-| 策略二 | 剝除 markdown code block | 新增 regex strip |
-| 策略三 | 提取回傳文字中第一個 `[...]` | 新增 regex search |
-| prompt 補強 | `_fix_json()` 及所有 prompt 加入「不要 ` ```json ` 」 | 從源頭減少 LLM 包裹 markdown |
