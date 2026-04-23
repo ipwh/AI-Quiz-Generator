@@ -1,13 +1,17 @@
 # =========================================================
 # services/llm_service.py
 # ---------------------------------------------------------
-# ✅ OpenAI-compatible /v1/chat/completions
-# ✅ 支援：Generate / Import / JSON 修復 / API Ping
-# ✅ 強化：SUBJECT_TRAITS / SUBJECT_MISCONCEPTIONS / SUBJECT_DISTRACTOR_HINTS
-# ✅ 附加：Grok 型號自動偵測 get_xai_default_model()
-# ✅ 附加：答案位置分佈平衡（避免 correct 長期偏 2/3）
-# ✅ 新增：_sanitise_question_stems()（禁用「根據教材」等字眼）
-# ✅ 修復：extract_json() 支援 markdown code block 剝除
+# OpenAI-compatible /v1/chat/completions
+# Support: Generate / Import / JSON repair / API Ping
+# Enhanced: SUBJECT_TRAITS / SUBJECT_MISCONCEPTIONS / SUBJECT_DISTRACTOR_HINTS
+# Added: Grok model auto-detect get_xai_default_model()
+# Added: Answer position rebalance
+# Added: _sanitise_question_stems() - forbid "according to passage" etc.
+# Fixed: extract_json() supports markdown code block stripping
+# ---------------------------------------------------------
+# Rules:
+# - Strict Python syntax, 4-space indent
+# - Students answer from personal knowledge only
 # =========================================================
 
 from __future__ import annotations
