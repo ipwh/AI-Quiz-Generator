@@ -22,6 +22,17 @@ try:
 except Exception:
     get_xai_default_model = None
 
+try:
+    from services.llm_service import SUBJECT_GROUPS
+except Exception:
+    # 若 SUBJECT_GROUPS 不可用，回到舊版
+    SUBJECT_GROUPS = {}
+
+try:
+    from services.cache_service import clear_all_cache
+except Exception:
+    clear_all_cache = None
+
 
 # ---------------------------------------------------------
 # xAI: /v1/language-models（列出 chat + image understanding）
@@ -96,6 +107,37 @@ def _xai_pick_default_model(models: list, preferred: str = "grok-4-0709") -> str
             return mid
 
     return "grok-2-latest"
+
+
+# =========================================================
+# Subject Groups Helper
+# =========================================================
+
+def _build_grouped_subject_options(subject_groups: dict) -> tuple:
+    """
+    構建分組科目選項列表。
+    回傳 (選項列表, 索引映射字典)
+    - 選項列表：["— 語文 —", "中國語文", "英國語文", "— 數學與科學 —", ...]
+    - 索引映射：{option_display: actual_subject_name}
+    """
+    if not subject_groups:
+        return [], {}
+    
+    options = []
+    mapping = {}
+    
+    for group_name, subjects in subject_groups.items():
+        # 添加分組標籤
+        sep = f"— {group_name} —"
+        options.append(sep)
+        mapping[sep] = None  # 分組標籤無實際值
+        
+        # 添加該分組下的科目
+        for subject in subjects:
+            options.append(subject)
+            mapping[subject] = subject
+    
+    return options, mapping
 
 
 def render_sidebar() -> dict:
@@ -301,15 +343,62 @@ def render_sidebar() -> dict:
     st.sidebar.divider()
     st.sidebar.header("📘 出題設定")
 
-    subject = st.sidebar.selectbox(
-        "科目",
-        [
-            "中國語文", "英國語文", "數學", "公民與社會發展", "科學", "公民、經濟及社會",
-            "物理", "化學", "生物", "地理", "歷史", "中國歷史", "宗教",
-            "資訊及通訊科技（ICT）", "經濟", "企業、會計與財務概論", "旅遊與款待",
-        ],
-        key="subject",
-    )
+    # 快取管理
+    if clear_all_cache is not None:
+        col1, col2 = st.sidebar.columns([3, 1])
+        with col2:
+            if st.button("🗑️ 清空快取", key="btn_clear_cache", help="刪除所有本地快取的題目和設定"):
+                with st.spinner("正在清空快取…"):
+                    clear_all_cache()
+                st.success("✅ 快取已清空")
+
+    st.sidebar.divider()
+
+    # 科目選擇（分組顯示）
+    subject = "中國語文"  # 預設值
+    
+    if SUBJECT_GROUPS:
+        # 使用分組顯示
+        options, mapping = _build_grouped_subject_options(SUBJECT_GROUPS)
+        
+        # 找到預設值在選項列表中的索引
+        default_idx = 1  # "中國語文" 通常在第二位（第一位是分組標籤）
+        if "中國語文" in options:
+            default_idx = options.index("中國語文")
+        
+        selected_display = st.sidebar.selectbox(
+            "科目",
+            options,
+            index=default_idx,
+            key="subject_grouped",
+            format_func=lambda x: x,  # 直接顯示
+        )
+        
+        # 若選中的是分組標籤，改用前一個真實科目
+        while selected_display.startswith("—") and selected_display.endswith("—"):
+            # 找下一個非分組標籤的科目
+            idx = options.index(selected_display) + 1
+            if idx < len(options) and not options[idx].startswith("—"):
+                selected_display = options[idx]
+                break
+            # 若無下一個，就用預設的
+            selected_display = "中國語文"
+            break
+        
+        subject = mapping.get(selected_display, "中國語文")
+        if subject is None:
+            subject = "中國語文"
+    else:
+        # 回退至舊版（無分組）
+        subject = st.sidebar.selectbox(
+            "科目",
+            [
+                "中國語文", "英國語文", "數學", "公民與社會發展", "科學", "公民、經濟及社會",
+                "物理", "化學", "生物", "地理", "歷史", "中國歷史", "宗教",
+                "資訊及通訊科技（ICT）", "經濟", "企業、會計與財務概論", "旅遊與款待",
+            ],
+            key="subject_flat",
+        )
 
     level_label = st.sidebar.radio(
         "🎯 難度",
