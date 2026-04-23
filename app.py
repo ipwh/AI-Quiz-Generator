@@ -72,11 +72,11 @@ if oauth_is_configured() and "code" in params and not st.session_state.google_cr
 st.set_page_config(page_title="AI 多項選擇題題目生成器", layout="wide")
 st.title("🏫 AI 多項選擇題題目生成器，支援Kahoot / Wayground / Google Forms / 一鍵分享檔案")
 
-with st.expander("👣 使用流程（由老師角度・3 分鐘上手）", expanded=True):
+with st.expander("👣 使用流程）", expanded=True):
     st.markdown("""
 1. **（可選）連接 Google**：左側最上方點「🔐 連接 Google（登入）」，之後可一鍵建立 Google Forms／Drive 分享／電郵分享。
-2. **設定 AI（必需）**：在左側輸入 AI API Key。預設用 DeepSeek；如學校已預設 Key，直接按「✅ 套用設定」即可開始。
-3. **選科目與難度**：揀科目、題目難度、題目數量（容易／中等／困難）。
+2. **設定 AI（必需）**：學校已預設使用DeepSeek，無需設定即可開始。老師亦可在自行選擇其他LLM並輸入 AI API Key。
+3. **選科目與難度**：選擇科目、題目難度、題目數量及題目困難程度。
 4. **上載教材**：到「🪄 生成新題目」上載 PDF/DOCX/PPTX/圖片等；掃描件可在左側選「本地 OCR」或「Vision OCR」。
 5. **（可選）標記重點段落**：展開「重點段落選擇」，保留想出的部分；預設已全選。
 6. **生成與微調**：按「🪄 生成題目」，完成後可在表格內改題幹／選項／答案，再勾選要匯出的題目。
