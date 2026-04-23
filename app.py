@@ -34,14 +34,11 @@ try:
 except Exception:
     from ui.sidebar import render_sidebar  # ui/sidebar.py
 
-try:
+
     from pages_generate import render_generate_tab
-except Exception:
     from ui.pages_generate import render_generate_tab
 
-try:
     from pages_import import render_import_tab
-except Exception:
     from ui.pages_import import render_import_tab
 
 from services.google_oauth import (
