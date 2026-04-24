@@ -205,7 +205,7 @@ def render_export_panel(
         "收件人電郵（多個用逗號分隔）",
         value="",
         key=f"emails_{prefix}",
-        placeholder="teacher@school.edu.hk, another@school.edu.hk",
+        placeholder="xxx@pochiu.edu.hk",
     )
     emails = [e.strip() for e in emails_text.split(",") if e.strip()]
 
