@@ -9,6 +9,7 @@ from core.validators import validate_questions
 from ui.components_editor import render_editor
 from ui.components_export import render_export_panel
 from services.llm_service import generate_questions
+from services.vision_service import vision_ocr_extract_text  # 新增：Vision OCR
 
 DNL = chr(10) * 2
 
@@ -148,7 +149,26 @@ def render_generate_tab(ctx: dict):
             payload = extract_payload(file)
 
         raw_text = payload.get("text", "") or ""
-        images = payload.get("images", []) or []
+        images = payload.get("images", []) or ""
+
+        # ── Vision OCR 預提取文字（新增）──
+        vision_mode = ocr_mode.startswith("🤖")
+        vision_unsupported = _warn_if_vision_unsupported(ocr_mode, current_model)
+        if vision_mode and images and not vision_unsupported:
+            with st.status("🤖 正在用 Vision 辨識圖片文字…", expanded=True) as vs:
+                try:
+                    ocr_text = vision_ocr_extract_text(
+                        cfg=cfg,
+                        image_data_urls=images,
+                        lang_hint="zh-Hant" if subject not in {"英國語文", "English Language"} else "en"
+                    )
+                    if ocr_text.strip():
+                        raw_text = (raw_text + "\n\n" + ocr_text).strip()
+                        vs.update(label="✅ Vision 辨識完成", state="complete")
+                    else:
+                        vs.update(label="⚠️ Vision 未擷取到文字", state="complete")
+                except Exception as e:
+                    vs.update(label=f"❌ Vision 辨識失敗：{e}", state="error")
 
         # 快取供生成鎖使用
         st.session_state["_gen_raw_text"] = raw_text
