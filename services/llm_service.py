@@ -3,11 +3,8 @@
 # OpenAI-compatible /v1/chat/completions
 # Support: Generate / Import / JSON repair / API Ping
 # Enhanced: SUBJECT_TRAITS / SUBJECT_MISCONCEPTIONS / SUBJECT_DISTRACTOR_HINTS
-# Added: Grok model auto-detect get_xai_default_model()
-# Added: Answer position rebalance (with robust type normalisation)
-# Added: _sanitise_question_stems() - forbid "according to passage" etc.
-# Fixed: extract_json() supports markdown code block stripping
-# Fixed: rebalance_correct_positions() handles int/float correct values
+# Added: Vision message format for image-based generation
+# Added: generate_questions() accepts optional images: List[data_url]
 # ---------------------------------------------------------
 
 from __future__ import annotations
@@ -30,7 +27,6 @@ import requests
 _SESSION_LOCK = threading.Lock()
 _SESSION = requests.Session()
 
-
 def _reset_session() -> None:
     global _SESSION
     with _SESSION_LOCK:
@@ -39,7 +35,6 @@ def _reset_session() -> None:
         except Exception:
             pass
         _SESSION = requests.Session()
-
 
 # =========================================================
 # Load Subject Configuration from YAML
@@ -54,7 +49,6 @@ def _load_subjects_config() -> Dict[str, Any]:
             return yaml.safe_load(f) or {}
     except Exception:
         return {}
-
 
 _SUBJECTS_CONFIG = _load_subjects_config()
 _SUBJECTS_DATA = _SUBJECTS_CONFIG.get("subjects", {})
@@ -77,11 +71,17 @@ SUBJECT_DISTRACTOR_HINTS: Dict[str, List[str]] = {
     if isinstance(data, dict)
 }
 
+SUBJECT_LANGUAGE_RULES: Dict[str, str] = {
+    subject: data.get("language_rules", "")
+    for subject, data in _SUBJECTS_DATA.items()
+    if isinstance(data, dict)
+}
+
 DISTRACTOR_RULES_BY_LEVEL: Dict[str, str] = _SUBJECTS_CONFIG.get("distractor_rules_by_level", {
-    "easy":   "Distractors reflect basic misconceptions; error in a single step; avoid excessive similarity.",
+    "easy": "Distractors reflect basic misconceptions; error in a single step; avoid excessive similarity.",
     "medium": "Distractors partially correct but wrong inference or missing condition; at least two plausible.",
-    "hard":   "Distractors are multi-step traps: wrong condition, misread diagram, unit/direction/domain error.",
-    "mixed":  "Mix medium/hard intensity; same set may have varying difficulty but each item must be clear.",
+    "hard": "Distractors are multi-step traps: wrong condition, misread diagram, unit/direction/domain error.",
+    "mixed": "Mix medium/hard intensity; same set may have varying difficulty but each item must be clear.",
 })
 
 DEFAULT_TRAITS = _SUBJECTS_CONFIG.get(
@@ -95,9 +95,9 @@ DEFAULT_TRAITS = _SUBJECTS_CONFIG.get(
 
 SUBJECT_GROUPS = {
     "語文科": ["中國語文", "英國語文"],
-    "數理科": [ "數學", "物理", "化學", "生物", "科學"],
-    "人文學科": [ "公民與社會發展", "公民、經濟及社會", "地理", "歷史", "中國歷史", "宗教", "經濟"],
-    "科技及經濟科": [ "企業、會計與財務概論", "資訊及通訊科技（ICT）", "旅遊與款待"],
+    "數理科": ["數學", "物理", "化學", "生物", "科學"],
+    "人文學科": ["公民與社會發展", "公民、經濟及社會", "地理", "歷史", "中國歷史", "宗教", "經濟"],
+    "科技及經濟科": ["企業、會計與財務概論", "資訊及通訊科技（ICT）", "旅遊與款待"],
 }
 
 # =========================================================
@@ -105,7 +105,7 @@ SUBJECT_GROUPS = {
 # =========================================================
 
 _FORBIDDEN_PATTERNS: List[tuple] = [
-    (re.compile(r"\u6839\u636e(\u6559\u6750|\u6587\u672c|\u4ee5\u4e0a|\u4e0a\u6587|\u77ed\u6587|\u6587\u7ae0|\u8cc7\u6599|\u5716\u8868|\u4ee5\u4e0b|\u984c\u76ee|\u5185\u5bb9)[\uff0c,\uff1a:\u3001\s]?"), ""),
+    (re.compile(r"\u6839\u636e(\u6559\u6750|\u6587\u672c|\u4ee5\u4e0a|\u4e0a\u6587|\u77ed\u6587|\u6587\u7ae0|\u8cc7\u6599|\u5716\u8868|\u4ee5\u4e0b|\u984c\u76ee|\u5167\u5bb9)[\uff0c,\uff1a:\u3001\s]?"), ""),
     (re.compile(r"\u6309\u7167(\u6559\u6750|\u6587\u672c|\u8ab2\u6587)[\uff0c,\uff1a:\u3001\s]?"), ""),
     (re.compile(r"\u4f9d\u64da(\u6559\u6750|\u6587\u672c|\u8ab2\u6587)[\uff0c,\uff1a:\u3001\s]?"), ""),
     (re.compile(r"\u53c3\u8003(\u6559\u6750|\u6587\u672c|\u8ab2\u6587)[\uff0c,\uff1a:\u3001\s]?"), ""),
@@ -125,6 +125,60 @@ _FORBIDDEN_STEMS_STR = (
 )
 
 # =========================================================
+# Catholic terminology sanitiser (宗教科)
+# =========================================================
+
+_PROTESTANT_BRACKET_MAP = [
+    ("亞巴郎（亞伯拉罕）", "亞巴郎"), ("亞巴郎(亞伯拉罕)", "亞巴郎"),
+    ("亞伯拉罕（亞巴郎）", "亞巴郎"), ("亞伯拉罕", "亞巴郎"),
+    ("雅各伯（雅各）", "雅各伯"), ("雅各伯(雅各)", "雅各伯"),
+    ("雅各（雅各伯）", "雅各伯"), ("雅各", "雅各伯"),
+    ("厄撒烏（以掃）", "厄撒烏"), ("厄撒烏(以掃)", "厄撒烏"),
+    ("以掃（厄撒烏）", "厄撒烏"), ("以掃", "厄撒烏"),
+    ("梅瑟（摩西）", "梅瑟"), ("梅瑟(摩西)", "梅瑟"),
+    ("摩西（梅瑟）", "梅瑟"), ("摩西", "梅瑟"),
+    ("若望（約翰）", "若望"), ("若望(約翰)", "若望"),
+    ("約翰（若望）", "若望"),
+    ("達味（大衛）", "達味"), ("達味(大衛)", "達味"),
+    ("大衛（達味）", "達味"), ("大衛", "達味"),
+    ("撒羅滿（所羅門）", "撒羅滿"), ("撒羅滿(所羅門)", "撒羅滿"),
+    ("所羅門（撒羅滿）", "撒羅滿"), ("所羅門", "撒羅滿"),
+    ("依撒意亞（以賽亞）", "依撒意亞"), ("依撒意亞(以賽亞)", "依撒意亞"),
+    ("以賽亞（依撒意亞）", "依撒意亞"), ("以賽亞", "依撒意亞"),
+    ("聖靈", "聖神"),
+    ("主禱文", "天主經"),
+    ("詩篇", "聖詠"),
+    ("聖餐禮", "聖體聖事"), ("聖餐", "聖體聖事"),
+    ("洗禮", "聖洗聖事"),
+    ("馬太福音", "瑪竇福音"),
+    ("馬可福音", "馬爾谷福音"),
+    ("約翰福音", "若望福音"),
+]
+
+def _sanitise_catholic_terms(items: List[dict], subject: str) -> List[dict]:
+    if subject != "宗教":
+        return items
+    fields = ["question", "option_1", "option_2", "option_3", "option_4", "explanation"]
+    for q in items or []:
+        if not isinstance(q, dict):
+            continue
+        modified = False
+        for field in fields:
+            val = q.get(field, "")
+            if not isinstance(val, str):
+                continue
+            new_val = val
+            for wrong, correct in _PROTESTANT_BRACKET_MAP:
+                if wrong in new_val:
+                    new_val = new_val.replace(wrong, correct)
+                    modified = True
+            if new_val != val:
+                q[field] = new_val
+        if modified:
+            q["needs_review"] = True
+    return items
+
+# =========================================================
 # Utilities
 # =========================================================
 
@@ -135,29 +189,19 @@ def _clean_text(text: str) -> str:
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
-
 def extract_json(text: str) -> Any:
-    """
-    Extract JSON from LLM output.
-    Strategy 1: direct json.loads
-    Strategy 2: strip markdown code block (```json ... ```)
-    Strategy 3: regex extract first [...] or {...}
-    """
     if not text:
         raise ValueError("AI returned empty content")
-
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
-
     stripped = re.sub(r"^```(?:json)?\s*", "", text.strip(), flags=re.IGNORECASE)
     stripped = re.sub(r"\s*```$", "", stripped.strip())
     try:
         return json.loads(stripped)
     except json.JSONDecodeError:
         pass
-
     for pattern in (r"\[.*\]", r"\{.*\}"):
         m = re.search(pattern, text, re.DOTALL)
         if m:
@@ -165,16 +209,13 @@ def extract_json(text: str) -> Any:
                 return json.loads(m.group())
             except json.JSONDecodeError:
                 continue
-
     raise ValueError(f"Cannot parse AI JSON output:\n{text[:300]}")
 
-
 # =========================================================
-# Question stem sanitiser (post-processing)
+# Question stem sanitiser
 # =========================================================
 
 def _sanitise_question_stems(items: List[dict]) -> List[dict]:
-    """Remove forbidden stems from question field. Marks modified items as needs_review=True."""
     for q in items or []:
         if not isinstance(q, dict):
             continue
@@ -191,9 +232,28 @@ def _sanitise_question_stems(items: List[dict]) -> List[dict]:
             q["needs_review"] = True
     return items
 
+# =========================================================
+# Vision message builder
+# =========================================================
+
+def _build_vision_messages(prompt: str, images: List[str]) -> list:
+    """
+    Build OpenAI vision-format messages.
+    images: list of data URLs (data:image/png;base64,...)
+    Max 4 images to avoid token overflow.
+    """
+    content: list = [{"type": "text", "text": prompt}]
+    for data_url in images[:4]:
+        if not data_url.startswith("data:"):
+            continue
+        content.append({
+            "type": "image_url",
+            "image_url": {"url": data_url, "detail": "high"},
+        })
+    return [{"role": "user", "content": content}]
 
 # =========================================================
-# OpenAI-compatible call
+# OpenAI-compatible HTTP call
 # =========================================================
 
 def _post_openai_compat(
@@ -227,22 +287,21 @@ def _post_openai_compat(
             last_err = e
             if attempt < max_retries - 1:
                 time.sleep(2 ** attempt)
-                continue
+            continue
         except requests.HTTPError as e:
             if 400 <= e.response.status_code < 500:
                 raise
             last_err = e
             if attempt < max_retries - 1:
                 time.sleep(2 ** attempt)
-                continue
+            continue
         except Exception as e:
             last_err = e
             if attempt < max_retries - 1:
                 time.sleep(1)
-                continue
+            continue
 
     raise last_err  # type: ignore
-
 
 def _chat(cfg: dict, messages: list, temperature: float, max_tokens: int, timeout: int) -> str:
     data = _post_openai_compat(
@@ -258,7 +317,6 @@ def _chat(cfg: dict, messages: list, temperature: float, max_tokens: int, timeou
         timeout=timeout,
     )
     return data.get("choices", [{}])[0].get("message", {}).get("content", "")
-
 
 # =========================================================
 # Ping
@@ -280,7 +338,6 @@ def ping_llm(cfg: dict, timeout: int = 25) -> dict:
         ms = int((time.time() - t0) * 1000)
         return {"ok": False, "latency_ms": ms, "output": "", "error": repr(e)}
 
-
 # =========================================================
 # xAI model auto-detect
 # =========================================================
@@ -300,7 +357,6 @@ def get_xai_default_model(api_key: str, base_url: str = "https://api.x.ai/v1") -
         return "grok-2-latest"
     latest = [i for i in grok if "latest" in i.lower()]
     return sorted(latest)[-1] if latest else sorted(grok)[-1]
-
 
 # =========================================================
 # JSON repair
@@ -328,7 +384,6 @@ def _fix_json(cfg: dict, bad_output: str, timeout: int) -> str:
         timeout=timeout,
     )
 
-
 def _call_with_retries(cfg: dict, messages: list, temperature: float, max_tokens: int, timeout: int):
     out = _chat(cfg, messages, temperature, max_tokens, timeout)
     try:
@@ -337,13 +392,11 @@ def _call_with_retries(cfg: dict, messages: list, temperature: float, max_tokens
         repaired = _fix_json(cfg, out, timeout)
         return extract_json(repaired)
 
-
 # =========================================================
 # Answer position rebalance
 # =========================================================
 
 def rebalance_correct_positions(items: List[dict], seed: Optional[int] = None) -> List[dict]:
-    """Shuffle option order to balance A/B/C/D distribution. Handles int/float/str correct values."""
     if seed is None:
         seed = int(time.time()) % 100000
     rng = random.Random(seed)
@@ -352,10 +405,9 @@ def rebalance_correct_positions(items: List[dict], seed: Optional[int] = None) -
     for q in items or []:
         corr = q.get("correct", [])
         if isinstance(corr, list) and len(corr) == 1:
-            # Normalise: int 1 / float 1.0 / str "1" all become str "1"
-            corr_str = str(corr[0]).strip().split(".")[0]  # handles "1.0" -> "1"
+            corr_str = str(corr[0]).strip().split(".")[0]
             if corr_str in {"1", "2", "3", "4"}:
-                q["correct"] = [corr_str]  # normalise in-place
+                q["correct"] = [corr_str]
                 opts = q.get("options", [])
                 if isinstance(opts, list) and len(opts) == 4:
                     valid.append(q)
@@ -376,7 +428,7 @@ def rebalance_correct_positions(items: List[dict], seed: Optional[int] = None) -
     rng.shuffle(desired_positions)
 
     for q, desired in zip(valid, desired_positions):
-        cur = q["correct"][0]  # guaranteed str "1"~"4" after normalisation above
+        cur = q["correct"][0]
         if cur == desired:
             continue
         opts = list(q["options"])
@@ -390,9 +442,8 @@ def rebalance_correct_positions(items: List[dict], seed: Optional[int] = None) -
 
     return items
 
-
 # =========================================================
-# Generate
+# Generate Questions（支援 Vision images）
 # =========================================================
 
 def generate_questions(
@@ -403,17 +454,33 @@ def generate_questions(
     question_count: int,
     fast_mode: bool = False,
     qtype: str = "single",
-):
+    images: Optional[List[str]] = None,   # ← 新增：data URL 列表
+) -> list:
+    """
+    Generate MCQ questions.
+    - images: list of data URLs from extract_payload(enable_vision=True)
+      If provided and non-empty, uses Vision message format.
+      Only works with Vision-capable models (Grok, GPT-4o etc.).
+      DeepSeek does NOT support Vision; images will be ignored with a warning logged.
+    """
     traits = SUBJECT_TRAITS.get(subject, DEFAULT_TRAITS)
     misconceptions = SUBJECT_MISCONCEPTIONS.get(subject, [])
     distractor_rules = DISTRACTOR_RULES_BY_LEVEL.get(level, "")
     templates = SUBJECT_DISTRACTOR_HINTS.get(subject, [])
+    language_rules = SUBJECT_LANGUAGE_RULES.get(subject, "")
 
     text = _clean_text(text)
     text = text[: (8000 if fast_mode else 10000)]
 
     mc_text = "\n".join(f"- {m}" for m in misconceptions[:12])
     sd_text = "\n".join(f"- {d}" for d in templates[:6])
+
+    has_images = bool(images)
+    vision_note = (
+        "\n[Images provided]\nThe teaching material includes diagram/image pages rendered above. "
+        "Use them as the primary reference for questions about diagrams, charts, equations, or visual content.\n"
+        if has_images else ""
+    )
 
     prompt = f"""You are a Hong Kong secondary school teacher creating internal assessment questions.
 This is a knowledge-based multiple choice quiz. Students answer from personal knowledge only - there is NO reading passage or textbook in the exam room.
@@ -424,7 +491,7 @@ This is a knowledge-based multiple choice quiz. Students answer from personal kn
 
 [Subject traits]
 {traits}
-
+{f"[Language & terminology rules]{chr(10)}{language_rules}{chr(10)}" if language_rules else ""}
 [Common misconceptions (use for distractor design)]
 {mc_text}
 
@@ -433,7 +500,7 @@ This is a knowledge-based multiple choice quiz. Students answer from personal kn
 
 [Distractor intensity]
 {distractor_rules}
-
+{vision_note}
 [ABSOLUTE PROHIBITION - violation = question is void and must be rewritten]
 Do NOT use any of the following phrases in question stems or options:
 {_FORBIDDEN_STEMS_STR}
@@ -441,7 +508,7 @@ Reason: Students have no textbook. All questions must be answerable from persona
 Test the knowledge point directly without citing a source.
 
 Correct: "What gas is released by plants during photosynthesis?"
-Wrong:   "According to the passage, what gas is released during photosynthesis?"
+Wrong: "According to the passage, what gas is released during photosynthesis?"
 
 [Strict output requirements]
 - Output ONLY a raw JSON array. No extra text. No markdown code blocks. No ```json wrapper.
@@ -456,10 +523,18 @@ Wrong:   "According to the passage, what gas is released during photosynthesis?"
 {text}
 """
 
+    temperature = 0.2 if fast_mode else 0.3
+
+    # Vision 模式：使用多模態 message 格式
+    if has_images:
+        messages = _build_vision_messages(prompt, images)
+    else:
+        messages = [{"role": "user", "content": prompt}]
+
     data = _call_with_retries(
         cfg,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.2 if fast_mode else 0.3,
+        messages=messages,
+        temperature=temperature,
         max_tokens=2600,
         timeout=160,
     )
@@ -474,6 +549,7 @@ Wrong:   "According to the passage, what gas is released during photosynthesis?"
                     prompt
                     + f"\n\n[Top-up] You generated too few questions. Add {remain} more. Output ONLY the new questions as a JSON array."
                 )
+                # Top-up 不再帶圖片（節省 token）
                 more = _call_with_retries(
                     cfg,
                     messages=[{"role": "user", "content": prompt2}],
@@ -483,13 +559,13 @@ Wrong:   "According to the passage, what gas is released during photosynthesis?"
                 )
                 if isinstance(more, list):
                     data.extend(more)
-                data = data[:question_count]
+            data = data[:question_count]
 
     data = _sanitise_question_stems(data)
+    data = _sanitise_catholic_terms(data, subject)
     data = rebalance_correct_positions(data)
 
     return data
-
 
 # =========================================================
 # Import
@@ -509,7 +585,6 @@ def assist_import_questions(
         if allow_guess
         else "leave correct empty and mark needs_review=true"
     )
-
     prompt = f"""You are a Hong Kong secondary school teacher converting existing questions to standard JSON.
 
 [Subject] {subject}
@@ -520,12 +595,11 @@ def assist_import_questions(
 - Output ONLY a raw JSON array. No markdown code blocks. No ```json wrapper.
 - If answer is missing: {policy}
 - Question stems must NOT contain 'according to the passage/text' or similar phrases.
-  If the original question has such phrases, remove them and rewrite as a standalone knowledge question.
+If the original question has such phrases, remove them and rewrite as a standalone knowledge question.
 
 [Original questions]
 {raw_text}
 """
-
     return _call_with_retries(
         cfg,
         messages=[{"role": "user", "content": prompt}],
@@ -533,7 +607,6 @@ def assist_import_questions(
         max_tokens=2400,
         timeout=120,
     )
-
 
 def parse_import_questions_locally(raw_text: str):
     raw_text = _clean_text(raw_text)
