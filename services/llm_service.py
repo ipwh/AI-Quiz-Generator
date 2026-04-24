@@ -94,10 +94,10 @@ DEFAULT_TRAITS = _SUBJECTS_CONFIG.get(
 # =========================================================
 
 SUBJECT_GROUPS = {
-    "Language": ["Chinese Language", "English Language"],
-    "Math & Science": ["Mathematics", "Science", "Physics", "Chemistry", "Biology"],
-    "Humanities": ["Citizenship and Social Development", "Geography", "History", "Chinese History", "Religion"],
-    "Business & Tech": ["Economics", "BAFS", "ICT", "Tourism & Hospitality"],
+    "語文科": ["中國語文", "英國語文"],
+    "數理科": [ "數學", "物理", "化學", "生物", "科學"],
+    "人文學科": [ "公民與社會發展", "公民、經濟及社會", "地理", "歷史", "中國歷史", "宗教", "經濟"],
+    "科技及經濟科": [ "企業、會計與財務概論", "資訊及通訊科技（ICT）", "旅遊與款待"],
 }
 
 # =========================================================
