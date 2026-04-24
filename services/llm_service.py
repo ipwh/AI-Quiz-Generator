@@ -482,8 +482,19 @@ def generate_questions(
         if has_images else ""
     )
 
+    # 根據科目決定輸出語言
+    is_english_subject = subject in {"英國語文", "English Language"}
+    lang_instruction = (
+        "All output (questions, options, explanations) MUST be in English."
+        if is_english_subject
+        else "所有輸出（題目、選項、解釋）必須使用繁體中文。禁止使用英文出題，除非題目本身涉及英文詞彙。"
+    )
+
     prompt = f"""You are a Hong Kong secondary school teacher creating internal assessment questions.
 This is a knowledge-based multiple choice quiz. Students answer from personal knowledge only - there is NO reading passage or textbook in the exam room.
+
+[Output language - MANDATORY]
+{lang_instruction}
 
 [Subject] {subject}
 [Difficulty] {level}
