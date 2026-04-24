@@ -284,7 +284,7 @@ def render_generate_tab(ctx: dict):
         # --------------------------------------------------
         st.markdown("## 5  匯出 / Google Form / 電郵分享")
 
-        if st.button(f"{btn_icon} 一鍵建立 {form_label}", key="btn_form_generate_settings"):
+    if st.button(f"{btn_icon} 一鍵建立 {form_label}", key="btn_form_generate_settings"):
 
         google_creds = st.session_state.get("google_creds")
 
