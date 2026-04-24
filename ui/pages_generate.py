@@ -249,7 +249,7 @@ def render_generate_tab(ctx: dict):
         # --------------------------------------------------
         # Step 5: Export
         # --------------------------------------------------
-        st.markdown("## 5  匯出 / Google Form / 電郵分享")
+        st.markdown("## 5  匯出 / Google Quiz / Google Form / 電郵分享")
 
         google_creds = st.session_state.get("google_creds")
 
