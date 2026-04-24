@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 import streamlit as st
+import ui.components_export as ce
+st.sidebar.caption(f"components_export from: {ce.__file__}")
 
 from extractors.extract import extract_payload
 from core.question_mapper import dicts_to_items, items_to_editor_df, editor_df_to_items
