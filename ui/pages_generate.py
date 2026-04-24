@@ -357,5 +357,4 @@ def render_generate_tab(ctx: dict):
             subject,
             google_creds,
             prefix="generate",
-    show_google_form=True,
-        )
+    show_google_form=False)
