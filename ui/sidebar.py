@@ -91,21 +91,9 @@ def _build_grouped_subject_options(subject_groups: dict) -> tuple:
     return options, mapping
 
 
-def _resolve_subject(sel: str, options: list, mapping: dict, fallback: str) -> str:
-    """分隔符不可選：若選中分隔符，自動跳至下一個有效科目。"""
-    if mapping.get(sel) is not None:
-        return mapping[sel]
-    # 跳到下一個非分隔符項目
-    try:
-        idx = options.index(sel) + 1
-    except ValueError:
-        return fallback
-    while idx < len(options):
-        candidate = options[idx]
-        if mapping.get(candidate) is not None:
-            return mapping[candidate]
-        idx += 1
-    return fallback
+def _is_separator(sel: str, mapping: dict) -> bool:
+    """判斷所選項目是否為分隔符（不可選的分組標題）。"""
+    return sel in mapping and mapping[sel] is None
 
 
 def render_sidebar() -> dict:
@@ -307,12 +295,22 @@ def render_sidebar() -> dict:
 
     if SUBJECT_GROUPS:
         options, mapping = _build_grouped_subject_options(SUBJECT_GROUPS)
-        # 預設選第一個有效科目
+        # 預設選第一個有效科目（跳過分隔符）
         default_idx = next(
             (i for i, o in enumerate(options) if mapping.get(o) is not None), 0
         )
-        sel = st.sidebar.selectbox("科目", options, index=default_idx, key="subject_grouped")
-        subject = _resolve_subject(sel, options, mapping, FALLBACK_SUBJECT)
+        sel = st.sidebar.selectbox(
+            "科目",
+            options,
+            index=default_idx,
+            key="subject_grouped",
+            format_func=lambda x: f"　　{x}" if mapping.get(x) is not None else f"▸ {x}",
+        )
+        if _is_separator(sel, mapping):
+            st.sidebar.error("⚠️ 請選擇科目，不可選分組標題。")
+            subject = FALLBACK_SUBJECT
+        else:
+            subject = mapping.get(sel) or FALLBACK_SUBJECT
     else:
         subject = st.sidebar.selectbox(
             "科目",
