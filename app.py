@@ -75,7 +75,7 @@ st.title("🏫 AI 多項選擇題題目生成器，支援Kahoot / Wayground / Go
 with st.expander("👣 使用流程", expanded=True):
     st.markdown("""
 1. **（可選）連接 Google**：左側最上方點「🔐 連接 Google（登入）」，之後可一鍵建立 Google Forms／Drive 分享／電郵分享。
-2. **設定 AI（必需）**：學校已預設使用DeepSeek，無需設定即可開始。老師亦可在自行選擇其他LLM並輸入 AI API Key。
+2. **設定 AI**：學校已預設使用DeepSeek，無需設定即可開始。老師亦可在自行選擇其他LLM並輸入 AI API Key。
 3. **選科目與難度**：選擇科目、題目難度及數量。
 4. **上載教材**：到「🪄 生成新題目」上載 PDF/DOCX/PPTX/圖片等；掃描件可在左側選「本地 OCR」或「Vision OCR」。
 5. **（可選）標記重點段落**：展開「重點段落選擇」，保留想出的部分；預設已全選。
