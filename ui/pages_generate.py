@@ -13,7 +13,7 @@ from services.llm_service import generate_questions
 DNL = chr(10) * 2
 
 # =========================================================
-# 清除所有生成頁面的 session_state（換課題用）
+# 清除工作區（換課題用）
 # =========================================================
 
 _GEN_KEYS = [
@@ -26,12 +26,15 @@ _GEN_KEYS = [
 def _clear_generate_state():
     for k in _GEN_KEYS:
         st.session_state.pop(k, None)
-    # 清除所有段落勾選狀態
     for k in list(st.session_state.keys()):
-        if isinstance(k, str) and (k.startswith("gen_mark_") or k.startswith("editor_generate")):
+        if isinstance(k, str) and (
+            k.startswith("gen_mark_") or k.startswith("editor_generate")
+        ):
             st.session_state.pop(k, None)
-    # 重置 file_uploader（透過 key 更換強制清除）
-    st.session_state["_gen_uploader_key"] = st.session_state.get("_gen_uploader_key", 0) + 1
+    # 更換 uploader key 強制重置上載器
+    st.session_state["_gen_uploader_key"] = (
+        st.session_state.get("_gen_uploader_key", 0) + 1
+    )
 
 
 # =========================================================
@@ -46,7 +49,6 @@ def _build_text_with_highlights(raw_text: str, marked_idx: set, limit: int):
     paras = _split_paragraphs(raw_text)
     highlights = [paras[i] for i in range(len(paras)) if i in marked_idx]
     others = [paras[i] for i in range(len(paras)) if i not in marked_idx]
-
     blocks = []
     if highlights:
         blocks.append("[Key Paragraphs]")
@@ -54,7 +56,6 @@ def _build_text_with_highlights(raw_text: str, marked_idx: set, limit: int):
     if others:
         blocks.append("[Other Content]")
         blocks.extend(others)
-
     text = DNL.join(blocks)
     return text[:limit] if limit else text
 
@@ -82,24 +83,26 @@ def render_generate_tab(ctx: dict):
     level_code = ctx["level_code"]
     question_count = ctx["question_count"]
     fast_mode = ctx.get("fast_mode", True)
-
     ocr_mode = ctx.get("ocr_mode", "📄 純文字（一般文件，最快）")
     vision_pdf_max_pages = int(ctx.get("vision_pdf_max_pages", 3) or 3)
 
     # --------------------------------------------------
-    # 🗑️ 清除工作區（換課題用）
+    # Header + 清除工作區
     # --------------------------------------------------
     col_title, col_clear = st.columns([5, 1])
     with col_title:
         st.markdown("## 1  上載教材")
     with col_clear:
         st.markdown("<div style='padding-top:0.6rem'></div>", unsafe_allow_html=True)
-        if st.button("🗑️ 清除工作區", key="btn_clear_workspace", help="換課題時點此清除上次的教材、題目及所有設定，重新開始。"):
+        if st.button(
+            "🗑️ 清除工作區",
+            key="btn_clear_workspace",
+            help="換課題時點此清除上次的教材、題目及所有設定，重新開始。",
+        ):
             _clear_generate_state()
             st.rerun()
 
-    has_prev = bool(st.session_state.get("generated_items"))
-    if has_prev:
+    if st.session_state.get("generated_items"):
         st.info("💡 目前工作區有上次生成的題目。若要換課題，請先點「🗑️ 清除工作區」再上載新教材。")
 
     # 動態 uploader key：清除後強制重置上載器
@@ -113,14 +116,12 @@ def render_generate_tab(ctx: dict):
 
     raw_text = ""
     images = []
-
     prog = st.progress(0)
     status = st.empty()
 
     if file:
-        status.info("正在抽取教材內容...")
+        status.info("⏳ 正在抽取教材內容...")
         prog.progress(10)
-
         try:
             payload = extract_payload(
                 file,
@@ -133,7 +134,6 @@ def render_generate_tab(ctx: dict):
 
         raw_text = payload.get("text", "") or ""
         images = payload.get("images", []) or []
-
         prog.progress(25)
 
         limit = 8000 if fast_mode else 12000
@@ -152,7 +152,7 @@ def render_generate_tab(ctx: dict):
                     st.session_state.pop(k, None)
 
         prog.progress(35)
-        status.success("教材抽取完成")
+        status.success("✅ 教材抽取完成")
         prog.progress(40)
 
     # --------------------------------------------------
@@ -190,17 +190,32 @@ def render_generate_tab(ctx: dict):
     prog.progress(55)
 
     # --------------------------------------------------
-    # Step 3: Generate
+    # Step 3: Generate（防重複生成鎖）
     # --------------------------------------------------
     st.markdown("## 3  生成題目")
+
+    is_generating = st.session_state.get("_is_generating", False)
 
     if not can_call_ai(cfg):
         st.warning("請先在左側「進階設定」填入 API Key，或聯絡 IT 設定校內預設 Key。")
 
-    disabled = (not raw_text.strip() and not images) or (not can_call_ai(cfg))
+    btn_disabled = (
+        (not raw_text.strip() and not images)
+        or (not can_call_ai(cfg))
+        or is_generating
+    )
 
-    if st.button("AI 生成題目", disabled=disabled, key="btn_generate_questions"):
-        status.info("正在準備出題資料...")
+    if st.button(
+        "⏳ 生成中，請稍候…" if is_generating else "AI 生成題目",
+        disabled=btn_disabled,
+        key="btn_generate_questions",
+    ):
+        st.session_state["_is_generating"] = True
+        st.rerun()
+
+    # 生成鎖啟動後才執行實際生成
+    if st.session_state.get("_is_generating"):
+        status.info("⏳ 正在準備出題資料...")
         prog.progress(60)
 
         text_for_ai = _build_text_with_highlights(
@@ -208,27 +223,41 @@ def render_generate_tab(ctx: dict):
         )
         prog.progress(70)
 
-        status.info("AI 出題中...")
-        with st.spinner("AI 出題中..."):
-            data = generate_questions(
-                cfg=cfg,
-                text=text_for_ai,
-                subject=subject,
-                level=level_code,
-                question_count=question_count,
-                fast_mode=fast_mode,
-            )
+        status.info(f"🤖 AI 出題中（共 {question_count} 題），請勿重複按…")
+        try:
+            with st.spinner(f"AI 正在生成 {question_count} 題，請稍候…"):
+                data = generate_questions(
+                    cfg=cfg,
+                    text=text_for_ai,
+                    subject=subject,
+                    level=level_code,
+                    question_count=question_count,
+                    fast_mode=fast_mode,
+                )
+        finally:
+            st.session_state["_is_generating"] = False
 
         prog.progress(90)
+        status.info("🔍 正在整理輸出...")
 
-        status.info("正在檢查題目格式...")
         items = dicts_to_items(data, subject=subject, source="generate")
         report = validate_questions(items)
         st.session_state["generated_items"] = items
         st.session_state["generated_report"] = report
 
         prog.progress(100)
-        status.success("已完成")
+
+        # 完成摘要
+        total = len(items)
+        needs_review = sum(1 for r in report if not r.get("ok"))
+        if needs_review:
+            status.warning(
+                f"✅ 已生成 {total} 題　｜　⚠️ 有 {needs_review} 題需要教師檢查"
+            )
+        else:
+            status.success(f"✅ 已生成 {total} 題，全部通過檢查")
+
+        st.rerun()
 
     # --------------------------------------------------
     # Step 4: Editor
@@ -249,7 +278,7 @@ def render_generate_tab(ctx: dict):
         # --------------------------------------------------
         # Step 5: Export
         # --------------------------------------------------
-        st.markdown("## 5  匯出 / Google Quiz / Google Form / 電郵分享")
+        st.markdown("## 5  匯出 / Google Form / 電郵分享")
 
         google_creds = st.session_state.get("google_creds")
 
@@ -273,10 +302,7 @@ def render_generate_tab(ctx: dict):
             with col2:
                 if quiz_mode:
                     points = st.number_input(
-                        "每題分數",
-                        min_value=1,
-                        max_value=10,
-                        value=1,
+                        "每題分數", min_value=1, max_value=10, value=1,
                         key="google_form_points",
                     )
                     show_exp = st.checkbox(

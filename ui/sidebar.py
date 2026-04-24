@@ -27,10 +27,6 @@ except Exception:
     clear_all_cache = None
 
 
-# =========================================================
-# 內置 Key 讀取
-# =========================================================
-
 def _get_builtin_deepseek_key() -> str:
     try:
         return st.secrets["deepseek"]["api_key"]
@@ -38,10 +34,6 @@ def _get_builtin_deepseek_key() -> str:
         pass
     return os.environ.get("DEEPSEEK_API_KEY", "")
 
-
-# =========================================================
-# xAI Helpers
-# =========================================================
 
 @st.cache_data(ttl=600, show_spinner=False)
 def _xai_list_language_models(api_key: str, base_url: str) -> list:
@@ -85,10 +77,6 @@ def _xai_pick_default(models: list, preferred: str = "grok-3-latest") -> str:
     return "grok-2-latest"
 
 
-# =========================================================
-# 科目分組 Helper
-# =========================================================
-
 def _build_grouped_subject_options(subject_groups: dict) -> tuple:
     if not subject_groups:
         return [], {}
@@ -103,14 +91,26 @@ def _build_grouped_subject_options(subject_groups: dict) -> tuple:
     return options, mapping
 
 
-# =========================================================
-# render_sidebar()
-# =========================================================
+def _resolve_subject(sel: str, options: list, mapping: dict, fallback: str) -> str:
+    """分隔符不可選：若選中分隔符，自動跳至下一個有效科目。"""
+    if mapping.get(sel) is not None:
+        return mapping[sel]
+    # 跳到下一個非分隔符項目
+    try:
+        idx = options.index(sel) + 1
+    except ValueError:
+        return fallback
+    while idx < len(options):
+        candidate = options[idx]
+        if mapping.get(candidate) is not None:
+            return mapping[candidate]
+        idx += 1
+    return fallback
+
 
 def render_sidebar() -> dict:
     st.sidebar.header("🔌 AI API 設定")
 
-    # --- 快速模式 ---
     fast_mode = st.sidebar.checkbox(
         "⚡ 快速模式",
         value=True,
@@ -119,16 +119,11 @@ def render_sidebar() -> dict:
     st.sidebar.caption(
         "快速模式用 `deepseek-chat`；關閉後用 `deepseek-reasoner`（適合數理難題）。"
     )
-
     st.sidebar.divider()
 
-    # =========================================================
-    # 區塊 A：DeepSeek 預設狀態顯示（無輸入框）
-    # =========================================================
+    # ── 預設 DeepSeek Key ──────────────────────────────
     builtin_key = _get_builtin_deepseek_key()
-    has_builtin = bool(builtin_key)
-
-    if has_builtin:
+    if builtin_key:
         st.sidebar.success("✅ 已載入校內預設 Key（老師可直接使用）")
     else:
         st.sidebar.warning("⚠️ 未偵測到校內預設 Key，請在「進階設定」填入 API Key 或聯絡 IT。")
@@ -139,22 +134,16 @@ def render_sidebar() -> dict:
 
     st.sidebar.caption(f"🤖 使用模型：`{deepseek_model}`")
 
-    # =========================================================
-    # 區塊 B：進階設定 expander（IT / 熟手）
-    # =========================================================
+    # ── 進階設定 expander ─────────────────────────────
     advanced_cfg: dict | None = None
     adv_preset = "— 不切換（用上方 DeepSeek）—"
-
-    # ocr_mode / vision_pdf_max_pages 預設值（expander 未展開時仍有效）
     ocr_mode = st.session_state.get("ocr_mode", "📄 純文字（一般文件，最快）")
     vision_pdf_max_pages = int(st.session_state.get("vision_pdf_max_pages", 3) or 3)
 
     with st.sidebar.expander("⚙️ 進階設定", expanded=False):
         st.caption("一般老師毋須設定。IT 或進階用戶可在此切換 LLM、填入 API Key、測試連線及設定讀圖模式。")
 
-        # --------------------------------------------------
-        # B1：切換 LLM 供應商
-        # --------------------------------------------------
+        # B1: 切換 LLM
         st.markdown("**切換 LLM 供應商**")
         adv_preset = st.selectbox(
             "LLM Provider",
@@ -165,37 +154,25 @@ def render_sidebar() -> dict:
         if adv_preset == "DeepSeek":
             adv_key = st.text_input("DeepSeek API Key", type="password", key="adv_ds_key")
             adv_model = st.selectbox(
-                "Model",
-                ["deepseek-chat", "deepseek-reasoner"],
-                index=0 if fast_mode else 1,
-                key="adv_ds_model",
+                "Model", ["deepseek-chat", "deepseek-reasoner"],
+                index=0 if fast_mode else 1, key="adv_ds_model",
             )
             st.caption("`deepseek-chat`：快速通用；`deepseek-reasoner`：慢但適合數理推理。")
             if adv_key:
-                advanced_cfg = {
-                    "type": "openai_compat",
-                    "api_key": adv_key,
-                    "base_url": "https://api.deepseek.com/v1",
-                    "model": adv_model,
-                }
+                advanced_cfg = {"type": "openai_compat", "api_key": adv_key,
+                                "base_url": "https://api.deepseek.com/v1", "model": adv_model}
                 effective_key = adv_key
             else:
                 st.info("請填入 DeepSeek API Key（使用個人帳戶計費）。")
 
         elif adv_preset == "OpenAI 相容（自訂）":
             adv_key = st.text_input("API Key", type="password", key="adv_key")
-            adv_url = st.text_input(
-                "Base URL（含 /v1）", key="adv_base_url",
-                placeholder="https://api.openai.com/v1",
-            )
+            adv_url = st.text_input("Base URL（含 /v1）", key="adv_base_url",
+                                    placeholder="https://api.openai.com/v1")
             adv_model = st.text_input("Model", key="adv_model", placeholder="gpt-4o-mini")
             if adv_key and adv_url and adv_model:
-                advanced_cfg = {
-                    "type": "openai_compat",
-                    "api_key": adv_key,
-                    "base_url": adv_url,
-                    "model": adv_model,
-                }
+                advanced_cfg = {"type": "openai_compat", "api_key": adv_key,
+                                "base_url": adv_url, "model": adv_model}
                 effective_key = adv_key
 
         elif adv_preset == "Grok (xAI)":
@@ -203,7 +180,6 @@ def render_sidebar() -> dict:
             adv_url = "https://api.x.ai/v1"
             preferred = "grok-3-latest"
             xai_model = st.session_state.get("xai_selected_model", preferred)
-
             if adv_key:
                 if st.button("🔍 取得可用 Grok 模型", key="btn_xai_models"):
                     try:
@@ -212,7 +188,6 @@ def render_sidebar() -> dict:
                         st.success(f"✅ 載入 {len(ml)} 個模型")
                     except Exception as e:
                         st.error(f"❌ {repr(e)}")
-
                 ml = st.session_state.get("xai_models_cache", [])
                 if ml:
                     opts = _xai_build_model_options(ml)
@@ -224,126 +199,86 @@ def render_sidebar() -> dict:
                     )
                 else:
                     xai_model = st.text_input("Model（手動填入）", value=preferred, key="xai_model_manual")
-
                 st.session_state["xai_selected_model"] = xai_model
-                advanced_cfg = {
-                    "type": "openai_compat",
-                    "api_key": adv_key,
-                    "base_url": adv_url,
-                    "model": xai_model,
-                }
+                advanced_cfg = {"type": "openai_compat", "api_key": adv_key,
+                                "base_url": adv_url, "model": xai_model}
                 effective_key = adv_key
             else:
                 st.info("請填入 xAI API Key。")
 
         elif adv_preset == "Azure OpenAI":
             adv_key = st.text_input("Azure API Key", type="password", key="adv_az_key")
-            az_endpoint = st.text_input(
-                "Endpoint", key="adv_az_endpoint",
-                placeholder="https://xxxxx.openai.azure.com/",
-            )
+            az_endpoint = st.text_input("Endpoint", key="adv_az_endpoint",
+                                        placeholder="https://xxxxx.openai.azure.com/")
             az_deployment = st.text_input("Deployment name", key="adv_az_deploy")
-            az_api_version = st.text_input(
-                "API version", value="2024-02-15-preview", key="adv_az_ver"
-            )
+            az_api_version = st.text_input("API version", value="2024-02-15-preview", key="adv_az_ver")
             if adv_key and az_endpoint and az_deployment:
-                advanced_cfg = {
-                    "type": "azure",
-                    "api_key": adv_key,
-                    "endpoint": az_endpoint,
-                    "deployment": az_deployment,
-                    "api_version": az_api_version,
-                }
+                advanced_cfg = {"type": "azure", "api_key": adv_key, "endpoint": az_endpoint,
+                                "deployment": az_deployment, "api_version": az_api_version}
                 effective_key = adv_key
 
         st.divider()
 
-        # --------------------------------------------------
-        # B2：API 連線測試
-        # --------------------------------------------------
+        # B2: API 連線測試
         st.markdown("**🧪 API 連線測試**")
 
-        def _current_cfg_inner() -> dict:
+        def _cur_cfg() -> dict:
             if advanced_cfg:
                 return advanced_cfg
-            return {
-                "type": "openai_compat",
-                "api_key": effective_key,
-                "base_url": deepseek_base_url,
-                "model": deepseek_model,
-            }
+            return {"type": "openai_compat", "api_key": effective_key,
+                    "base_url": deepseek_base_url, "model": deepseek_model}
 
-        def _can_call_inner(cfg: dict) -> bool:
+        def _can(cfg: dict) -> bool:
             if not cfg.get("api_key"):
                 return False
             if cfg.get("type") == "azure":
                 return bool(cfg.get("endpoint")) and bool(cfg.get("deployment"))
             return bool(cfg.get("base_url")) and bool(cfg.get("model"))
 
-        cfg_test = _current_cfg_inner()
-
-        ping_timeout = st.slider(
-            "測試超時（秒）", min_value=10, max_value=120, value=45,
-            key="ping_timeout_sec",
-            help="DeepSeek-reasoner 較慢，建議 60 秒以上。",
-        )
-
+        cfg_test = _cur_cfg()
+        ping_timeout = st.slider("測試超時（秒）", min_value=10, max_value=120, value=45,
+                                  key="ping_timeout_sec",
+                                  help="DeepSeek-reasoner 較慢，建議 60 秒以上。")
         if st.button("🧪 一鍵測試 API（回覆 OK）", key="btn_ping_api"):
             if ping_llm is None:
                 st.warning("⚠️ llm_service 未提供 ping_llm()。")
-            elif not _can_call_inner(cfg_test):
+            elif not _can(cfg_test):
                 st.error("❌ 請先填妥 API Key 或聯絡 IT 設定校內預設 Key。")
             else:
                 with st.spinner("正在測試連線…"):
                     r = ping_llm(cfg_test, timeout=int(ping_timeout))
                 if r.get("ok"):
-                    st.success(
-                        f"✅ 成功：{r.get('latency_ms', 0)} ms　模型：{cfg_test.get('model', '')}"
-                    )
+                    st.success(f"✅ 成功：{r.get('latency_ms', 0)} ms　模型：{cfg_test.get('model', '')}")
                 else:
                     st.error("❌ 失敗：請檢查 Key / 服務狀態")
                     st.code(r.get("error", ""))
 
         st.divider()
 
-        # --------------------------------------------------
-        # B3：OCR / 讀圖設定
-        # --------------------------------------------------
+        # B3: OCR 設定
         st.markdown("**🔬 OCR / 讀圖設定**")
         st.caption("數學／物理／化學建議開啟 Vision 模式。")
-
         ocr_mode = st.radio(
             "教材擷取模式",
-            [
-                "📄 純文字（一般文件，最快）",
-                "🔬 本地 OCR（掃描 PDF/圖片，離線）",
-                "🤖 LLM Vision 讀圖（圖表/方程式/手寫，最準）",
-            ],
-            index=0,
-            key="ocr_mode",
+            ["📄 純文字（一般文件，最快）",
+             "🔬 本地 OCR（掃描 PDF/圖片，離線）",
+             "🤖 LLM Vision 讀圖（圖表/方程式/手寫，最準）"],
+            index=0, key="ocr_mode",
         )
-
         vision_pdf_max_pages = 3
         if ocr_mode == "🤖 LLM Vision 讀圖（圖表/方程式/手寫，最準）":
             vision_pdf_max_pages = st.slider(
-                "Vision PDF 最多讀取頁數",
-                min_value=1, max_value=10, value=3,
+                "Vision PDF 最多讀取頁數", min_value=1, max_value=10, value=3,
                 key="vision_pdf_max_pages",
             )
             st.info("💡 DeepSeek 不支援 Vision，請在進階切換至 Grok / GPT-4o。")
 
-    # =========================================================
-    # 最終 cfg 組裝
-    # =========================================================
+    # ── 最終 cfg 組裝 ──────────────────────────────────
     def api_config() -> dict:
         if advanced_cfg:
             return advanced_cfg
-        return {
-            "type": "openai_compat",
-            "api_key": effective_key,
-            "base_url": deepseek_base_url,
-            "model": deepseek_model,
-        }
+        return {"type": "openai_compat", "api_key": effective_key,
+                "base_url": deepseek_base_url, "model": deepseek_model}
 
     def can_call_ai(cfg: dict) -> bool:
         if not cfg.get("api_key"):
@@ -352,9 +287,7 @@ def render_sidebar() -> dict:
             return bool(cfg.get("endpoint")) and bool(cfg.get("deployment"))
         return bool(cfg.get("base_url")) and bool(cfg.get("model"))
 
-    # =========================================================
-    # 出題設定
-    # =========================================================
+    # ── 出題設定 ───────────────────────────────────────
     st.sidebar.divider()
     st.sidebar.header("📘 出題設定")
 
@@ -368,50 +301,32 @@ def render_sidebar() -> dict:
 
     st.sidebar.divider()
 
-    # 科目
-    subject = "中國語文"
+    # 科目選單（加強分隔符校驗）
+    FALLBACK_SUBJECT = "中國語文"
+    subject = FALLBACK_SUBJECT
+
     if SUBJECT_GROUPS:
         options, mapping = _build_grouped_subject_options(SUBJECT_GROUPS)
-        default_idx = 1
-        for i, o in enumerate(options):
-            if mapping.get(o) is not None:
-                default_idx = i
-                break
+        # 預設選第一個有效科目
+        default_idx = next(
+            (i for i, o in enumerate(options) if mapping.get(o) is not None), 0
+        )
         sel = st.sidebar.selectbox("科目", options, index=default_idx, key="subject_grouped")
-        # 跳過分隔行
-        while mapping.get(sel) is None:
-            idx = options.index(sel) + 1
-            if idx < len(options):
-                sel = options[idx]
-            else:
-                break
-        subject = mapping.get(sel) or "中國語文"
+        subject = _resolve_subject(sel, options, mapping, FALLBACK_SUBJECT)
     else:
         subject = st.sidebar.selectbox(
             "科目",
-            [
-                "中國語文", "英國語文", "數學",
-                "物理", "化學", "生物", "科學",
-                "公民與社會發展", "公民、經濟及社會",
-                "地理", "歷史", "中國歷史", "宗教",
-                "經濟", "企業、會計與財務概論",
-                "資訊及通訊科技（ICT）", "旅遊與款待",
-            ],
+            ["中國語文", "英國語文", "數學", "物理", "化學", "生物", "科學",
+             "公民與社會發展", "公民、經濟及社會", "地理", "歷史", "中國歷史",
+             "宗教", "經濟", "企業、會計與財務概論", "資訊及通訊科技（ICT）", "旅遊與款待"],
             key="subject_flat",
         )
 
     level_label = st.sidebar.radio(
         "🎯 難度",
-        [
-            "基礎（理解與記憶）",
-            "標準（應用與理解）",
-            "進階（分析與思考）",
-            "混合（課堂活動建議）",
-        ],
-        index=1,
-        key="level_label",
+        ["基礎（理解與記憶）", "標準（應用與理解）", "進階（分析與思考）", "混合（課堂活動建議）"],
+        index=1, key="level_label",
     )
-
     level_code = {
         "基礎（理解與記憶）": "easy",
         "標準（應用與理解）": "medium",
@@ -420,14 +335,10 @@ def render_sidebar() -> dict:
     }[level_label]
 
     question_count = st.sidebar.selectbox(
-        "🧮 題目數目",
-        [5, 8, 10, 12, 15, 20],
-        index=2,
-        key="question_count",
+        "🧮 題目數目", [5, 8, 10, 12, 15, 20], index=2, key="question_count",
     )
 
     cfg_final = api_config()
-
     return {
         "fast_mode": fast_mode,
         "ocr_mode": ocr_mode,
