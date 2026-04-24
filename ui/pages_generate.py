@@ -8,6 +8,8 @@ from core.question_mapper import dicts_to_items, items_to_editor_df, editor_df_t
 from core.validators import validate_questions
 from ui.components_editor import render_editor
 from ui.components_export import render_export_panel
+from services.google_forms_api import create_form
+from services.google_oauth import credentials_from_dict
 from services.llm_service import generate_questions
 
 DNL = chr(10) * 2
@@ -318,10 +320,42 @@ def render_generate_tab(ctx: dict):
             st.session_state["export_quiz_mode"] = quiz_mode
             st.session_state["export_quiz_points"] = points
             st.session_state["export_quiz_show_exp"] = show_exp
+            
+            # ── Google Form 匯出（只保留此處，避免重複）
+            form_label = "測驗模式 Google Form" if quiz_mode else "普通問卷 Google Form"
+            btn_icon = "📝" if quiz_mode else "📋"
+            if st.button(f"{btn_icon} 一鍵建立 {form_label}", key="btn_form_generate"):
+                try:
+                    creds = credentials_from_dict(google_creds)
+                    with st.spinner(f"正在建立 {form_label}…"):
+                        result = create_form(
+                            creds,
+                            title=f"{subject} {'Quiz' if quiz_mode else 'Survey'}",
+                            df=selected_df,
+                            quiz_mode=quiz_mode,
+                            points_per_question=int(points),
+                            show_explanation=bool(show_exp),
+                        )
+                    st.session_state["form_result_generate"] = result
+                    st.success(f"✅ 已建立 {form_label}")
+                except Exception as e:
+                    st.error("❌ 建立 Google Form 失敗")
+                    with st.expander("🔧 詳細錯誤（IT 用）", expanded=False):
+                        st.exception(e)
+            
+            r = st.session_state.get("form_result_generate")
+            if r:
+                st.markdown("#### ✅ Google Form 已建立")
+                c_a, c_b = st.columns(2)
+                with c_a:
+                    st.link_button("✏️ 編輯表單", r.get('editUrl',''))
+                with c_b:
+                    st.link_button("🔗 學生作答連結", r.get('responderUrl',''))
 
         render_export_panel(
             selected_df,
             subject,
             google_creds,
             prefix="generate",
+    show_google_form=False,
         )
