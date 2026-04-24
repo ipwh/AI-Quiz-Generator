@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 import streamlit as st
-import ui.components_export as ce
-st.sidebar.caption(f"components_export from: {ce.__file__}")
 
 from extractors.extract import extract_payload
 from core.question_mapper import dicts_to_items, items_to_editor_df, editor_df_to_items
@@ -284,8 +282,6 @@ def render_generate_tab(ctx: dict):
         # --------------------------------------------------
         st.markdown("## 5  匯出 / Google Form / 電郵分享")
 
-    if st.button(f"{btn_icon} 一鍵建立 {form_label}", key="btn_form_generate_settings"):
-
         google_creds = st.session_state.get("google_creds")
 
         if google_creds:
@@ -297,7 +293,7 @@ def render_generate_tab(ctx: dict):
                     "匯出模式",
                     ["測驗模式（Quiz）", "普通問卷（Survey）"],
                     index=0,
-                    key="google_form_mode",
+                    key="google_form_mode_generate_settings",
                     help=(
                         "測驗模式：含正確答案、評分及解釋說明，學生提交後可即時查閱成績。\n"
                         "普通問卷：只有題目和選項，不設答案評分。"
@@ -309,12 +305,12 @@ def render_generate_tab(ctx: dict):
                 if quiz_mode:
                     points = st.number_input(
                         "每題分數", min_value=1, max_value=10, value=1,
-                        key="google_form_points",
+                        key="google_form_points_generate_settings",
                     )
                     show_exp = st.checkbox(
                         "答錯時顯示解釋",
                         value=True,
-                        key="google_form_show_exp",
+                        key="google_form_show_exp_generate_settings",
                         help="勾選後，學生答錯時會看到 AI 生成的解釋說明。",
                     )
                 else:
@@ -328,7 +324,9 @@ def render_generate_tab(ctx: dict):
             # ── Google Form 匯出（只保留此處，避免重複）
             form_label = "測驗模式 Google Form" if quiz_mode else "普通問卷 Google Form"
             btn_icon = "📝" if quiz_mode else "📋"
-            if st.button(f"{btn_icon} 一鍵建立 {form_label}", key="btn_form_generate"):
+            can_make_form = selected_df is not None and (not selected_df.empty)
+            if not can_make_form: st.warning('尚未選擇任何題目（請先在表格勾選「匯出」欄）。')
+            if st.button(f"{btn_icon} 一鍵建立 {form_label}", disabled=not can_make_form, key="btn_form_generate_settings"):
                 try:
                     creds = credentials_from_dict(google_creds)
                     with st.spinner(f"正在建立 {form_label}…"):
@@ -361,5 +359,5 @@ def render_generate_tab(ctx: dict):
             subject,
             google_creds,
             prefix="generate",
-            show_google_form=False,
+    show_google_form=False,
         )

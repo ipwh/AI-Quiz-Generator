@@ -51,6 +51,7 @@ def render_export_panel(
     subject: str,
     google_creds_dict,
     prefix: str = "generate",
+    show_google_form: bool = True,
 ):
     if selected_df is None or selected_df.empty:
         st.warning("尚未選擇任何題目（請勾選『匯出』欄）。")
@@ -112,7 +113,7 @@ def render_export_panel(
     # --------------------------------------------------
     # Google Form export
     # --------------------------------------------------
-    if google_creds_dict:
+    if show_google_form and google_creds_dict:
         st.markdown("### Google Form 匯出")
 
         col_l, col_r = st.columns(2)
