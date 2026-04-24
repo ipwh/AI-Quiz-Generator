@@ -1,12 +1,15 @@
 # =========================================================
-# app.py (FINAL-FULL, modular, strict old-behavior)
-# - 主入口：根目錄 app.py
-# - Google OAuth callback + Google 連接區塊（在 sidebar 最上方）
-# - 呼叫 ui/sidebar.py 建 ctx
-# - Tabs 呼叫 ui/pages_generate.py, ui/pages_import.py
+# app.py
+# - set_page_config 必須是第一個 st 呼叫
+# - Google OAuth callback
+# - Sidebar ctx
+# - Tabs: 生成 / 匯入
 # =========================================================
 
 import streamlit as st
+
+# ⚠️ MUST be the very first Streamlit call
+st.set_page_config(page_title="AI 多項選擇題題目生成器", layout="wide")
 
 from ui.sidebar import render_sidebar
 from ui.pages_generate import render_generate_tab
@@ -18,7 +21,6 @@ from services.google_oauth import (
     exchange_code_for_credentials,
     credentials_to_dict,
 )
-
 from services.llm_service import (
     generate_questions,
     assist_import_questions,
@@ -41,7 +43,6 @@ def _adapt_kwargs(fn, **kwargs):
 # ------------------------- Session -------------------------
 if "google_creds" not in st.session_state:
     st.session_state.google_creds = None
-
 
 # ------------------------- OAuth callback -------------------------
 params = st.query_params
@@ -67,9 +68,7 @@ if oauth_is_configured() and "code" in params and not st.session_state.google_cr
         st.sidebar.error(f"❌ Google 連接錯誤：{str(e)[:100]}")
         st.query_params.clear()
 
-
-# ------------------------- Page -------------------------
-st.set_page_config(page_title="AI 多項選擇題題目生成器", layout="wide")
+# ------------------------- Page title -------------------------
 st.title("🏫 AI 多項選擇題題目生成器，支援Kahoot / Wayground / Google Quiz / Google Forms / 一鍵分享檔案")
 
 with st.expander("👣 使用流程（點擊收起）", expanded=True):
@@ -82,8 +81,6 @@ with st.expander("👣 使用流程（點擊收起）", expanded=True):
 6. **生成與微調**：按「AI生成題目」，完成後可在表格內改題幹／選項／答案，再勾選要匯出的題目。
 7. **匯出／分享**：選 Kahoot （Excel檔）或 Wayground（Word 檔）；若已連接 Google，可直接建立Quiz / Forms並分享。
 """)
-
-
 
 # ------------------------- Google connect (sidebar top) -------------------------
 st.sidebar.header("🟦 Google 連接（Google Forms / Google Drive / 電郵分享）")
@@ -101,33 +98,25 @@ else:
 
 st.sidebar.divider()
 
-
 # ------------------------- Sidebar ctx -------------------------
 ctx = render_sidebar()
 
-
-# ------------------------- Inject services (保持舊版介面) -------------------------
+# ------------------------- Inject services -------------------------
 ctx.update({
     "generate_questions": lambda cfg, text, subject, level_code, question_count, **kw: _adapt_kwargs(
         generate_questions,
-        cfg=cfg,
-        text=text,
-        subject=subject,
-        level=level_code,
+        cfg=cfg, text=text, subject=subject, level=level_code,
         question_count=question_count,
         fast_mode=kw.get("fast_mode", True),
         qtype=kw.get("qtype", "single"),
     ),
     "assist_import_questions": lambda cfg, raw, subject, **kw: _adapt_kwargs(
         assist_import_questions,
-        cfg=cfg,
-        raw_text=raw,
-        subject=subject,
+        cfg=cfg, raw_text=raw, subject=subject,
         fast_mode=kw.get("fast_mode", True),
     ),
     "parse_import_questions_locally": parse_import_questions_locally,
 })
-
 
 # ------------------------- Tabs -------------------------
 tab1, tab2 = st.tabs(["🪄 生成新題目", "📄 匯入現有題目"])
