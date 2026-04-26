@@ -33,17 +33,22 @@ except Exception:
 
 
 def _get_paddle_reader():
-    """延遲初始化 PaddleOCR（只載入一次，避免啟動緩慢）。"""
     global _paddle_ocr
     if _paddle_ocr is None and PADDLEOCR_AVAILABLE:
         try:
+            import os
+            # 指定模型下載至可寫目錄
+            os.environ.setdefault("PADDLEOCR_HOME", "/tmp/.paddleocr")
             _paddle_ocr = _PaddleOCR(
                 use_angle_cls=True,
-                lang="chinese_cht",  # 繁體中文
-                use_gpu=False,       # Streamlit Cloud 無 GPU
-                show_log=False,
+                lang="chinese_cht",
+                use_gpu=False,
+                show_log=True,   # ← 改為 True，讓 Cloud logs 顯示載入狀態
+                ocr_version="PP-OCRv4",
             )
         except Exception:
+            import traceback
+            traceback.print_exc()
             _paddle_ocr = None
     return _paddle_ocr
 
@@ -152,7 +157,6 @@ def _extract_pptx_text(data: bytes) -> str:
 # =========================================================
 
 def _ocr_paddle(image_bytes: bytes) -> str:
-    """主力 OCR：PaddleOCR PP-OCRv5（繁體中文手寫）。"""
     reader = _get_paddle_reader()
     if reader is None:
         return ""
@@ -165,14 +169,20 @@ def _ocr_paddle(image_bytes: bytes) -> str:
         lines = []
         for block in (result or []):
             for item in (block or []):
-                # item = [[座標], [text, confidence]]
                 if isinstance(item, (list, tuple)) and len(item) >= 2:
                     text_info = item[1]
                     if isinstance(text_info, (list, tuple)) and len(text_info) >= 1:
-                        lines.append(str(text_info[0]))
+                        t = str(text_info[0])
+                        conf = float(text_info[1]) if len(text_info) >= 2 else 0.0
+                        # ✅ 新增：只保留信心值 > 0.5 的結果
+                        if conf > 0.5:
+                            lines.append(t)
         text = _clean_text("\n".join(lines))
         return "" if _is_garbage_text(text) else text
-    except Exception:
+    except Exception as e:
+        # 部署時可在 Streamlit logs 看到此錯誤
+        import traceback
+        traceback.print_exc()
         return ""
 
 
