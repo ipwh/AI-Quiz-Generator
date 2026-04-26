@@ -18,7 +18,11 @@
 import io
 import re
 import base64
-import fitz  # PyMuPDF
+# PyMuPDF：新版本建議 import pymupdf；fitz 是舊名 fallback
+try:
+    import pymupdf as fitz
+except Exception:
+    import fitz
 import docx
 import openpyxl
 from pptx import Presentation
