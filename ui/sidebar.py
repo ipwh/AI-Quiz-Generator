@@ -9,6 +9,12 @@ import os
 import requests
 import streamlit as st
 
+from extractors.extract import get_ocr_status
+
+ocr_status = get_ocr_status()
+st.sidebar.header("🔍 OCR 狀態")
+st.sidebar.json(ocr_status)
+
 try:
     from services.llm_service import ping_llm, SUBJECT_GROUPS
 except Exception as e:
