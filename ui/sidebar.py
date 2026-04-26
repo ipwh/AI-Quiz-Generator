@@ -108,7 +108,17 @@ def render_sidebar() -> dict:
         "快速模式用 `deepseek-chat`；關閉後用 `deepseek-reasoner`（適合數理難題）。"
     )
     st.sidebar.divider()
+    from extractors.extract import get_ocr_status
 
+    ocr_status = get_ocr_status()
+    st.sidebar.header("🔍 本地 OCR 狀態")
+    if ocr_status["paddleocr"]:
+        st.sidebar.success("✅ PaddleOCR 就緒（繁體中文手寫）")
+    elif ocr_status["tesseract"]:
+        st.sidebar.warning("⚠️ 只有 Tesseract（備援，印刷字尚可）")
+    else:
+        st.sidebar.info("ℹ️ 本地 OCR 不可用，請使用 Vision OCR")
+    st.sidebar.divider()
     # ── 預設 DeepSeek Key ──────────────────────────────
     builtin_key = _get_builtin_deepseek_key()
     if builtin_key:
