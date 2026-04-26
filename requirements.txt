@@ -27,5 +27,6 @@ google-auth>=2.29.0
 google-auth-oauthlib>=1.2.0
 google-api-python-client>=2.126.0
 
-opencv-python==0.0.0
 opencv-contrib-python==0.0.0
+
+pytesseract>=0.3.10
