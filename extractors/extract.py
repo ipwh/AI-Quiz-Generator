@@ -1,87 +1,57 @@
 # extractors/extract.py
-# ---------------------------------------------------------
-# 目標：香港中學 AI 題目生成器的統一抽取器（文字 / 圖片 / Vision / OCR）
-# **本版本說明**：
-# ✅ 已【完全移除 Tesseract】
-# ✅ OCR 一律使用 PaddleOCR（lang="ch"，通用中文，較穩）
-# ✅ 保留：PDF/DOCX/TXT/XLSX/PPTX 抽字、掃描 PDF OCR、Vision 圖片輸出
-# ✅ Streamlit Cloud 友善（延遲載入 + cache）
-# ---------------------------------------------------------
-
-from __future__ import annotations
+# P0：統一 data URL helper
+# P2：OCR 閾值調低，加入理科符號
+# P3：PaddleOCR 主力（繁體中文手寫）> Tesseract 備援
 
 import io
 import re
 import base64
-import streamlit as st
-
-# PyMuPDF（新名優先，舊名 fallback）
-try:
-    import pymupdf as fitz
-except Exception:
-    import fitz
-
+import fitz
 import docx
 import openpyxl
 from pptx import Presentation
-from PIL import Image
 
-# ---------------------------------------------------------
-# PaddleOCR（唯一 OCR 引擎）
-# ---------------------------------------------------------
-PADDLE_AVAILABLE = False
+# ── Tesseract（備援）─────────────────────────────
 try:
-    from paddleocr import PaddleOCR
-    PADDLE_AVAILABLE = True
+    import pytesseract
+    from PIL import Image, ImageOps
+    OCR_AVAILABLE = True
 except Exception:
-    PADDLE_AVAILABLE = False
+    OCR_AVAILABLE = False
+    Image = None
+    ImageOps = None
+
+# ── PaddleOCR（主力，延遲初始化）────────────────
+_paddle_ocr = None
+PADDLEOCR_AVAILABLE = False
+
+try:
+    from paddleocr import PaddleOCR as _PaddleOCR
+    PADDLEOCR_AVAILABLE = True
+except Exception:
+    _PaddleOCR = None
 
 
-@st.cache_resource(show_spinner=False)
-def _get_paddle_ocr():
-    """
-    建立 PaddleOCR instance（只初始化一次）
-    lang="ch"：通用中文（推薦，簡繁混用較穩）
-    """
-    if not PADDLE_AVAILABLE:
-        return None
-    return PaddleOCR(
-        use_angle_cls=True,
-        lang="ch",
-        show_log=False,
-    )
+def _get_paddle_reader():
+    """延遲初始化 PaddleOCR（只載入一次，避免啟動緩慢）。"""
+    global _paddle_ocr
+    if _paddle_ocr is None and PADDLEOCR_AVAILABLE:
+        try:
+            _paddle_ocr = _PaddleOCR(
+                use_angle_cls=True,
+                lang="chinese_cht",  # 繁體中文
+                use_gpu=False,       # Streamlit Cloud 無 GPU
+                show_log=False,
+            )
+        except Exception:
+            _paddle_ocr = None
+    return _paddle_ocr
 
 
-def _paddle_ocr_image_bytes(image_bytes: bytes) -> str:
-    if not PADDLE_AVAILABLE:
-        return ""
-    ocr = _get_paddle_ocr()
-    if ocr is None:
-        return ""
-
-    try:
-        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-    except Exception:
-        return ""
-
-    result = ocr.ocr(img, cls=True)
-    if not result:
-        return ""
-
-    lines = []
-    for line in result:
-        # line: [box, (text, score)]
-        if not line or len(line) < 2:
-            continue
-        text = line[1][0] if line[1] else ""
-        if text and text.strip():
-            lines.append(text.strip())
-
-    return "\n".join(lines).strip()
-
+_HAS_PYMUPDF = True
 
 # =========================================================
-# Data URL helper
+# data URL helper
 # =========================================================
 
 def bytes_to_data_url(b: bytes, mime: str) -> str:
@@ -100,12 +70,36 @@ def _clean_text(s: str) -> str:
         return ""
     s = re.sub(r"[ \t]+", " ", s)
     s = re.sub(r"\n{3,}", "\n\n", s)
-    s = re.sub(r"[\u3000]+", " ", s)
     return s.strip()
 
 
+_READABLE_PATTERN = re.compile(
+    r"[A-Za-z0-9\u4e00-\u9fff"
+    r"°μΩαβγδεζθλπσφψω"
+    r"\+\-×÷=<>≤≥≠±√∑∞∫∂∇"
+    r"→←↑↓⇌°℃℉\(\)\[\]{}|/\\^_~`]"
+)
+
+_GARBAGE_PATTERN = re.compile(
+    r"[^\x09\x0a\x0d\x20-\x7e\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]{4,}"
+)
+
+
+def _text_quality_score(s: str) -> float:
+    if not s:
+        return 0.0
+    return len(_READABLE_PATTERN.findall(s)) / max(len(s), 1)
+
+
+def _is_garbage_text(s: str) -> bool:
+    if not s:
+        return True
+    gc = sum(len(m) for m in _GARBAGE_PATTERN.findall(s))
+    return (gc / max(len(s), 1)) > 0.40
+
+
 # =========================================================
-# File text extractors（非 OCR）
+# File extractors
 # =========================================================
 
 def _extract_pdf_text(data: bytes) -> str:
@@ -118,8 +112,7 @@ def _extract_pdf_text(data: bytes) -> str:
 
 def _extract_docx_text(data: bytes) -> str:
     document = docx.Document(io.BytesIO(data))
-    text = "\n".join(p.text for p in document.paragraphs if p.text)
-    return _clean_text(text)
+    return _clean_text("\n".join(p.text for p in document.paragraphs if p.text))
 
 
 def _extract_txt_text(data: bytes) -> str:
@@ -135,11 +128,10 @@ def _extract_xlsx_text(data: bytes) -> str:
     for ws in wb.worksheets:
         for row in ws.iter_rows(values_only=True):
             for cell in row:
-                if cell is None:
-                    continue
-                s = str(cell).strip()
-                if s:
-                    chunks.append(s)
+                if cell is not None:
+                    s = str(cell).strip()
+                    if s:
+                        chunks.append(s)
     return _clean_text("\n".join(chunks))
 
 
@@ -156,34 +148,68 @@ def _extract_pptx_text(data: bytes) -> str:
 
 
 # =========================================================
-# PDF → Image helpers（OCR / Vision 共用）
+# OCR helpers
 # =========================================================
 
-def _pdf_page_to_png_bytes(
-    page: "fitz.Page",
-    dpi: int = 300,
-    zoom_fallback: float = 2.5,
-) -> bytes:
+def _ocr_paddle(image_bytes: bytes) -> str:
+    """主力 OCR：PaddleOCR PP-OCRv5（繁體中文手寫）。"""
+    reader = _get_paddle_reader()
+    if reader is None:
+        return ""
     try:
-        pix = page.get_pixmap(dpi=int(dpi), alpha=False)
+        import numpy as np
+        from PIL import Image as PILImage
+        img = PILImage.open(io.BytesIO(image_bytes)).convert("RGB")
+        arr = np.array(img)
+        result = reader.ocr(arr, cls=True)
+        lines = []
+        for block in (result or []):
+            for item in (block or []):
+                # item = [[座標], [text, confidence]]
+                if isinstance(item, (list, tuple)) and len(item) >= 2:
+                    text_info = item[1]
+                    if isinstance(text_info, (list, tuple)) and len(text_info) >= 1:
+                        lines.append(str(text_info[0]))
+        text = _clean_text("\n".join(lines))
+        return "" if _is_garbage_text(text) else text
     except Exception:
-        mat = fitz.Matrix(float(zoom_fallback), float(zoom_fallback))
-        pix = page.get_pixmap(matrix=mat, alpha=False)
-    return pix.tobytes("png")
+        return ""
 
 
-def _pdf_pages_to_images_data_url(
-    data: bytes,
-    max_pages: int = 3,
-    zoom: float = 2.0,
-):
+def _ocr_tesseract(image_bytes: bytes, lang: str = "chi_tra+chi_sim+eng") -> str:
+    """備援 OCR：Tesseract。"""
+    if not OCR_AVAILABLE:
+        return ""
+    try:
+        img = Image.open(io.BytesIO(image_bytes)).convert("L")
+        img = ImageOps.autocontrast(img)
+        text = _clean_text(pytesseract.image_to_string(img, lang=lang))
+        if _text_quality_score(text) < 0.15 or _is_garbage_text(text):
+            return ""
+        return text
+    except Exception:
+        return ""
+
+
+def _ocr_image_bytes(image_bytes: bytes, lang: str = "chi_tra+chi_sim+eng") -> str:
+    """統一 OCR 入口：PaddleOCR 優先 → Tesseract 備援。"""
+    if PADDLEOCR_AVAILABLE:
+        result = _ocr_paddle(image_bytes)
+        if result:
+            return result
+    return _ocr_tesseract(image_bytes, lang=lang)
+
+
+# =========================================================
+# Vision helpers
+# =========================================================
+
+def _pdf_pages_to_images_data_url(data: bytes, max_pages: int = 3, zoom: float = 2.0):
     imgs = []
     with fitz.open(stream=data, filetype="pdf") as doc:
-        n = min(len(doc), max_pages)
-        for i in range(n):
-            page = doc[i]
-            mat = fitz.Matrix(float(zoom), float(zoom))
-            pix = page.get_pixmap(matrix=mat, alpha=False)
+        mat = fitz.Matrix(zoom, zoom)
+        for i in range(min(len(doc), max_pages)):
+            pix = doc[i].get_pixmap(matrix=mat, alpha=False)
             imgs.append(bytes_to_data_url(pix.tobytes("png"), "image/png"))
     return imgs
 
@@ -195,104 +221,74 @@ def _pdf_pages_to_images_data_url(
 def extract_payload(
     file,
     enable_ocr: bool = False,
+    ocr_lang: str = "chi_tra+chi_sim+eng",
     enable_vision: bool = False,
     vision_pdf_max_pages: int = 3,
-    # 掃描 PDF OCR 控制（避免全本 OCR）
-    ocr_pdf_max_pages: int = 10,
-    ocr_pdf_dpi: int = 300,
-    ocr_min_text_len_for_skip: int = 50,
 ) -> dict:
-    """
-    回傳：{ "text": str, "images": [data_url,...], "meta": {"ext": str} }
-    """
-    name = getattr(file, "name", "")
-    ext = name.split(".")[-1].lower()
+    ext = file.name.split(".")[-1].lower()
     data = file.getvalue()
-
     out = {"text": "", "images": [], "meta": {"ext": ext}}
-
     try:
-        # -------------------- PDF --------------------
         if ext == "pdf":
             text = _extract_pdf_text(data)
             out["text"] = text
-
-            # 掃描 PDF（抽字太少 → PaddleOCR）
-            if enable_ocr and len(text) < int(ocr_min_text_len_for_skip):
-                parts = []
-                with fitz.open(stream=data, filetype="pdf") as doc:
-                    max_pages = min(len(doc), int(ocr_pdf_max_pages))
-                    for i in range(max_pages):
-                        png_bytes = _pdf_page_to_png_bytes(
-                            doc[i], dpi=int(ocr_pdf_dpi)
+            if len(text) < 50:
+                if enable_ocr:
+                    parts = []
+                    with fitz.open(stream=data, filetype="pdf") as doc:
+                        mat = fitz.Matrix(2.5, 2.5)
+                        for i in range(len(doc)):
+                            pix = doc[i].get_pixmap(matrix=mat, alpha=False)
+                            t = _ocr_image_bytes(pix.tobytes("png"), lang=ocr_lang)
+                            if t:
+                                parts.append(t)
+                    out["text"] = _clean_text("\n".join(parts))
+                if enable_vision:
+                    try:
+                        out["images"] = _pdf_pages_to_images_data_url(
+                            data, max_pages=vision_pdf_max_pages, zoom=2.0
                         )
-                        t = _paddle_ocr_image_bytes(png_bytes)
-                        if t:
-                            parts.append(t)
-                out["text"] = _clean_text("\n".join(parts)) if parts else ""
-
-            if enable_vision:
-                out["images"] = _pdf_pages_to_images_data_url(
-                    data, max_pages=int(vision_pdf_max_pages)
-                )
-
+                    except Exception:
+                        out["images"] = []
             return out
 
-        # -------------------- DOCX / TXT / XLSX / PPTX --------------------
         if ext == "docx":
-            out["text"] = _extract_docx_text(data)
-            return out
-
+            out["text"] = _extract_docx_text(data); return out
         if ext == "txt":
-            out["text"] = _extract_txt_text(data)
-            return out
-
+            out["text"] = _extract_txt_text(data); return out
         if ext == "xlsx":
-            out["text"] = _extract_xlsx_text(data)
-            return out
-
+            out["text"] = _extract_xlsx_text(data); return out
         if ext == "pptx":
-            out["text"] = _extract_pptx_text(data)
-            return out
+            out["text"] = _extract_pptx_text(data); return out
 
-        # -------------------- Image --------------------
         if ext in {"png", "jpg", "jpeg"}:
             mime = "image/png" if ext == "png" else "image/jpeg"
             if enable_ocr:
-                out["text"] = _paddle_ocr_image_bytes(data)
+                out["text"] = _ocr_image_bytes(data, lang=ocr_lang)
             if enable_vision:
                 out["images"] = [bytes_to_data_url(data, mime)]
             return out
 
-        return out
     except Exception:
-        return out
+        pass
+    return out
 
 
 # =========================================================
-# Vision helper（給多模態 LLM 用）
+# extract_images_for_llm_ocr
 # =========================================================
 
-def extract_images_for_llm_ocr(
-    file,
-    pdf_max_pages: int = 3,
-    pdf_zoom: float = 2.0,
-):
+def extract_images_for_llm_ocr(file, pdf_max_pages: int = 3, pdf_zoom: float = 2.0):
     name = getattr(file, "name", "")
     ext = name.split(".")[-1].lower()
     data = file.getvalue()
-
     if ext in {"png", "jpg", "jpeg"}:
         mime = "image/png" if ext == "png" else "image/jpeg"
         return [bytes_to_data_url(data, mime)]
-
     if ext == "pdf":
         return _pdf_pages_to_images_data_url(
-            data,
-            max_pages=max(1, int(pdf_max_pages)),
-            zoom=float(pdf_zoom),
+            data, max_pages=max(1, int(pdf_max_pages)), zoom=float(pdf_zoom)
         )
-
     return []
 
 
@@ -300,16 +296,20 @@ def extract_images_for_llm_ocr(
 # 兼容舊接口
 # =========================================================
 
-def extract_text(
-    file,
-    enable_ocr: bool = False,
-) -> str:
+def extract_text(file, enable_ocr: bool = False,
+                 ocr_lang: str = "chi_tra+chi_sim+eng") -> str:
     return extract_payload(
-        file,
-        enable_ocr=enable_ocr,
-        enable_vision=False,
+        file, enable_ocr=enable_ocr, ocr_lang=ocr_lang, enable_vision=False
     ).get("text", "")
 
 
 _image_bytes_to_data_url = bytes_to_data_url
 _bytes_to_data_url = bytes_to_data_url
+
+
+def get_ocr_status() -> dict:
+    """回傳 OCR 可用狀態，供 sidebar 顯示。"""
+    return {
+        "paddleocr": PADDLEOCR_AVAILABLE,
+        "tesseract": OCR_AVAILABLE,
+    }
