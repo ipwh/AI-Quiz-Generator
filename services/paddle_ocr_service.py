@@ -4,25 +4,29 @@ import threading
 import numpy as np
 from PIL import Image
 
+# ---------- PaddleOCR ----------
 try:
     from paddleocr import PaddleOCR
     PADDLE_AVAILABLE = True
 except Exception as e:
-    print("Paddle import failed:", e)
+    print("[OCR] Paddle import failed:", e)
     PADDLE_AVAILABLE = False
+
+# ---------- Tesseract ----------
+try:
+    import pytesseract
+    TESS_AVAILABLE = True
+except Exception as e:
+    print("[OCR] Tesseract import failed:", e)
+    TESS_AVAILABLE = False
 
 
 __OCR_INSTANCE = None
 __LOCK = threading.Lock()
 
 
-def is_available() -> bool:
-    return PADDLE_AVAILABLE
-
-
-def get_ocr():
+def get_paddle_ocr():
     global __OCR_INSTANCE
-
     if not PADDLE_AVAILABLE:
         return None
 
@@ -32,35 +36,54 @@ def get_ocr():
                 __OCR_INSTANCE = PaddleOCR(
                     use_angle_cls=True,
                     lang="ch",
-                    show_log=True,   # ← 暫時開 log，非常重要
+                    use_gpu=False,
+                    show_log=False,
                 )
     return __OCR_INSTANCE
 
 
-def ocr_image_bytes(image_bytes: bytes) -> str:
-    ocr = get_ocr()
+def _ocr_with_paddle(image: Image.Image) -> str:
+    ocr = get_paddle_ocr()
     if ocr is None:
-        print("OCR not available")
         return ""
 
     try:
-        pil_img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        img = np.array(pil_img)   # ✅ 關鍵
-    except Exception as e:
-        print("Image decode failed:", e)
-        return ""
-
-    try:
+        img = np.array(image)
         result = ocr.ocr(img, cls=True)
-        print("OCR raw result:", result)
-    except Exception as e:
-        print("OCR runtime error:", e)
+    except Exception:
         return ""
 
     texts = []
     for page in result or []:
         for line in page:
-            if line and len(line) > 1:
-                texts.append(line[1][0])
+            texts.append(line[1][0])
 
     return "\n".join(texts).strip()
+
+
+def _ocr_with_tesseract(image: Image.Image) -> str:
+    if not TESS_AVAILABLE:
+        return ""
+
+    try:
+        return pytesseract.image_to_string(
+            image,
+            lang="chi_tra+chi_sim+eng",
+        ).strip()
+    except Exception:
+        return ""
+
+
+def ocr_image_bytes(image_bytes: bytes) -> str:
+    try:
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    except Exception:
+        return ""
+
+    # 1️⃣ PaddleOCR first
+    text = _ocr_with_paddle(image)
+    if text:
+        return text
+
+    # 2️⃣ Fallback to Tesseract (✅ 一定穩)
+    return _ocr_with_tesseract(image)
