@@ -1,10 +1,8 @@
-# services/paddle_ocr_service.py
-from __future__ import annotations
+# paddle_ocr_service.py
 import io
-from typing import Optional
+import threading
 from PIL import Image
 
-PADDLE_AVAILABLE = False
 try:
     from paddleocr import PaddleOCR
     PADDLE_AVAILABLE = True
@@ -12,26 +10,40 @@ except Exception:
     PADDLE_AVAILABLE = False
 
 
-def create_ocr(lang: str = "ch") -> Optional["PaddleOCR"]:
+__OCR_INSTANCE = None
+__LOCK = threading.Lock()
+
+
+def is_available() -> bool:
+    return PADDLE_AVAILABLE
+
+
+def get_ocr():
     """
-    建立 PaddleOCR instance（延遲載入）
-    lang="ch": 通用中文（推薦：穩定、支援簡繁）
+    Lazily initialize a singleton PaddleOCR instance.
+    Safe for Streamlit / multi-call usage.
     """
+    global __OCR_INSTANCE
+
     if not PADDLE_AVAILABLE:
         return None
 
-    # use_angle_cls=True：對掃描/拍照歪斜更穩
-    return PaddleOCR(
-        use_angle_cls=True,
-        lang=lang,
-        show_log=False,
-    )
+    if __OCR_INSTANCE is None:
+        with __LOCK:
+            if __OCR_INSTANCE is None:
+                __OCR_INSTANCE = PaddleOCR(
+                    use_angle_cls=True,
+                    lang="ch",      # 中英混合，如只英文可改 "en"
+                    show_log=False,
+                )
+    return __OCR_INSTANCE
 
 
-def ocr_image_bytes(ocr: "PaddleOCR", image_bytes: bytes) -> str:
+def ocr_image_bytes(image_bytes: bytes) -> str:
     """
-    將 image bytes 交畀 PaddleOCR，回傳純文字
+    Perform OCR on image bytes and return plain text.
     """
+    ocr = get_ocr()
     if ocr is None:
         return ""
 
@@ -40,17 +52,14 @@ def ocr_image_bytes(ocr: "PaddleOCR", image_bytes: bytes) -> str:
     except Exception:
         return ""
 
-    result = ocr.ocr(img, cls=True)
-    if not result:
+    try:
+        result = ocr.ocr(img, cls=True)
+    except Exception:
         return ""
 
-    lines = []
-    for line in result:
-        # line: [box, (text, score)]
-        if not line or len(line) < 2:
-            continue
-        text = line[1][0] if line[1] else ""
-        if text and text.strip():
-            lines.append(text.strip())
+    texts = []
+    for page in result:
+        for line in page:
+            texts.append(line[1][0])
 
-    return "\n".join(lines).strip()
+    return "\n".join(texts).strip()
