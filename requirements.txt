@@ -3,6 +3,7 @@ streamlit>=1.35.0
 
 # ── Data ─────────────────────────────────────────
 pandas>=2.0.0
+numpy>=1.24.0
 
 # ── HTTP / AI API ────────────────────────────────
 requests>=2.31.0
@@ -11,12 +12,13 @@ requests>=2.31.0
 PyYAML>=6.0
 
 # ── File Extraction ──────────────────────────────
-pymupdf>=1.23.0          # fitz：PDF 文字抽取 + 圖像渲染
-python-docx>=1.1.0       # DOCX 讀取
-openpyxl>=3.1.0          # XLSX 讀取
-python-pptx>=0.6.23      # PPTX 讀取
+PyMuPDF>=1.23.0           # fitz：PDF 文字抽取 + 圖像渲染
+python-docx>=1.1.0        # DOCX 讀取
+openpyxl>=3.1.0           # XLSX 讀取
+python-pptx>=0.6.23       # PPTX 讀取
+Pillow>=10.0.0            # 影像處理（OCR 必要）
 
-# PaddleOCR (CPU, Streamlit Cloud 友好)
+# ── OCR (PaddleOCR, CPU-only, Streamlit Cloud friendly) ──
 paddleocr==3.5.0
 paddlepaddle==3.2.0
 
