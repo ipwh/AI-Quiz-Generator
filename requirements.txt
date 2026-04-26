@@ -21,6 +21,7 @@ Pillow>=10.0.0            # 影像處理（OCR 必要）
 # ── OCR (PaddleOCR, CPU-only, Streamlit Cloud friendly) ──
 paddleocr==3.5.0
 paddlepaddle==3.2.0
+pytesseract>=0.3.10
 
 # ── Google APIs ──────────────────────────────────
 google-auth>=2.29.0
@@ -29,4 +30,4 @@ google-api-python-client>=2.126.0
 
 opencv-contrib-python==0.0.0
 
-pytesseract>=0.3.10
+
