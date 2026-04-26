@@ -1,32 +1,26 @@
-# 基礎
+## 基礎
 streamlit>=1.28.0
 pandas>=2.0.0
 numpy>=1.24.0
 Pillow>=10.0.0
 
-# OCR 核心 (繁體中文必備)
-pytesseract>=0.3.10
-opencv-python>=4.8.1.78
-pdf2image>=1.16.3
-poppler-utils>=0.1.0
-
-# PDF 處理
+## PDF 處理
 pdfminer.six>=20221105
 PyPDF2>=3.0.0
 pymupdf
 
-# Office
+## Office
 python-docx>=0.8.11
 openpyxl>=3.1.0
 python-pptx>=0.6.21
 
-# AI / 服務
+## AI / 服務
 openai>=1.3.0
 google-api-python-client>=2.100.0
 google-auth>=2.20.0
 google-auth-oauthlib>=1.0.0
 PyYAML>=6.0.1
 
-# PaddleOCR (CPU, Streamlit Cloud 友好)
+## PaddleOCR（唯一 OCR）
 paddleocr==3.5.0
 paddlepaddle==3.2.0
