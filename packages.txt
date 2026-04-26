@@ -1,5 +1,5 @@
-libgomp1
-libgl1-mesa-glx
+libgl1
+libgl1-mesa-dri
 tesseract-ocr
 tesseract-ocr-chi-tra
 tesseract-ocr-chi-sim
