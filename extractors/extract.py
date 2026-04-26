@@ -29,7 +29,7 @@ _PADDLE_IMPORT_ERROR = ""  # ← 新增
 try:
     from paddleocr import PaddleOCR as _PaddleOCR
     PADDLEOCR_AVAILABLE = True
-except Exception:
+except Exception as e:
     _PaddleOCR = None
     _PADDLE_IMPORT_ERROR = str(e)  # ← 記錄錯誤
 
