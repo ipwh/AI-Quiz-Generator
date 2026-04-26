@@ -24,13 +24,14 @@ except Exception:
 # ── PaddleOCR（主力，延遲初始化）────────────────
 _paddle_ocr = None
 PADDLEOCR_AVAILABLE = False
+_PADDLE_IMPORT_ERROR = ""  # ← 新增
 
 try:
     from paddleocr import PaddleOCR as _PaddleOCR
     PADDLEOCR_AVAILABLE = True
 except Exception:
     _PaddleOCR = None
-
+    _PADDLE_IMPORT_ERROR = str(e)  # ← 記錄錯誤
 
 def _get_paddle_reader():
     global _paddle_ocr
@@ -322,4 +323,5 @@ def get_ocr_status() -> dict:
     return {
         "paddleocr": PADDLEOCR_AVAILABLE,
         "tesseract": OCR_AVAILABLE,
+        "paddle_error": _PADDLE_IMPORT_ERROR,  # ← 新增
     }
