@@ -11,6 +11,19 @@ import streamlit as st
 # ⚠️ MUST be the very first Streamlit call
 st.set_page_config(page_title="AI 多項選擇題題目生成器", layout="wide")
 
+# Prevent Streamlit's 'C' keyboard shortcut (clear cache) from firing on Ctrl+C
+st.markdown("""
+<script>
+(function () {
+    document.addEventListener('keydown', function (e) {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
+            e.stopImmediatePropagation();
+        }
+    }, true);
+})();
+</script>
+""", unsafe_allow_html=True)
+
 from ui.sidebar import render_sidebar
 from ui.pages_generate import render_generate_tab
 from ui.pages_import import render_import_tab
