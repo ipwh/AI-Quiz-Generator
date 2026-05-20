@@ -514,7 +514,27 @@ def generate_questions(
     question_count: int,
     fast_mode: bool = False,
     qtype: str = "single",
+    images: Optional[List[str]] = None,
 ):
+    # Backward compatibility: some UI versions pass images to this function.
+    # If images exist, delegate to vision pipeline and let it fallback safely.
+    if images:
+        try:
+            from services.vision_service import vision_generate_questions
+            return vision_generate_questions(
+                cfg=cfg,
+                text=text,
+                image_data_urls=images,
+                subject=subject,
+                level=level,
+                question_count=question_count,
+                fast_mode=fast_mode,
+                qtype=qtype,
+            )
+        except Exception:
+            # Keep text-only generation as a safe fallback.
+            pass
+
     traits = SUBJECT_TRAITS.get(subject, DEFAULT_TRAITS)
     misconceptions = SUBJECT_MISCONCEPTIONS.get(subject, [])
     distractor_rules = DISTRACTOR_RULES_BY_LEVEL.get(level, "")
