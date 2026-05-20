@@ -151,32 +151,53 @@ def _extract_first_json_object(text: str) -> Any:
 
 def _normalise_questions_payload(data: Any) -> Any:
     """Unwrap common response wrappers used by OpenAI-compatible providers."""
-    if isinstance(data, list):
-        return data
+    current = data
+    # Bound unwrapping depth to avoid pathological/self-referential payload loops.
+    for _ in range(6):
+        if isinstance(current, list):
+            return current
 
-    if isinstance(data, dict):
+        if not isinstance(current, dict):
+            return current
+
+        unwrapped = None
         for key in ("items", "questions", "data", "result", "output"):
-            v = data.get(key)
+            v = current.get(key)
             if isinstance(v, list):
                 return v
+            if isinstance(v, dict):
+                unwrapped = v
+                break
 
-        content = data.get("content")
+        if unwrapped is not None:
+            current = unwrapped
+            continue
+
+        msg = current.get("message")
+        if isinstance(msg, dict):
+            content = msg.get("content")
+            if isinstance(content, str):
+                c = content.strip().replace("\ufeff", "")
+                if c.startswith("{") or c.startswith("["):
+                    try:
+                        current = json.loads(c)
+                        continue
+                    except Exception:
+                        pass
+
+        content = current.get("content")
         if isinstance(content, str):
-            try:
-                return _normalise_questions_payload(extract_json(content))
-            except Exception:
-                pass
-
-        message = data.get("message")
-        if isinstance(message, dict):
-            msg_content = message.get("content")
-            if isinstance(msg_content, str):
+            c = content.strip().replace("\ufeff", "")
+            if c.startswith("{") or c.startswith("["):
                 try:
-                    return _normalise_questions_payload(extract_json(msg_content))
+                    current = json.loads(c)
+                    continue
                 except Exception:
                     pass
 
-    return data
+        return current
+
+    return current
 
 
 def extract_json(text: Any) -> Any:
@@ -202,16 +223,16 @@ def extract_json(text: Any) -> Any:
     text = text.replace("\ufeff", "").strip()
 
     try:
-        return _normalise_questions_payload(json.loads(text))
-    except json.JSONDecodeError:
-        pass
-
-    # Quoted JSON string: "[{...}]" -> [{...}]
-    try:
         maybe = json.loads(text)
+        # Quoted JSON string: "[{...}]" -> [{...}]
         if isinstance(maybe, str):
-            return _normalise_questions_payload(json.loads(maybe))
-    except Exception:
+            try:
+                maybe2 = json.loads(maybe)
+                return _normalise_questions_payload(maybe2)
+            except Exception:
+                pass
+        return _normalise_questions_payload(maybe)
+    except json.JSONDecodeError:
         pass
 
     # Strip fenced code block anywhere in output.
