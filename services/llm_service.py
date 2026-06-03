@@ -105,11 +105,23 @@ SUBJECT_GROUPS = {
 # =========================================================
 
 _FORBIDDEN_PATTERNS: List[tuple] = [
+    (re.compile(r"根據(教材|文本|以上|上文|短文|文章|資料|圖表|以下|題目|內容)[，,：:、\s]?"), ""),
+    (re.compile(r"按照(教材|文本|課文)[，,：:、\s]?"), ""),
+    (re.compile(r"依據(教材|文本|課文)[，,：:、\s]?"), ""),
+    (re.compile(r"參考(教材|文本|課文)[，,：:、\s]?"), ""),
+    (re.compile(r"從(教材|文本|以上|上文|短文|文章|資料)中[，,\s]?"), ""),
+    (re.compile(r"從(教材|文本|課文)(得知|可知|可見|可觀察到)[，,：:、\s]?"), ""),
+    (re.compile(r"由(教材|文本|課文)(可見|可知|可得知)[，,：:、\s]?"), ""),
+    (re.compile(r"綜合(教材|上文|資料)(內容)?[，,：:、\s]?"), ""),
     (re.compile(r"\u6839\u636e(\u6559\u6750|\u6587\u672c|\u4ee5\u4e0a|\u4e0a\u6587|\u77ed\u6587|\u6587\u7ae0|\u8cc7\u6599|\u5716\u8868|\u4ee5\u4e0b|\u984c\u76ee|\u5185\u5bb9)[\uff0c,\uff1a:\u3001\s]?"), ""),
     (re.compile(r"\u6309\u7167(\u6559\u6750|\u6587\u672c|\u8ab2\u6587)[\uff0c,\uff1a:\u3001\s]?"), ""),
     (re.compile(r"\u4f9d\u64da(\u6559\u6750|\u6587\u672c|\u8ab2\u6587)[\uff0c,\uff1a:\u3001\s]?"), ""),
     (re.compile(r"\u53c3\u8003(\u6559\u6750|\u6587\u672c|\u8ab2\u6587)[\uff0c,\uff1a:\u3001\s]?"), ""),
     (re.compile(r"\u5f9e(\u6559\u6750|\u6587\u672c|\u4ee5\u4e0a|\u4e0a\u6587|\u77ed\u6587|\u6587\u7ae0|\u8cc7\u6599)\u4e2d[\uff0c,\s]?"), ""),
+    (re.compile(r"\u5f9e(\u6559\u6750|\u6587\u672c|\u8ab2\u6587)(\u5f97\u77e5|\u53ef\u77e5|\u53ef\u898b|\u53ef\u89c0\u5bdf\u5230)[\uff0c,\uff1a:\u3001\s]?"), ""),
+    (re.compile(r"\u7531(\u6559\u6750|\u6587\u672c|\u8ab2\u6587)(\u53ef\u898b|\u53ef\u77e5|\u53ef\u5f97\u77e5)[\uff0c,\uff1a:\u3001\s]?"), ""),
+    (re.compile(r"\u7d9c\u5408(\u6559\u6750|\u4e0a\u6587|\u8cc7\u6599)(\u5167\u5bb9)?[\uff0c,\uff1a:\u3001\s]?"), ""),
+    (re.compile(r"\u4ece(\u6559\u6750|\u6587\u672c|\u4e0a\u6587|\u8d44\u6599)\u4e2d?(\u5f97\u77e5|\u53ef\u77e5|\u53ef\u89c1)?[\uff0c,\uff1a:\u3001\s]?"), ""),
     (re.compile(r"(?i)according\s+to\s+the\s+(passage|text|article|material|textbook)[,\s]?"), ""),
     (re.compile(r"(?i)based\s+on\s+the\s+(passage|text|article|material|textbook)[,\s]?"), ""),
     (re.compile(r"(?i)from\s+the\s+(passage|text|article)[,\s]?"), ""),
@@ -119,6 +131,7 @@ _FORBIDDEN_PATTERNS: List[tuple] = [
 ]
 
 _FORBIDDEN_STEMS_STR = (
+    "'根據教材' '從教材得知' '由教材可見' '綜合教材內容' "
     "'according to the passage/text' 'based on the passage/text' "
     "'from the passage' 'the passage states/mentions' "
     "'refer to the passage'"
@@ -603,6 +616,14 @@ Do NOT use any of the following phrases in question stems or options:
 {_FORBIDDEN_STEMS_STR}
 Reason: Students have no textbook. All questions must be answerable from personal knowledge.
 Test the knowledge point directly without citing a source, but the knowledge point itself must still come from the uploaded material.
+
+Chinese examples that are strictly forbidden in question stems:
+- 根據教材
+- 從教材得知
+- 從教材可見
+- 由教材可見
+- 綜合教材內容
+- 根據以上資料 / 從上文可知
 
 Correct: "What gas is released by plants during photosynthesis?"
 Wrong:   "According to the passage, what gas is released during photosynthesis?"
