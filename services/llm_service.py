@@ -544,6 +544,22 @@ If a question cannot be salvaged, replace it with a new question that is clearly
     return reviewed[:question_count]
 
 
+def _dedupe_question_items(items: List[dict]) -> List[dict]:
+    """Preserve order while removing duplicate question stems."""
+    seen: set[str] = set()
+    deduped: List[dict] = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        stem = _clean_text(str(item.get("question", "") or "")).lower()
+        key = stem or json.dumps(item, ensure_ascii=False, sort_keys=True)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+    return deduped
+
+
 def _normalise_correct_slot(value: Any) -> Optional[str]:
     """Return a single answer slot '1'..'4' from list/str/int/float payloads."""
     if isinstance(value, list):
@@ -750,6 +766,39 @@ Wrong:   "According to the passage, what gas is released during photosynthesis?"
         question_count=question_count,
         items=data,
     )
+    data = _dedupe_question_items(data)
+
+    recovery_attempts = 0
+    while len(data) < question_count and recovery_attempts < 2:
+        remain = question_count - len(data)
+        recovery_prompt = (
+            prompt
+            + "\n\n[Recovery] After grounding review, too few questions remain. "
+            + f"Generate exactly {remain} ADDITIONAL grounded questions. "
+            + "Do not repeat or paraphrase the existing questions below. Output ONLY the new questions as a JSON array.\n\n"
+            + f"[Existing accepted questions]\n{json.dumps(data, ensure_ascii=False)}"
+        )
+        more = _coerce_question_items(_call_with_retries(
+            cfg,
+            messages=[{"role": "user", "content": recovery_prompt}],
+            temperature=0.1,
+            max_tokens=2200,
+            timeout=160,
+        ))
+        more = _ground_generated_questions(
+            cfg=cfg,
+            text=text,
+            subject=subject,
+            level=level,
+            question_count=remain,
+            items=more,
+        )
+        if not more:
+            break
+        data = _dedupe_question_items(data + more)
+        recovery_attempts += 1
+
+    data = data[:question_count]
     data = _sanitise_question_stems(data)
     data = rebalance_correct_positions(data)
 
