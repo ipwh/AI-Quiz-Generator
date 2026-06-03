@@ -449,6 +449,29 @@ def _call_with_retries(cfg: dict, messages: list, temperature: float, max_tokens
         return extract_json(repaired)
 
 
+def _coerce_question_items(data: Any) -> List[dict]:
+    """Normalise provider output into a list of question dicts."""
+    data = _normalise_questions_payload(data)
+
+    if isinstance(data, dict):
+        if any(k in data for k in ("question", "options", "correct")):
+            data = [data]
+        else:
+            for key in ("items", "questions", "data", "result", "output"):
+                value = data.get(key)
+                if isinstance(value, list):
+                    data = value
+                    break
+
+    if not isinstance(data, list):
+        raise ValueError(f"AI returned unsupported question payload type: {type(data).__name__}")
+
+    items = [q for q in data if isinstance(q, dict)]
+    if not items and data:
+        raise ValueError("AI returned a question payload without any question objects")
+    return items
+
+
 # =========================================================
 # Answer position rebalance
 # =========================================================
@@ -587,13 +610,13 @@ Wrong:   "According to the passage, what gas is released during photosynthesis?"
 {text}
 """
 
-    data = _call_with_retries(
+    data = _coerce_question_items(_call_with_retries(
         cfg,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.2 if fast_mode else 0.3,
         max_tokens=2600,
         timeout=160,
-    )
+    ))
 
     if isinstance(data, list):
         if len(data) > question_count:
@@ -605,13 +628,13 @@ Wrong:   "According to the passage, what gas is released during photosynthesis?"
                     prompt
                     + f"\n\n[Top-up] You generated too few questions. Add {remain} more. Output ONLY the new questions as a JSON array."
                 )
-                more = _call_with_retries(
+                more = _coerce_question_items(_call_with_retries(
                     cfg,
                     messages=[{"role": "user", "content": prompt2}],
                     temperature=0.2,
                     max_tokens=2000,
                     timeout=160,
-                )
+                ))
                 if isinstance(more, list):
                     data.extend(more)
                 data = data[:question_count]
