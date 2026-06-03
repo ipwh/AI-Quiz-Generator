@@ -4,12 +4,16 @@ DEFAULTS = {
     "google_creds": None,
 
     # generate
+    "generate_source_text": "",
+    "generate_source_images": [],
+    "generate_source_name": "",
     "generated_items": [],
     "generated_report": [],
     "mark_idx": set(),
     "form_result_generate": None,
     "export_init_generate": None,        # ✅ 新增，供 app.py 管理 export 全選旗標
     "_export_panel_rendered_generate": False,
+    "_is_generating": False,
 
     # import
     "imported_items": [],
