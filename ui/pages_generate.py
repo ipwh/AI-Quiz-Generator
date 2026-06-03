@@ -17,10 +17,11 @@ DNL = chr(10) * 2
 # =========================================================
 
 _GEN_KEYS = [
+    "generate_source_text", "generate_source_images", "generate_source_name",
     "generated_items", "generated_report",
     "_gen_sig", "gen_mark_initialized", "mark_idx",
     "export_quiz_mode", "export_quiz_points", "export_quiz_show_exp",
-    "form_result_generate",
+    "form_result_generate", "_is_generating",
 ]
 
 def _clear_generate_state():
@@ -35,6 +36,21 @@ def _clear_generate_state():
     st.session_state["_gen_uploader_key"] = (
         st.session_state.get("_gen_uploader_key", 0) + 1
     )
+
+
+def _clear_generated_results():
+    for k in (
+        "generated_items",
+        "generated_report",
+        "form_result_generate",
+        "export_quiz_mode",
+        "export_quiz_points",
+        "export_quiz_show_exp",
+    ):
+        st.session_state.pop(k, None)
+    for k in list(st.session_state.keys()):
+        if isinstance(k, str) and k.startswith("editor_generate"):
+            st.session_state.pop(k, None)
 
 
 # =========================================================
@@ -114,8 +130,8 @@ def render_generate_tab(ctx: dict):
         key=uploader_key,
     )
 
-    raw_text = ""
-    images = []
+    raw_text = st.session_state.get("generate_source_text", "") or ""
+    images = st.session_state.get("generate_source_images", []) or []
     prog = st.progress(0)
     status = st.empty()
 
@@ -134,6 +150,9 @@ def render_generate_tab(ctx: dict):
 
         raw_text = payload.get("text", "") or ""
         images = payload.get("images", []) or []
+        st.session_state["generate_source_text"] = raw_text
+        st.session_state["generate_source_images"] = images
+        st.session_state["generate_source_name"] = getattr(file, "name", "") or ""
         prog.progress(25)
 
         limit = 8000 if fast_mode else 12000
@@ -145,6 +164,7 @@ def render_generate_tab(ctx: dict):
         sig = f"{len(raw_text)}|{hash(raw_text)}|{len(images)}"
         if st.session_state.get("_gen_sig") != sig:
             st.session_state["_gen_sig"] = sig
+            _clear_generated_results()
             st.session_state.pop("gen_mark_initialized", None)
             st.session_state.pop("mark_idx", None)
             for k in list(st.session_state.keys()):
@@ -154,6 +174,9 @@ def render_generate_tab(ctx: dict):
         prog.progress(35)
         status.success("✅ 教材抽取完成")
         prog.progress(40)
+    elif raw_text or images:
+        source_name = st.session_state.get("generate_source_name", "") or "未命名教材"
+        st.caption(f"目前教材：{source_name}")
 
     # --------------------------------------------------
     # Step 2: Highlight paragraphs
@@ -215,6 +238,11 @@ def render_generate_tab(ctx: dict):
 
     # 生成鎖啟動後才執行實際生成
     if st.session_state.get("_is_generating"):
+        if not raw_text.strip() and not images:
+            st.session_state["_is_generating"] = False
+            status.error("沒有可用教材內容。請重新上載教材後再生成題目。")
+            st.stop()
+
         status.info("⏳ 正在準備出題資料...")
         prog.progress(60)
 
