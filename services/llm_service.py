@@ -572,7 +572,7 @@ def generate_questions(
     sd_text = "\n".join(f"- {d}" for d in templates[:6])
 
     prompt = f"""You are a Hong Kong secondary school teacher creating internal assessment questions.
-This is a knowledge-based multiple choice quiz. Students answer from personal knowledge only - there is NO reading passage or textbook in the exam room.
+This is a knowledge-based multiple choice quiz. Students answer from personal knowledge only, but EVERY question must be grounded in the uploaded teaching material. There is NO reading passage or textbook in the exam room.
 
 [Subject] {subject}
 [Difficulty] {level}
@@ -590,11 +590,19 @@ This is a knowledge-based multiple choice quiz. Students answer from personal kn
 [Distractor intensity]
 {distractor_rules}
 
+[Grounding and scope control]
+- Use ONLY knowledge points, concepts, cases, data, terms, relationships, and policy issues that are explicitly present in the uploaded material.
+- Do NOT introduce outside topics just because they belong to the same subject.
+- If a question cannot be clearly traced back to the uploaded material, do not generate it.
+- Before finalising each question, internally check: "Can this question be justified directly from the uploaded material?" If not, rewrite or discard it.
+- Prefer the most central and repeated ideas in the material; avoid weakly related side facts.
+- If the material is too short or unclear for a question, generate fewer but better-grounded questions and mark uncertain ones with needs_review=true.
+
 [ABSOLUTE PROHIBITION - violation = question is void and must be rewritten]
 Do NOT use any of the following phrases in question stems or options:
 {_FORBIDDEN_STEMS_STR}
 Reason: Students have no textbook. All questions must be answerable from personal knowledge.
-Test the knowledge point directly without citing a source.
+Test the knowledge point directly without citing a source, but the knowledge point itself must still come from the uploaded material.
 
 Correct: "What gas is released by plants during photosynthesis?"
 Wrong:   "According to the passage, what gas is released during photosynthesis?"
@@ -606,6 +614,7 @@ Wrong:   "According to the passage, what gas is released during photosynthesis?"
 - correct: list with exactly 1 element, value must be string "1", "2", "3", or "4"
 - explanation: concise key reasoning (1-3 sentences), note common errors in wrong options
 - needs_review: true if question stem or answer is uncertain
+- Reject any question that is not clearly supported by the uploaded material.
 - Distribute correct answers evenly across A/B/C/D positions
 
 [Content for reference - NOT a student reading passage]
