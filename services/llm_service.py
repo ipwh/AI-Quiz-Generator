@@ -482,8 +482,10 @@ def rebalance_correct_positions(items: List[dict], seed: Optional[int] = None) -
         seed = int(time.time()) % 100000
     rng = random.Random(seed)
 
+    normalized_items = [q for q in (items or []) if isinstance(q, dict)]
+
     valid: List[dict] = []
-    for q in items or []:
+    for q in normalized_items:
         corr = q.get("correct", [])
         if isinstance(corr, list) and len(corr) == 1:
             # Normalise: int 1 / float 1.0 / str "1" all become str "1"
@@ -496,7 +498,7 @@ def rebalance_correct_positions(items: List[dict], seed: Optional[int] = None) -
 
     n = len(valid)
     if n == 0:
-        return items
+        return normalized_items
 
     targets = [n // 4] * 4
     for i in range(n % 4):
@@ -522,7 +524,7 @@ def rebalance_correct_positions(items: List[dict], seed: Optional[int] = None) -
         q["options"] = rest
         q["correct"] = [desired]
 
-    return items
+    return normalized_items
 
 
 # =========================================================
