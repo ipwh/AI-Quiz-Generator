@@ -110,6 +110,7 @@ _FORBIDDEN_PATTERNS: List[tuple] = [
     (re.compile(r"依據(教材|文本|課文)[，,：:、\s]?"), ""),
     (re.compile(r"參考(教材|文本|課文)[，,：:、\s]?"), ""),
     (re.compile(r"從(教材|文本|以上|上文|短文|文章|資料)中[，,\s]?"), ""),
+    (re.compile(r"在(教材|文本|課文|資料)中[，,：:、\s]?"), ""),
     (re.compile(r"從(教材|文本|課文)(得知|可知|可見|可觀察到)[，,：:、\s]?"), ""),
     (re.compile(r"由(教材|文本|課文)(可見|可知|可得知)[，,：:、\s]?"), ""),
     (re.compile(r"綜合(教材|上文|資料)(內容)?[，,：:、\s]?"), ""),
@@ -131,7 +132,7 @@ _FORBIDDEN_PATTERNS: List[tuple] = [
 ]
 
 _FORBIDDEN_STEMS_STR = (
-    "'根據教材' '從教材得知' '由教材可見' '綜合教材內容' "
+    "'根據教材' '從教材得知' '由教材可見' '在教材中' '綜合教材內容' "
     "'according to the passage/text' 'based on the passage/text' "
     "'from the passage' 'the passage states/mentions' "
     "'refer to the passage'"
@@ -485,6 +486,64 @@ def _coerce_question_items(data: Any) -> List[dict]:
     return items
 
 
+def _ground_generated_questions(
+    cfg: dict,
+    text: str,
+    subject: str,
+    level: str,
+    question_count: int,
+    items: List[dict],
+    timeout: int = 140,
+) -> List[dict]:
+    """Rewrite or drop questions that are not clearly grounded in the uploaded material."""
+    if not items:
+        return []
+
+    prompt = f"""You are reviewing AI-generated multiple-choice questions for a Hong Kong secondary school teacher.
+
+[Task]
+Review the generated questions against the uploaded teaching material.
+Rewrite any question that is off-topic, too generic, or not clearly supported by the material.
+If a question cannot be salvaged, replace it with a new question that is clearly grounded in the material.
+
+[Hard requirements]
+- Final output should aim for exactly {question_count} questions if the material supports it.
+- Every question must be traceable to the uploaded material.
+- Do NOT introduce outside topics just because they belong to the same subject.
+- Do NOT use textbook-referential phrasing such as: {_FORBIDDEN_STEMS_STR}
+- Students do not see the material during the quiz, so question stems must be standalone.
+- Output ONLY a raw JSON array. No extra text. No markdown.
+- Each item must keep this schema:
+  - qtype: \"single\"
+  - question: string
+  - options: exactly 4 strings
+  - correct: list with exactly 1 element, value must be \"1\", \"2\", \"3\", or \"4\"
+  - explanation: concise string
+  - needs_review: boolean
+
+[Subject]
+{subject}
+
+[Difficulty]
+{level}
+
+[Uploaded material]
+{text}
+
+[Generated questions to review]
+{json.dumps(items, ensure_ascii=False)}
+"""
+
+    reviewed = _coerce_question_items(_call_with_retries(
+        cfg,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.0,
+        max_tokens=2600,
+        timeout=timeout,
+    ))
+    return reviewed[:question_count]
+
+
 def _normalise_correct_slot(value: Any) -> Optional[str]:
     """Return a single answer slot '1'..'4' from list/str/int/float payloads."""
     if isinstance(value, list):
@@ -633,6 +692,7 @@ Chinese examples that are strictly forbidden in question stems:
 - 從教材得知
 - 從教材可見
 - 由教材可見
+- 在教材中
 - 綜合教材內容
 - 根據以上資料 / 從上文可知
 
@@ -682,6 +742,14 @@ Wrong:   "According to the passage, what gas is released during photosynthesis?"
                     data.extend(more)
                 data = data[:question_count]
 
+    data = _ground_generated_questions(
+        cfg=cfg,
+        text=text,
+        subject=subject,
+        level=level,
+        question_count=question_count,
+        items=data,
+    )
     data = _sanitise_question_stems(data)
     data = rebalance_correct_positions(data)
 
