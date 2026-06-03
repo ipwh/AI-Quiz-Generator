@@ -485,6 +485,20 @@ def _coerce_question_items(data: Any) -> List[dict]:
     return items
 
 
+def _normalise_correct_slot(value: Any) -> Optional[str]:
+    """Return a single answer slot '1'..'4' from list/str/int/float payloads."""
+    if isinstance(value, list):
+        if len(value) != 1:
+            return None
+        value = value[0]
+
+    if value is None:
+        return None
+
+    slot = str(value).strip().split(".")[0]
+    return slot if slot in {"1", "2", "3", "4"} else None
+
+
 # =========================================================
 # Answer position rebalance
 # =========================================================
@@ -499,15 +513,12 @@ def rebalance_correct_positions(items: List[dict], seed: Optional[int] = None) -
 
     valid: List[dict] = []
     for q in normalized_items:
-        corr = q.get("correct", [])
-        if isinstance(corr, list) and len(corr) == 1:
-            # Normalise: int 1 / float 1.0 / str "1" all become str "1"
-            corr_str = str(corr[0]).strip().split(".")[0]  # handles "1.0" -> "1"
-            if corr_str in {"1", "2", "3", "4"}:
-                q["correct"] = [corr_str]  # normalise in-place
-                opts = q.get("options", [])
-                if isinstance(opts, list) and len(opts) == 4:
-                    valid.append(q)
+        corr_str = _normalise_correct_slot(q.get("correct", []))
+        if corr_str:
+            q["correct"] = [corr_str]  # normalise in-place for downstream mappers/exporters
+            opts = q.get("options", [])
+            if isinstance(opts, list) and len(opts) == 4:
+                valid.append(q)
 
     n = len(valid)
     if n == 0:
