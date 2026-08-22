@@ -75,6 +75,7 @@ def _post_openai_compat(
         "max_tokens",
         "response_format",
         "stream",
+        "thinking",
     }
     safe_payload = {k: v for k, v in payload.items() if k in allowed}
 
@@ -92,16 +93,25 @@ def _post_openai_compat(
     raise last_err  # type: ignore
 
 
+def _disable_thinking_for_deepseek_v4(cfg: dict, payload: dict) -> dict:
+    """DeepSeek V4 預設 Thinking Mode；思考會消耗 max_tokens 令 content 為空。
+    讀圖/出題需直接輸出 JSON，故對 deepseek-v4* 關閉 thinking mode。"""
+    if str(cfg.get("model", "")).lower().startswith("deepseek-v4"):
+        payload["thinking"] = {"type": "disabled"}
+    return payload
+
+
 def _chat_text(cfg: dict, messages: list, temperature: float, max_tokens: int, timeout: int) -> str:
+    payload = _disable_thinking_for_deepseek_v4(cfg, {
+        "model": cfg["model"],
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    })
     data = _post_openai_compat(
         api_key=cfg["api_key"],
         base_url=cfg["base_url"],
-        payload={
-            "model": cfg["model"],
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-        },
+        payload=payload,
         timeout=timeout,
     )
     return data.get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -125,17 +135,18 @@ def _chat_vision(
 
     messages = [{"role": "user", "content": content}]
 
+    payload = _disable_thinking_for_deepseek_v4(cfg, {
+        "model": cfg["model"],
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        # 盡量引導 JSON
+        "response_format": {"type": "json_object"},
+    })
     data = _post_openai_compat(
         api_key=cfg["api_key"],
         base_url=cfg["base_url"],
-        payload={
-            "model": cfg["model"],
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            # 盡量引導 JSON
-            "response_format": {"type": "json_object"},
-        },
+        payload=payload,
         timeout=timeout,
     )
 

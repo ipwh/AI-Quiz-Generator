@@ -262,6 +262,12 @@ def render_generate_tab(ctx: dict):
                     question_count=question_count,
                     fast_mode=fast_mode,
                 )
+        except Exception as e:
+            st.session_state["_is_generating"] = False
+            status.error(f"❌ AI 生成失敗：{e}")
+            st.error("建議：稍後重試；或在「進階設定」切換模型／加大測試超時。")
+            prog.progress(100)
+            st.stop()
         finally:
             st.session_state["_is_generating"] = False
 

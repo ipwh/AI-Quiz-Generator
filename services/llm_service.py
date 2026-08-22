@@ -316,7 +316,7 @@ def _post_openai_compat(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    allowed = {"model", "messages", "temperature", "max_tokens", "stream", "response_format"}
+    allowed = {"model", "messages", "temperature", "max_tokens", "stream", "response_format", "thinking"}
     safe_payload = {k: v for k, v in payload.items() if k in allowed}
 
     last_err: Optional[Exception] = None
@@ -353,16 +353,23 @@ def _post_openai_compat(
 
 
 def _chat(cfg: dict, messages: list, temperature: float, max_tokens: int, timeout: int) -> str:
+    payload = {
+        "model": cfg["model"],
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+        "stream": False,
+    }
+    # DeepSeek V4 預設 Thinking Mode：思考會消耗 max_tokens，一旦在思考階段
+    # 用盡，content 會回傳空字串 → 「AI returned empty content」。
+    # 出題需直接輸出 JSON，故對 deepseek-v4* 關閉 thinking mode。
+    if str(cfg.get("model", "")).lower().startswith("deepseek-v4"):
+        payload["thinking"] = {"type": "disabled"}
+
     data = _post_openai_compat(
         api_key=cfg["api_key"],
         base_url=cfg["base_url"],
-        payload={
-            "model": cfg["model"],
-            "messages": messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "stream": False,
-        },
+        payload=payload,
         timeout=timeout,
     )
     content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -459,6 +466,8 @@ def _call_with_retries(cfg: dict, messages: list, temperature: float, max_tokens
     try:
         return extract_json(out)
     except Exception:
+        if not (out or "").strip():
+            raise ValueError("AI 回傳了空內容（可能因 Thinking Mode 耗盡 token）。請重試，或在「進階設定」加大超時／改用其他模型。")
         repaired = _fix_json(cfg, out, timeout)
         return extract_json(repaired)
 
