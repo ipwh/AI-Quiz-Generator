@@ -65,7 +65,7 @@ def render_editor(df: pd.DataFrame, key: str):
 
     edited = st.data_editor(
         df_to_edit,
-        use_container_width=True,
+        width="stretch",
         num_rows="dynamic",
         column_config=column_config,
         disabled=disabled_cols,

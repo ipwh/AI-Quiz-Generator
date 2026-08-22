@@ -1,5 +1,6 @@
 libgl1
 libgl1-mesa-dri
 tesseract-ocr
-tesseract-ocr-chi-tra
+tesseract-ocr-eng
 tesseract-ocr-chi-sim
+tesseract-ocr-chi-tra

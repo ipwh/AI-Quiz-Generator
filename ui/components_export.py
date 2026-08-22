@@ -66,7 +66,7 @@ def render_export_panel(
         with st.expander("查看檢查統計與問題清單", expanded=False):
             st.json(err_counts)
             bad_rows = [r for r in report if not r.get("ok")]
-            st.dataframe(pd.DataFrame(bad_rows)[:20], use_container_width=True)
+            st.dataframe(pd.DataFrame(bad_rows)[:20], width="stretch")
     else:
         st.success("所有已選題目均通過檢查")
 

@@ -89,7 +89,7 @@ with st.expander("👣 使用流程（點擊收起）", expanded=True):
 1. **（可選）連接 Google**：左側最上方點「🔐 連接 Google（登入）」，之後可一鍵建立 Google Quiz 及 Forms ／ 電郵分享。
 2. **設定 AI**：學校已預設使用DeepSeek，無需設定即可開始。老師亦可在自行選擇其他LLM並輸入 AI API Key。
 3. **選科目與難度**：選擇科目、題目難度及數量。
-4. **上載教材**：支援 PDF/DOCX/PPTX等檔案類型；掃描件可在左側選「本地 OCR」或「Vision OCR」（因DeepSeek不支援Vision OCR，要自行轉換LLM模型，效果參差）。
+4. **上載教材**：支援 PDF/DOCX/PPTX等檔案類型；掃描件可在左側選「本地 OCR」或「Vision OCR」（DeepSeek 需在「進階設定 → DeepSeek」選用 `deepseek-v4-flash-vision-exp` 方可讀圖；Grok / GPT-4o 亦支援）。
 5. **（可選）標記重點段落**：展開「重點段落選擇」，保留想用作出題的部分；預設已全選。
 6. **生成與微調**：按「AI生成題目」，完成後可在表格內改題幹／選項／答案，再勾選要匯出的題目。
 7. **匯出／分享**：選 Kahoot （Excel檔）或 Wayground（Word 檔）；若已連接 Google，可直接建立Quiz / Forms並分享。

@@ -108,12 +108,14 @@ def render_sidebar() -> dict:
     fast_mode = st.sidebar.checkbox(
         "⚡ 快速模式",
         value=True,
-        help="快速模式：deepseek-chat（快）；關閉：deepseek-reasoner（慢但更準）",
+        help="快速模式：deepseek-v4-flash（快）；關閉：deepseek-v4-pro（慢但更準）",
     )
     st.sidebar.caption(
-        "快速模式用 `deepseek-chat`；關閉後用 `deepseek-reasoner`（適合數理難題）。"
+        "快速模式用 `deepseek-v4-flash`；關閉後用 `deepseek-v4-pro`（適合數理難題）。"
     )
     st.sidebar.divider()
+
+    # ── 本地 OCR 狀態 ─────────────────────────────────
     from extractors.extract import get_ocr_status
 
     ocr_status = get_ocr_status()
@@ -125,6 +127,7 @@ def render_sidebar() -> dict:
     else:
         st.sidebar.info("ℹ️ 本地 OCR 不可用，請使用 Vision OCR")
     st.sidebar.divider()
+
     # ── 預設 DeepSeek Key ──────────────────────────────
     builtin_key = _get_builtin_deepseek_key()
     if builtin_key:
@@ -132,7 +135,7 @@ def render_sidebar() -> dict:
     else:
         st.sidebar.warning("⚠️ 未偵測到校內預設 Key，請在「進階設定」填入 API Key 或聯絡 IT。")
 
-    deepseek_model = "deepseek-chat" if fast_mode else "deepseek-reasoner"
+    deepseek_model = "deepseek-v4-flash" if fast_mode else "deepseek-v4-pro"
     deepseek_base_url = "https://api.deepseek.com/v1"
     effective_key = builtin_key
 
@@ -158,10 +161,10 @@ def render_sidebar() -> dict:
         if adv_preset == "DeepSeek":
             adv_key = st.text_input("DeepSeek API Key", type="password", key="adv_ds_key")
             adv_model = st.selectbox(
-                "Model", ["deepseek-chat", "deepseek-reasoner"],
+                "Model", ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp"],
                 index=0 if fast_mode else 1, key="adv_ds_model",
             )
-            st.caption("`deepseek-chat`：快速通用；`deepseek-reasoner`：慢但適合數理推理。")
+            st.caption("`deepseek-v4-flash`：快速通用；`deepseek-v4-pro`：慢但適合數理推理；`deepseek-v4-flash-vision-exp`：支援讀圖（實驗版）。")
             if adv_key:
                 advanced_cfg = {"type": "openai_compat", "api_key": adv_key,
                                 "base_url": "https://api.deepseek.com/v1", "model": adv_model}
@@ -242,7 +245,7 @@ def render_sidebar() -> dict:
         cfg_test = _cur_cfg()
         ping_timeout = st.slider("測試超時（秒）", min_value=10, max_value=120, value=45,
                                   key="ping_timeout_sec",
-                                  help="DeepSeek-reasoner 較慢，建議 60 秒以上。")
+                                  help="DeepSeek-v4-pro 較慢，建議 60 秒以上。")
         if st.button("🧪 一鍵測試 API（回覆 OK）", key="btn_ping_api"):
             if ping_llm is None:
                 st.warning("⚠️ llm_service 未提供 ping_llm()。")
@@ -275,7 +278,7 @@ def render_sidebar() -> dict:
                 "Vision PDF 最多讀取頁數", min_value=1, max_value=10, value=3,
                 key="vision_pdf_max_pages",
             )
-            st.info("💡 DeepSeek 不支援 Vision，請在進階切換至 Grok / GPT-4o。")
+            st.info("💡 DeepSeek 現支援 Vision：請在「進階設定 → DeepSeek」選用 `deepseek-v4-flash-vision-exp`（實驗版）；Grok / GPT-4o 亦支援讀圖。")
 
     # ── 最終 cfg 組裝 ──────────────────────────────────
     def api_config() -> dict:

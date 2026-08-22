@@ -1,12 +1,15 @@
 # extractors/extract.py
-# P0：統一 data URL helper
-# P2：OCR 閾值調低，加入理科符號
+# ---------------------------------------------------------
+# P0：統一唯一 data URL helper（bytes_to_data_url）
+# P1：移除底部重複 import / 重複實作，extract_images_for_llm_ocr 改呼叫共用 helper
+# P2：OCR 品質閾值調低至 0.15，可讀字符集加入理科常用符號
 # P3：PaddleOCR 主力（繁體中文手寫）> Tesseract 備援
+# ---------------------------------------------------------
 
 import io
 import re
 import base64
-import fitz
+import fitz  # PyMuPDF
 import docx
 import openpyxl
 from pptx import Presentation
@@ -18,22 +21,22 @@ try:
     OCR_AVAILABLE = True
 except Exception:
     OCR_AVAILABLE = False
-    Image = None
-    ImageOps = None
 
 # ── PaddleOCR（主力，延遲初始化）────────────────
 _paddle_ocr = None
 PADDLEOCR_AVAILABLE = False
-_PADDLE_IMPORT_ERROR = ""  # ← 新增
+_PADDLE_IMPORT_ERROR = ""  # 記錄 import 錯誤，供 get_ocr_status() 顯示
 
 try:
     from paddleocr import PaddleOCR as _PaddleOCR
     PADDLEOCR_AVAILABLE = True
 except Exception as e:
     _PaddleOCR = None
-    _PADDLE_IMPORT_ERROR = str(e)  # ← 記錄錯誤
+    _PADDLE_IMPORT_ERROR = str(e)
+
 
 def _get_paddle_reader():
+    """延遲初始化 PaddleOCR reader（避免啟動時下載模型拖慢載入）。"""
     global _paddle_ocr
     if _paddle_ocr is None and PADDLEOCR_AVAILABLE:
         try:
@@ -44,7 +47,7 @@ def _get_paddle_reader():
                 use_angle_cls=True,
                 lang="chinese_cht",
                 use_gpu=False,
-                show_log=True,   # ← 改為 True，讓 Cloud logs 顯示載入狀態
+                show_log=True,  # Cloud logs 顯示載入狀態
                 ocr_version="PP-OCRv4",
             )
         except Exception:
@@ -54,13 +57,20 @@ def _get_paddle_reader():
     return _paddle_ocr
 
 
-_HAS_PYMUPDF = True
+try:
+    _HAS_PYMUPDF = True  # fitz already imported above
+except Exception:
+    _HAS_PYMUPDF = False
 
 # =========================================================
-# data URL helper
+# P0：唯一 data URL helper（全檔案統一使用此函數）
 # =========================================================
 
 def bytes_to_data_url(b: bytes, mime: str) -> str:
+    """
+    回傳標準 data URL：data:{mime};base64,{b64}
+    確保 mime 非空；若為空則 fallback 至 application/octet-stream。
+    """
     if not mime:
         mime = "application/octet-stream"
     b64 = base64.b64encode(b).decode("utf-8")
@@ -79,33 +89,40 @@ def _clean_text(s: str) -> str:
     return s.strip()
 
 
+# P2：擴充可讀字符集，加入理科常見符號
 _READABLE_PATTERN = re.compile(
     r"[A-Za-z0-9\u4e00-\u9fff"
-    r"°μΩαβγδεζθλπσφψω"
-    r"\+\-×÷=<>≤≥≠±√∑∞∫∂∇"
-    r"→←↑↓⇌°℃℉\(\)\[\]{}|/\\^_~`]"
+    r"°μΩαβγδεζθλπσφψω"   # 希臘字母
+    r"\+\-×÷=<>≤≥≠±√∑∞∫∂∇"  # 數學符號
+    r"→←↑↓⇌"              # 化學/物理箭頭
+    r"°℃℉"                 # 溫度單位
+    r"\(\)\[\]{}|/\\^_~`"  # 括號及常見符號
+    r"]"
 )
-
-_GARBAGE_PATTERN = re.compile(
-    r"[^\x09\x0a\x0d\x20-\x7e\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]{4,}"
-)
-
 
 def _text_quality_score(s: str) -> float:
+    """
+    P2：可讀字符比例（中英數 + 理科符號）/ 總長度
+    閾值由 0.25 降至 0.15
+    """
     if not s:
         return 0.0
-    return len(_READABLE_PATTERN.findall(s)) / max(len(s), 1)
+    good = len(_READABLE_PATTERN.findall(s))
+    return good / max(len(s), 1)
 
+# P2：改為「連續亂碼比例 > 40%」判斷，而非單純閾值
+_GARBAGE_PATTERN = re.compile(r"[^\x09\x0a\x0d\x20-\x7e\u4e00-\u9fff\u3000-\u303f\uff00-\uffef]{4,}")
 
 def _is_garbage_text(s: str) -> bool:
+    """True = OCR 結果太多亂碼，應丟棄。"""
     if not s:
         return True
-    gc = sum(len(m) for m in _GARBAGE_PATTERN.findall(s))
-    return (gc / max(len(s), 1)) > 0.40
+    garbage_chars = sum(len(m) for m in _GARBAGE_PATTERN.findall(s))
+    return (garbage_chars / max(len(s), 1)) > 0.40
 
 
 # =========================================================
-# File extractors
+# File text extractors
 # =========================================================
 
 def _extract_pdf_text(data: bytes) -> str:
@@ -118,7 +135,8 @@ def _extract_pdf_text(data: bytes) -> str:
 
 def _extract_docx_text(data: bytes) -> str:
     document = docx.Document(io.BytesIO(data))
-    return _clean_text("\n".join(p.text for p in document.paragraphs if p.text))
+    text = "\n".join(p.text for p in document.paragraphs if p.text)
+    return _clean_text(text)
 
 
 def _extract_txt_text(data: bytes) -> str:
@@ -134,10 +152,11 @@ def _extract_xlsx_text(data: bytes) -> str:
     for ws in wb.worksheets:
         for row in ws.iter_rows(values_only=True):
             for cell in row:
-                if cell is not None:
-                    s = str(cell).strip()
-                    if s:
-                        chunks.append(s)
+                if cell is None:
+                    continue
+                s = str(cell).strip()
+                if s:
+                    chunks.append(s)
     return _clean_text("\n".join(chunks))
 
 
@@ -158,6 +177,7 @@ def _extract_pptx_text(data: bytes) -> str:
 # =========================================================
 
 def _ocr_paddle(image_bytes: bytes) -> str:
+    """PaddleOCR 主力 OCR：繁體中文手寫較準。"""
     reader = _get_paddle_reader()
     if reader is None:
         return ""
@@ -175,26 +195,34 @@ def _ocr_paddle(image_bytes: bytes) -> str:
                     if isinstance(text_info, (list, tuple)) and len(text_info) >= 1:
                         t = str(text_info[0])
                         conf = float(text_info[1]) if len(text_info) >= 2 else 0.0
-                        # ✅ 新增：只保留信心值 > 0.5 的結果
+                        # 只保留信心值 > 0.5 的結果
                         if conf > 0.5:
                             lines.append(t)
         text = _clean_text("\n".join(lines))
         return "" if _is_garbage_text(text) else text
-    except Exception as e:
+    except Exception:
         # 部署時可在 Streamlit logs 看到此錯誤
         import traceback
         traceback.print_exc()
         return ""
 
 
+def _preprocess_image_for_ocr(img: "Image.Image") -> "Image.Image":
+    img = img.convert("L")
+    img = ImageOps.autocontrast(img)
+    return img
+
+
 def _ocr_tesseract(image_bytes: bytes, lang: str = "chi_tra+chi_sim+eng") -> str:
-    """備援 OCR：Tesseract。"""
+    """備援 OCR：Tesseract（印刷字尚可）。"""
     if not OCR_AVAILABLE:
         return ""
     try:
-        img = Image.open(io.BytesIO(image_bytes)).convert("L")
-        img = ImageOps.autocontrast(img)
-        text = _clean_text(pytesseract.image_to_string(img, lang=lang))
+        img = Image.open(io.BytesIO(image_bytes))
+        img = _preprocess_image_for_ocr(img)
+        text = pytesseract.image_to_string(img, lang=lang)
+        text = _clean_text(text)
+        # P2：用雙重條件過濾：閾值 0.15 + 亂碼比例 < 40%
         if _text_quality_score(text) < 0.15 or _is_garbage_text(text):
             return ""
         return text
@@ -212,14 +240,16 @@ def _ocr_image_bytes(image_bytes: bytes, lang: str = "chi_tra+chi_sim+eng") -> s
 
 
 # =========================================================
-# Vision helpers
+# Vision / data URL helpers（全部使用 bytes_to_data_url）
 # =========================================================
 
 def _pdf_pages_to_images_data_url(data: bytes, max_pages: int = 3, zoom: float = 2.0):
+    """Vision 用：PDF 前 max_pages 頁渲染成 PNG data URL。"""
     imgs = []
     with fitz.open(stream=data, filetype="pdf") as doc:
+        n = min(len(doc), max_pages)
         mat = fitz.Matrix(zoom, zoom)
-        for i in range(min(len(doc), max_pages)):
+        for i in range(n):
             pix = doc[i].get_pixmap(matrix=mat, alpha=False)
             imgs.append(bytes_to_data_url(pix.tobytes("png"), "image/png"))
     return imgs
@@ -236,13 +266,19 @@ def extract_payload(
     enable_vision: bool = False,
     vision_pdf_max_pages: int = 3,
 ) -> dict:
+    """
+    回傳：{ "text": str, "images": [data_url,...], "meta": {...} }
+    """
     ext = file.name.split(".")[-1].lower()
     data = file.getvalue()
     out = {"text": "", "images": [], "meta": {"ext": ext}}
+
     try:
         if ext == "pdf":
             text = _extract_pdf_text(data)
             out["text"] = text
+
+            # 掃描 PDF：抽字太少 → OCR / Vision
             if len(text) < 50:
                 if enable_ocr:
                     parts = []
@@ -254,6 +290,7 @@ def extract_payload(
                             if t:
                                 parts.append(t)
                     out["text"] = _clean_text("\n".join(parts))
+
                 if enable_vision:
                     try:
                         out["images"] = _pdf_pages_to_images_data_url(
@@ -261,17 +298,23 @@ def extract_payload(
                         )
                     except Exception:
                         out["images"] = []
+
             return out
 
         if ext == "docx":
-            out["text"] = _extract_docx_text(data); return out
+            out["text"] = _extract_docx_text(data)
+            return out
         if ext == "txt":
-            out["text"] = _extract_txt_text(data); return out
+            out["text"] = _extract_txt_text(data)
+            return out
         if ext == "xlsx":
-            out["text"] = _extract_xlsx_text(data); return out
+            out["text"] = _extract_xlsx_text(data)
+            return out
         if ext == "pptx":
-            out["text"] = _extract_pptx_text(data); return out
+            out["text"] = _extract_pptx_text(data)
+            return out
 
+        # Image input
         if ext in {"png", "jpg", "jpeg"}:
             mime = "image/png" if ext == "png" else "image/jpeg"
             if enable_ocr:
@@ -280,26 +323,34 @@ def extract_payload(
                 out["images"] = [bytes_to_data_url(data, mime)]
             return out
 
+        return out
+
     except Exception:
-        pass
-    return out
+        return out
 
 
 # =========================================================
-# extract_images_for_llm_ocr
+# P1：extract_images_for_llm_ocr 改呼叫共用 bytes_to_data_url
 # =========================================================
 
 def extract_images_for_llm_ocr(file, pdf_max_pages: int = 3, pdf_zoom: float = 2.0):
+    """
+    將圖片 / 掃描PDF（前N頁）轉成 data URL 供多模態 LLM 讀圖用。
+    統一使用 bytes_to_data_url()，不再重複實作。
+    """
     name = getattr(file, "name", "")
     ext = name.split(".")[-1].lower()
     data = file.getvalue()
+
     if ext in {"png", "jpg", "jpeg"}:
         mime = "image/png" if ext == "png" else "image/jpeg"
         return [bytes_to_data_url(data, mime)]
+
     if ext == "pdf":
         return _pdf_pages_to_images_data_url(
             data, max_pages=max(1, int(pdf_max_pages)), zoom=float(pdf_zoom)
         )
+
     return []
 
 
@@ -307,13 +358,17 @@ def extract_images_for_llm_ocr(file, pdf_max_pages: int = 3, pdf_zoom: float = 2
 # 兼容舊接口
 # =========================================================
 
-def extract_text(file, enable_ocr: bool = False,
-                 ocr_lang: str = "chi_tra+chi_sim+eng") -> str:
+def extract_text(
+    file,
+    enable_ocr: bool = False,
+    ocr_lang: str = "chi_tra+chi_sim+eng",
+) -> str:
     return extract_payload(
         file, enable_ocr=enable_ocr, ocr_lang=ocr_lang, enable_vision=False
     ).get("text", "")
 
 
+# 兼容舊名稱
 _image_bytes_to_data_url = bytes_to_data_url
 _bytes_to_data_url = bytes_to_data_url
 
@@ -323,5 +378,5 @@ def get_ocr_status() -> dict:
     return {
         "paddleocr": PADDLEOCR_AVAILABLE,
         "tesseract": OCR_AVAILABLE,
-        "paddle_error": _PADDLE_IMPORT_ERROR,  # ← 新增
+        "paddle_error": _PADDLE_IMPORT_ERROR,
     }
