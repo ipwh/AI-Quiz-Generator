@@ -252,7 +252,7 @@ def _fix_json(cfg: dict, bad_output: str, timeout: int = 120) -> str:
         cfg,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.0,
-        max_tokens=2400,
+        max_tokens=4096,
         timeout=timeout,
     )
 
@@ -279,7 +279,7 @@ def vision_ocr_extract_text(cfg: dict, image_data_urls: List[str], lang_hint: st
         prompt_text=prompt,
         image_data_urls=image_data_urls,
         temperature=0.0,
-        max_tokens=2000,
+        max_tokens=4096,
         timeout=180,
     )
 
@@ -378,7 +378,7 @@ def vision_generate_questions(
             prompt_text=prompt,
             image_data_urls=image_data_urls,
             temperature=0.2 if fast_mode else 0.3,
-            max_tokens=3200,
+            max_tokens=8192,
             timeout=220,
         )
 
@@ -406,7 +406,7 @@ def vision_generate_questions(
                 cfg,
                 messages=[{"role": "user", "content": prompt2}],
                 temperature=0.2,
-                max_tokens=2400,
+                max_tokens=4096,
                 timeout=180,
             )
             more = _extract_json_any(out2)

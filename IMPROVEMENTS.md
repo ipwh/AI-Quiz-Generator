@@ -1,5 +1,48 @@
 # 🎉 AI 題目生成器 - 代碼改進完成報告
 
+---
+
+## 🗓️ 2026-08-22 更新：DeepSeek V4、OCR 強化與穩定性
+
+### 1）DeepSeek V4 模型更新 🤖
+**文件**: [ui/sidebar.py](ui/sidebar.py)、[app.py](app.py)
+
+- 模型名稱更新：`deepseek-chat` → `deepseek-v4-flash`；`deepseek-reasoner` → `deepseek-v4-pro`
+- 新增讀圖模型 `deepseek-v4-flash-vision-exp`（實驗版，支援 Vision）
+- 更新側欄說明文字及使用流程（[app.py](app.py#L92)）
+
+### 2）修復「AI returned empty content」🔥
+**文件**: [services/llm_service.py](services/llm_service.py)、[services/vision_service.py](services/vision_service.py)、[ui/pages_generate.py](ui/pages_generate.py)
+
+- 根因：DeepSeek V4 預設 Thinking Mode，思考消耗 `max_tokens` 時 `content` 回傳空字串
+- 修正：對 `deepseek-v4*` 發送 `{"thinking": {"type": "disabled"}}`，出題直接輸出 JSON
+- payload 白名單加入 `thinking`（`llm_service.py`、`vision_service.py`）
+- 空內容時拋出明確中文錯誤；[ui/pages_generate.py](ui/pages_generate.py) 顯示友善錯誤提示（不再彈出 raw traceback）
+
+### 3）調高 max_tokens 📈
+**文件**: [services/llm_service.py](services/llm_service.py)、[services/vision_service.py](services/vision_service.py)
+
+| 用途 | 舊值 | 新值 |
+|------|------|------|
+| 主生成（文字／Vision） | 2600 / 3200 | **8192** |
+| 審校（grounding review） | 2600 | **6000** |
+| 補題／修復 JSON／匯入／OCR | 2000~2400 | **4096** |
+
+### 4）PaddleOCR 主力 OCR 📄
+**文件**: [extractors/extract.py](extractors/extract.py)、[ui/sidebar.py](ui/sidebar.py)、[requirements.txt](requirements.txt)、[packages.txt](packages.txt)
+
+- 本地 OCR 改為 **PaddleOCR 主力（繁體中文手寫）→ Tesseract 備援**
+- 新增 `get_ocr_status()`；側欄顯示 OCR 狀態（頂部 JSON + 格式化狀態區）
+- `requirements.txt` 加入 `paddlepaddle==3.0.0`、`paddleocr>=2.9.0`；`packages.txt` 加入 `libgl1`、`libgl1-mesa-dri`
+
+### 5）Streamlit API 現代化與主題 🎨
+**文件**: [ui/components_editor.py](ui/components_editor.py)、[ui/components_export.py](ui/components_export.py)、[.streamlit/config.toml](.streamlit/config.toml)
+
+- `use_container_width=True` → `width="stretch"`（新版 Streamlit API）
+- 主題明確指定顏色，消除 `Invalid color passed for primaryColor` console 警告
+
+---
+
 ## 📋 改進概覽
 
 已完成 **6 項關鍵改進**，涵蓋容錯、配置、快取、UX 四大方向。

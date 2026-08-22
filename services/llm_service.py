@@ -456,7 +456,7 @@ def _fix_json(cfg: dict, bad_output: str, timeout: int) -> str:
         cfg,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.0,
-        max_tokens=2400,
+        max_tokens=4096,
         timeout=timeout,
     )
 
@@ -547,7 +547,7 @@ If a question cannot be salvaged, replace it with a new question that is clearly
         cfg,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.0,
-        max_tokens=2600,
+        max_tokens=6000,
         timeout=timeout,
     ))
     return reviewed[:question_count]
@@ -742,7 +742,7 @@ Wrong:   "According to the passage, what gas is released during photosynthesis?"
         cfg,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.2 if fast_mode else 0.3,
-        max_tokens=2600,
+        max_tokens=8192,
         timeout=160,
     ))
 
@@ -760,7 +760,7 @@ Wrong:   "According to the passage, what gas is released during photosynthesis?"
                     cfg,
                     messages=[{"role": "user", "content": prompt2}],
                     temperature=0.2,
-                    max_tokens=2000,
+                    max_tokens=4096,
                     timeout=160,
                 ))
                 if isinstance(more, list):
@@ -791,7 +791,7 @@ Wrong:   "According to the passage, what gas is released during photosynthesis?"
             cfg,
             messages=[{"role": "user", "content": recovery_prompt}],
             temperature=0.1,
-            max_tokens=2200,
+            max_tokens=4096,
             timeout=160,
         ))
         more = _ground_generated_questions(
@@ -853,7 +853,7 @@ def assist_import_questions(
         cfg,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.0 if fast_mode else 0.1,
-        max_tokens=2400,
+        max_tokens=4096,
         timeout=120,
     )
 

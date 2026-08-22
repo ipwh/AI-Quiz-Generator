@@ -2,14 +2,14 @@
 
 # 🏫 AI 多項選擇題題目生成器（AI Quiz Generator）
 
-香港中學校本 AI 出題工具：上載教材（多格式＋OCR）、可選重點段落、一鍵生成四選一 MCQ，並匯出至 **Kahoot**／**Wayground DOCX**／**Google Forms（Quiz/Survey）**，支援 Google OAuth 及 Drive/Email 分享（可選）。 
+香港中學校本 AI 出題工具：上載教材（多格式＋OCR，PaddleOCR 主力／Tesseract 備援）、可選重點段落、一鍵生成四選一 MCQ，並匯出至 **Kahoot**／**Wayground DOCX**／**Google Forms（Quiz/Survey）**，支援 Google OAuth 及 Drive/Email 分享（可選）。 
 ***
 
 ## ✨ 主要功能
 
 ### 🪄 生成新題目（Generate）
 
-*   上載教材：PDF / DOCX / TXT / PPTX / XLSX / PNG / JPG（可選 OCR、可選 Vision 讀圖流程）
+*   上載教材：PDF / DOCX / TXT / PPTX / XLSX / PNG / JPG（可選 OCR、可選 Vision 讀圖流程；OCR 以 PaddleOCR 為主力、Tesseract 為備援）
 *   **重點段落選擇**：可勾選保留段落，提高貼題度（預設全選）
 *   科目＋難度＋題數設定（科目以分組方式顯示，避免長列表難找）
 *   生成時提供 **進度條 + 狀態提示 + 防重複生成鎖**（避免老師狂按導致重複呼叫）
@@ -48,7 +48,7 @@
 *   `services/google_oauth.py`：Google OAuth（state 暫存、redirect URI、credentials dict 化）
 *   `services/google_forms_api.py`：建立 Google Form（Quiz/Survey，含評分與解釋）.
 *   `exporters/`：Kahoot Excel / Wayground DOCX 匯出
-*   `extractors/extract.py`：教材文字抽取＋可選 OCR＋（可選）Vision 圖片資料
+*   `extractors/extract.py`：教材文字抽取＋可選 OCR（PaddleOCR 主力／Tesseract 備援）＋（可選）Vision 圖片資料
 *   
 ***
 
@@ -60,21 +60,26 @@
 pip install -r requirements.txt
 ```
 
-依賴包含 Streamlit、PyMuPDF、python-docx、openpyxl、python-pptx、pytesseract、Google API client 等。
+依賴包含 Streamlit、PyMuPDF、python-docx、openpyxl、python-pptx、pytesseract、PaddleOCR（主力）、Google API client 等。
 
-### 2)（可選）安裝 OCR 系統依賴：Tesseract
+### 2)（可選）安裝 OCR 系統依賴
 
-*   macOS（例）
+本工具以 **PaddleOCR** 為主力（繁體中文手寫較佳），以 **Tesseract** 為備援（印刷字）。
 
-```bash
-brew install tesseract tesseract-lang
-```
+*   **PaddleOCR**（Python 套件，已於 `requirements.txt` 加入）：`paddlepaddle==3.0.0`、`paddleocr>=2.9.0`；首次使用會自動下載繁體中文模型。Linux 部署需系統套件 `libgl1`、`libgl1-mesa-dri`（見 `packages.txt`）。
 
-*   Ubuntu / Debian（例）
+*   **Tesseract**（可選系統依賴）：
+    *   macOS（例）
 
-```bash
-sudo apt-get install tesseract-ocr tesseract-ocr-chi-tra tesseract-ocr-chi-sim
-```
+        ```bash
+        brew install tesseract tesseract-lang
+        ```
+
+    *   Ubuntu / Debian（例）
+
+        ```bash
+        sudo apt-get install tesseract-ocr tesseract-ocr-chi-tra tesseract-ocr-chi-sim
+        ```
 
 若不需要本地 OCR，可跳過。
 
@@ -90,9 +95,11 @@ streamlit run app.py
 
 ## 🔌 AI 設定（Sidebar）
 
-*   預設使用 **DeepSeek**（校內若已配置內置 Key，老師可直接使用）
+*   預設使用 **DeepSeek V4**（校內若已配置內置 Key，老師可直接使用）
+*   **模型**：快速模式用 `deepseek-v4-flash`；關閉快速模式用 `deepseek-v4-pro`（較慢但適合數理推理）；讀圖用 `deepseek-v4-flash-vision-exp`（實驗版，支援 Vision）
+*   系統已對 DeepSeek V4 **關閉 Thinking Mode**，確保出題能直接輸出 JSON、避免回傳空內容；並已調高 `max_tokens`（主生成 8192）以支援較大題數輸出
 *   「⚙️ 進階設定」可切換其他供應商（OpenAI 相容、自訂、Grok、Azure 等）並提供「🧪 一鍵測試 API」。
-*   OCR / Vision 模式可於進階區選擇（理科建議 Vision；DeepSeek 本身不支援 Vision 時請切換支援 Vision 的模型）。
+*   OCR / Vision 模式可於進階區選擇（理科建議 Vision；DeepSeek 已支援 Vision，選用 `deepseek-v4-flash-vision-exp` 即可）。
 
 ***
 
