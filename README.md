@@ -18,7 +18,7 @@
 ### 📄 匯入現有題目（Import）
 
 *   支援貼上或上載檔案（PDF/DOCX/TXT/PPTX/XLSX），可選「AI 協助整理」或本地備援拆題，並匯出/分享
-*   
+
 ### 📤 匯出與分享
 
 *   ⬇️ **Kahoot Excel**（匯入 Kahoot）
@@ -40,16 +40,20 @@
 > 實際資料夾可能因部署而略有調整；以下為核心模組概念。
 
 *   `app.py`：主入口（`st.set_page_config` 置頂；Google OAuth callback；tab 切換 generate/import）
+*   `core/`：資料模型與流程支援（`models.QuestionItem`、`question_mapper` 的 dict⇄DataFrame 轉換、`validators` 題目驗證、`session_state` 初始化）
 *   `ui/sidebar.py`：AI 設定（預設 DeepSeek；進階切換供應商、API 測試、OCR/Vision 模式）
 *   `ui/pages_generate.py`：生成流程（抽取→重點段落→生成→編輯→匯出）
-*   `ui/pages_import.py`：匯入流程（抽取→整理→編輯→匯出）.
+*   `ui/pages_import.py`：匯入流程（抽取→整理→編輯→匯出）
+*   `ui/components_editor.py`：共用題目編輯表格（生成／匯入皆用）
+*   `ui/components_export.py`：共用匯出 panel（Kahoot／Wayground／Google Form＋分享）
 *   `services/llm_service.py`：OpenAI-compatible 呼叫、JSON 修復、重試、ping、科目配置載入
 *   `services/vision_service.py`：Vision 直接出題／Vision OCR（支援 OpenAI-compatible / Grok 等）
+*   `services/cache_service.py`：本機快取（過期機制、`clear_all_cache()` 清空）
 *   `services/google_oauth.py`：Google OAuth（state 暫存、redirect URI、credentials dict 化）
-*   `services/google_forms_api.py`：建立 Google Form（Quiz/Survey，含評分與解釋）.
+*   `services/google_forms_api.py`：建立 Google Form（Quiz/Survey，含評分與解釋）
 *   `exporters/`：Kahoot Excel / Wayground DOCX 匯出
 *   `extractors/extract.py`：教材文字抽取＋可選 OCR（PaddleOCR 主力／Tesseract 備援）＋（可選）Vision 圖片資料
-*   
+*   `subjects_config.yaml`：科目特性／誤概念／干擾項提示配置
 ***
 
 ## ⚙️ 安裝與啟動（本地）
@@ -100,6 +104,7 @@ streamlit run app.py
 *   系統已對 DeepSeek V4 **關閉 Thinking Mode**，確保出題能直接輸出 JSON、避免回傳空內容；並已調高 `max_tokens`（主生成 8192）以支援較大題數輸出
 *   「⚙️ 進階設定」可切換其他供應商（OpenAI 相容、自訂、Grok、Azure 等）並提供「🧪 一鍵測試 API」。
 *   OCR / Vision 模式可於進階區選擇（理科建議 Vision；DeepSeek 已支援 Vision，選用 `deepseek-v4-flash-vision-exp` 即可）。
+*   本地 OCR 狀態會在「進階設定 → OCR/讀圖設定」中、選用「本地 OCR」模式時以一行顯示（PaddleOCR 就緒／僅 Tesseract／不可用），初次用家不會被原始狀態資訊阻礙。
 
 ***
 

@@ -11,10 +11,6 @@ import streamlit as st
 
 from extractors.extract import get_ocr_status
 
-ocr_status = get_ocr_status()
-st.sidebar.header("🔍 OCR 狀態")
-st.sidebar.json(ocr_status)
-
 try:
     from services.llm_service import ping_llm, SUBJECT_GROUPS
 except Exception as e:
@@ -113,19 +109,6 @@ def render_sidebar() -> dict:
     st.sidebar.caption(
         "快速模式用 `deepseek-v4-flash`；關閉後用 `deepseek-v4-pro`（適合數理難題）。"
     )
-    st.sidebar.divider()
-
-    # ── 本地 OCR 狀態 ─────────────────────────────────
-    from extractors.extract import get_ocr_status
-
-    ocr_status = get_ocr_status()
-    st.sidebar.header("🔍 本地 OCR 狀態")
-    if ocr_status["paddleocr"]:
-        st.sidebar.success("✅ PaddleOCR 就緒（繁體中文手寫）")
-    elif ocr_status["tesseract"]:
-        st.sidebar.warning("⚠️ 只有 Tesseract（備援，印刷字尚可）")
-    else:
-        st.sidebar.info("ℹ️ 本地 OCR 不可用，請使用 Vision OCR")
     st.sidebar.divider()
 
     # ── 預設 DeepSeek Key ──────────────────────────────
@@ -272,6 +255,15 @@ def render_sidebar() -> dict:
              "🤖 LLM Vision 讀圖（圖表/方程式/手寫，最準）"],
             index=0, key="ocr_mode",
         )
+        # 本地 OCR 狀態：只在選用本地 OCR 時顯示（一行式，不阻礙初次用家）
+        if ocr_mode == "🔬 本地 OCR（掃描 PDF/圖片，離線）":
+            _ocr = get_ocr_status()
+            if _ocr["paddleocr"]:
+                st.success("✅ PaddleOCR 就緒（繁體中文手寫）")
+            elif _ocr["tesseract"]:
+                st.warning("⚠️ 只有 Tesseract（備援，印刷字尚可）")
+            else:
+                st.error("❌ 本地 OCR 不可用，請改用 Vision OCR")
         vision_pdf_max_pages = 3
         if ocr_mode == "🤖 LLM Vision 讀圖（圖表/方程式/手寫，最準）":
             vision_pdf_max_pages = st.slider(

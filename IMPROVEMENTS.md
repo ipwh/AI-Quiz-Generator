@@ -32,7 +32,7 @@
 **文件**: [extractors/extract.py](extractors/extract.py)、[ui/sidebar.py](ui/sidebar.py)、[requirements.txt](requirements.txt)、[packages.txt](packages.txt)
 
 - 本地 OCR 改為 **PaddleOCR 主力（繁體中文手寫）→ Tesseract 備援**
-- 新增 `get_ocr_status()`；側欄顯示 OCR 狀態（頂部 JSON + 格式化狀態區）
+- 新增 `get_ocr_status()`；側欄 OCR 狀態移入「進階設定 → OCR/讀圖設定」，一行式並僅在選用本地 OCR 模式時顯示
 - `requirements.txt` 加入 `paddlepaddle==3.0.0`、`paddleocr>=2.9.0`；`packages.txt` 加入 `libgl1`、`libgl1-mesa-dri`
 
 ### 5）Streamlit API 現代化與主題 🎨
