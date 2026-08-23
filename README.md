@@ -31,6 +31,7 @@
 ## 🧠 AI 出題特色（校本取向）
 
 *   以科目特性／常見誤概念／干擾項提示來提升 MCQ 質量（配置於 `subjects_config.yaml`）
+*   **四級難度梯度**：基礎／標準／進階／混合各有明確的認知層次、題幹複雜度與干擾項規範（`difficulty_guide`＋`distractor_rules_by_level`），確保「基礎」與「進階」題目深淺有實質差異
 *   後處理移除「根據本文/根據以上/according to passage」等不自然題幹，並標記需教師覆核
 
 ***
@@ -103,6 +104,7 @@ streamlit run app.py
 *   **模型**：快速模式用 `deepseek-v4-flash`；關閉快速模式用 `deepseek-v4-pro`（較慢但適合數理推理）；讀圖用 `deepseek-v4-flash-vision-exp`（實驗版，支援 Vision）
 *   系統已對 DeepSeek V4 **關閉 Thinking Mode**，確保出題能直接輸出 JSON、避免回傳空內容；並已調高 `max_tokens`（主生成 8192）以支援較大題數輸出
 *   「⚙️ 進階設定」可切換其他供應商（OpenAI 相容、自訂、Grok、Azure 等）並提供「🧪 一鍵測試 API」。
+*   **🎯 難度**：基礎（理解與記憶）／標準（應用與理解）／進階（分析與思考）／混合；AI 會依所選難度注入對應規範調節題目深淺（見「AI 出題特色」）。
 *   OCR / Vision 模式可於進階區選擇（理科建議 Vision；DeepSeek 已支援 Vision，選用 `deepseek-v4-flash-vision-exp` 即可）。
 *   本地 OCR 狀態會在「進階設定 → OCR/讀圖設定」中、選用「本地 OCR」模式時以一行顯示（PaddleOCR 就緒／僅 Tesseract／不可用），初次用家不會被原始狀態資訊阻礙。
 

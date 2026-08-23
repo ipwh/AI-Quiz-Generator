@@ -33,6 +33,7 @@ try:
         DEFAULT_TRAITS,
         SUBJECT_MISCONCEPTIONS,
         DISTRACTOR_RULES_BY_LEVEL,
+        DIFFICULTY_GUIDE,
         SUBJECT_DISTRACTOR_HINTS,
         rebalance_correct_positions,
     )
@@ -41,6 +42,7 @@ except Exception:
     DEFAULT_TRAITS = "請按內容出題，語句自然，避免使用『根據教材/根據文本/根據以上』等提示語。"
     SUBJECT_MISCONCEPTIONS = {}
     DISTRACTOR_RULES_BY_LEVEL = {}
+    DIFFICULTY_GUIDE = {}
     SUBJECT_DISTRACTOR_HINTS = {}
     rebalance_correct_positions = None
 
@@ -324,6 +326,7 @@ def vision_generate_questions(
     traits = SUBJECT_TRAITS.get(subject, DEFAULT_TRAITS)
     misconceptions = SUBJECT_MISCONCEPTIONS.get(subject, [])
     distractor_rules = DISTRACTOR_RULES_BY_LEVEL.get(level, "")
+    difficulty_guide = DIFFICULTY_GUIDE.get(level, "")
     subject_templates = SUBJECT_DISTRACTOR_HINTS.get(subject, [])
 
     # truncate text for safety
@@ -342,6 +345,9 @@ def vision_generate_questions(
 【科目】{subject}
 【難度】{level}
 【題目數目】必須剛好 {question_count} 題
+
+【難度定義（必須嚴格依此調節；基礎與進階難度必須有明顯差異）】
+{difficulty_guide}
 
 【科目特性】
 {traits}

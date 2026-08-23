@@ -2,6 +2,21 @@
 
 ---
 
+## 🗓️ 2026-08-23 更新：難度調節強化 🎯
+
+### 1）四級難度詳細定義（DIFFICULTY_GUIDE）🎚️
+**文件**: [services/llm_service.py](services/llm_service.py)、[services/vision_service.py](services/vision_service.py)、[subjects_config.yaml](subjects_config.yaml)
+
+- 新增 `difficulty_guide`（程式碼 fallback + `subjects_config.yaml` 可覆寫），為「基礎／標準／進階／混合」各定義一套詳細難度規範：
+  - 認知層次（記憶→理解→應用→分析／綜合／評估）
+  - 題幹複雜度（單一概念→含條件／轉折→數據／圖表判讀）
+  - 作答推理步驟（單一步驟→1-2 步→多步陷阱）
+  - 干擾項特性（明顯錯誤→部分正確→多步陷阱、選項差距小）
+- 難度定義注入三處 prompt：文字生成（`generate_questions`）、審校（`_grounding_review`）、Vision 讀圖生成（`vision_generate_questions`）
+- 確保用戶在側欄選擇「基礎」與「進階」時，AI 生成的題目難度有實質差異
+
+---
+
 ## 🗓️ 2026-08-22 更新：DeepSeek V4、OCR 強化與穩定性
 
 ### 1）DeepSeek V4 模型更新 🤖

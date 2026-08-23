@@ -84,6 +84,32 @@ DISTRACTOR_RULES_BY_LEVEL: Dict[str, str] = _SUBJECTS_CONFIG.get("distractor_rul
     "mixed":  "Mix medium/hard intensity; same set may have varying difficulty but each item must be clear.",
 })
 
+# 難度詳細定義：讓「基礎(easy)」與「進階(hard)」有實質差異，AI 必須依此調節題目深淺
+DIFFICULTY_GUIDE: Dict[str, str] = _SUBJECTS_CONFIG.get("difficulty_guide", {
+    "easy": (
+        "【基礎】只測單一核心概念的直接記憶／理解，不需跨概念整合。\n"
+        "- 題幹：簡短直接，只問一件事，用字清楚；選項差距明顯。\n"
+        "- 作答：學生憑課堂所學或單一步驟即可答出，無需多步推理。\n"
+        "- 干擾項：明顯錯誤，或只錯在單一步驟，不設多重陷阱。"
+    ),
+    "medium": (
+        "【標準】需把概念應用到新情境，或比較兩個相近概念。\n"
+        "- 題幹：清楚但含少量轉折或條件限制。\n"
+        "- 作答：需 1-2 步推理，能分辨相近概念。\n"
+        "- 干擾項：部分正確但推論錯或漏條件；至少兩個看似合理。"
+    ),
+    "hard": (
+        "【進階】需分析、綜合或評估，可跨章節整合多個概念。\n"
+        "- 題幹：可含條件限制、數據或圖表判讀，或需先處理多餘資訊。\n"
+        "- 作答：需多步推理（條件誤判、單位／方向／定義域、先後次序等）。\n"
+        "- 干擾項：多步陷阱，正確與錯誤選項差距很小，需細心比較。"
+    ),
+    "mixed": (
+        "【混合】同一套題內混合 medium/hard 強度，各題可難易不一。\n"
+        "- 每題仍須題幹清晰、有唯一正確答案，不因混合而含糊。"
+    ),
+})
+
 DEFAULT_TRAITS = _SUBJECTS_CONFIG.get(
     "default_traits",
     "Set questions based on content. Use natural language. Students answer from personal knowledge only.",
@@ -508,6 +534,8 @@ def _ground_generated_questions(
     if not items:
         return []
 
+    difficulty_guide = DIFFICULTY_GUIDE.get(level, "")
+
     prompt = f"""You are reviewing AI-generated multiple-choice questions for a Hong Kong secondary school teacher.
 
 [Task]
@@ -535,6 +563,9 @@ If a question cannot be salvaged, replace it with a new question that is clearly
 
 [Difficulty]
 {level}
+
+[Difficulty specification - preserve this level strictly; easy (基礎) and hard (進階) must differ clearly]
+{difficulty_guide}
 
 [Uploaded material]
 {text}
@@ -671,6 +702,7 @@ def generate_questions(
     traits = SUBJECT_TRAITS.get(subject, DEFAULT_TRAITS)
     misconceptions = SUBJECT_MISCONCEPTIONS.get(subject, [])
     distractor_rules = DISTRACTOR_RULES_BY_LEVEL.get(level, "")
+    difficulty_guide = DIFFICULTY_GUIDE.get(level, "")
     templates = SUBJECT_DISTRACTOR_HINTS.get(subject, [])
 
     text = _clean_text(text)
@@ -685,6 +717,9 @@ This is a knowledge-based multiple choice quiz. Students answer from personal kn
 [Subject] {subject}
 [Difficulty] {level}
 [Number of questions] Exactly {question_count}
+
+[Difficulty specification - follow strictly; easy (基礎) and hard (進階) must differ clearly]
+{difficulty_guide}
 
 [Subject traits]
 {traits}
