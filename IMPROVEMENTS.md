@@ -2,6 +2,28 @@
 
 ---
 
+## 🗓️ 2026-09-15 更新：DeepSeek 模型改名與 API 參數同步 🔄
+
+### 1）DeepSeek 模型名更新 🤖
+**文件**: [services/llm_service.py](services/llm_service.py)、[services/vision_service.py](services/vision_service.py)、[ui/sidebar.py](ui/sidebar.py)、[app.py](app.py)
+
+- 官方現行模型名：`deepseek-flash`（DeepSeek-V4.1-Flash）、`deepseek-v4-pro`（DeepSeek-V4-Pro）
+- 舊名 `deepseek-v4-flash`、`deepseek-v4-flash-vision-exp` 已下線（仍可呼叫但一律由 V4.1-Flash 提供服務），因此讀圖不再需要專用 vision 模型
+- 新增共用常數／判斷：`DEEPSEEK_MODEL_CHOICES`、`is_deepseek_model()`、`supports_vision_model()`
+- `ui/sidebar.py`：模型下拉改為 `deepseek-flash` / `deepseek-v4-pro`；舊 session_state 值自動遷移，避免 selectbox 讀到已下線模型名而報錯
+
+### 2）思考模式參數更新 🧠
+- 新增現行參數 `reasoning_effort`（`none` / `low` / `high` / `max`，預設 `high`；`none` = 關閉思考）
+- 關閉思考改為同時發送 `reasoning_effort="none"` 與相容寫法 `thinking={"type":"disabled"}`
+- 判斷由 `deepseek-v4*` 放寬為 **所有 DeepSeek 模型**（修正新的 `deepseek-flash` 未被關閉思考、可能回傳空 content 的問題）
+- 兩支 service 的 payload 白名單加入 `reasoning_effort`；邏輯集中於 `apply_deepseek_thinking_off()`，避免兩處不同步
+
+### 3）Vision 能力判斷修正 👁️
+- `supports_vision()` 改為共用 `supports_vision_model()`：`deepseek-flash` 判定為**支援讀圖**（舊版因名稱不含 "vision" 而被誤判為不支援）
+- `deepseek-v4-pro` / `deepseek-reasoner` 判定為不支援讀圖；側欄選用 Vision OCR 時會顯示警告（提示將自動回退純文字出題）
+
+---
+
 ## 🗓️ 2026-08-23 更新：難度調節強化 🎯
 
 ### 1）四級難度詳細定義（DIFFICULTY_GUIDE）🎚️

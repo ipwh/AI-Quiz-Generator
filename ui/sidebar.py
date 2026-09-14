@@ -19,6 +19,18 @@ except Exception as e:
     st.sidebar.error(f"llm_service import 失敗：{e}")
 
 try:
+    from services.llm_service import DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL, DEEPSEEK_MODEL_CHOICES
+except Exception:
+    DEEPSEEK_FLASH_MODEL = "deepseek-flash"
+    DEEPSEEK_PRO_MODEL = "deepseek-v4-pro"
+    DEEPSEEK_MODEL_CHOICES = [DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL]
+
+try:
+    from services.vision_service import supports_vision
+except Exception:
+    supports_vision = None
+
+try:
     from services.llm_service import get_xai_default_model
 except Exception:
     get_xai_default_model = None
@@ -104,10 +116,10 @@ def render_sidebar() -> dict:
     fast_mode = st.sidebar.checkbox(
         "⚡ 快速模式",
         value=True,
-        help="快速模式：deepseek-v4-flash（快）；關閉：deepseek-v4-pro（慢但更準）",
+        help="快速模式：deepseek-flash（快，支援讀圖）；關閉：deepseek-v4-pro（慢但更準，不支援讀圖）",
     )
     st.sidebar.caption(
-        "快速模式用 `deepseek-v4-flash`；關閉後用 `deepseek-v4-pro`（適合數理難題）。"
+        "快速模式用 `deepseek-flash`；關閉後用 `deepseek-v4-pro`（適合數理難題，但不支援讀圖）。"
     )
     st.sidebar.divider()
 
@@ -118,7 +130,7 @@ def render_sidebar() -> dict:
     else:
         st.sidebar.warning("⚠️ 未偵測到校內預設 Key，請在「進階設定」填入 API Key 或聯絡 IT。")
 
-    deepseek_model = "deepseek-v4-flash" if fast_mode else "deepseek-v4-pro"
+    deepseek_model = DEEPSEEK_FLASH_MODEL if fast_mode else DEEPSEEK_PRO_MODEL
     deepseek_base_url = "https://api.deepseek.com/v1"
     effective_key = builtin_key
 
@@ -143,11 +155,15 @@ def render_sidebar() -> dict:
 
         if adv_preset == "DeepSeek":
             adv_key = st.text_input("DeepSeek API Key", type="password", key="adv_ds_key")
+            # 舊模型名（deepseek-v4-flash / ...-vision-exp）已下線，若 session_state
+            # 仍留有舊值會令 selectbox 出錯，先遷移到新模型名。
+            if st.session_state.get("adv_ds_model") not in DEEPSEEK_MODEL_CHOICES:
+                st.session_state["adv_ds_model"] = DEEPSEEK_MODEL_CHOICES[0 if fast_mode else 1]
             adv_model = st.selectbox(
-                "Model", ["deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-vision-exp"],
+                "Model", DEEPSEEK_MODEL_CHOICES,
                 index=0 if fast_mode else 1, key="adv_ds_model",
             )
-            st.caption("`deepseek-v4-flash`：快速通用；`deepseek-v4-pro`：慢但適合數理推理；`deepseek-v4-flash-vision-exp`：支援讀圖（實驗版）。")
+            st.caption("`deepseek-flash`：快速通用，支援讀圖；`deepseek-v4-pro`：慢但適合數理推理，不支援讀圖。")
             if adv_key:
                 advanced_cfg = {"type": "openai_compat", "api_key": adv_key,
                                 "base_url": "https://api.deepseek.com/v1", "model": adv_model}
@@ -270,7 +286,12 @@ def render_sidebar() -> dict:
                 "Vision PDF 最多讀取頁數", min_value=1, max_value=10, value=3,
                 key="vision_pdf_max_pages",
             )
-            st.info("💡 DeepSeek 現支援 Vision：請在「進階設定 → DeepSeek」選用 `deepseek-v4-flash-vision-exp`（實驗版）；Grok / GPT-4o 亦支援讀圖。")
+            st.info("💡 DeepSeek 讀圖請用 `deepseek-flash`（已內建圖像理解）；`deepseek-v4-pro` 不支援讀圖。Grok / GPT-4o 亦支援讀圖。")
+            if supports_vision is not None and not supports_vision(cfg_test):
+                st.warning(
+                    f"⚠️ 目前模型 `{cfg_test.get('model', '')}` 不支援讀圖，會自動回退為純文字出題。"
+                    "請改用 `deepseek-flash`，或於「切換 LLM 供應商」選 Grok / GPT-4o。"
+                )
 
     # ── 最終 cfg 組裝 ──────────────────────────────────
     def api_config() -> dict:

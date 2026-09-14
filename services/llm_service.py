@@ -42,6 +42,68 @@ def _reset_session() -> None:
 
 
 # =========================================================
+# DeepSeek API compatibility (per api-docs.deepseek.com)
+# ---------------------------------------------------------
+# 現行模型名：deepseek-flash（DeepSeek-V4.1-Flash，支援「圖像理解」）
+#             deepseek-v4-pro（DeepSeek-V4-Pro，不支援圖像理解）
+# 舊名 deepseek-v4-flash / deepseek-v4-flash-vision-exp 仍可呼叫，但對應模型已
+# 下線，一律由 DeepSeek-V4.1-Flash 提供服務（按 Flash 價格計費）。
+#
+# 思考模式：預設為開啟（強度 high）。新參數 reasoning_effort =
+# none / low / high / max（none = 關閉思考）；舊參數 thinking={"type":"disabled"}
+# 仍然相容，故兩者一併帶上。
+# =========================================================
+
+DEEPSEEK_FLASH_MODEL = "deepseek-flash"
+DEEPSEEK_PRO_MODEL = "deepseek-v4-pro"
+DEEPSEEK_MODEL_CHOICES: List[str] = [DEEPSEEK_FLASH_MODEL, DEEPSEEK_PRO_MODEL]
+
+# 仍可呼叫的舊模型名（已下線，實際由 DeepSeek-V4.1-Flash 服務）
+DEEPSEEK_LEGACY_MODELS: List[str] = ["deepseek-v4-flash", "deepseek-v4-flash-vision-exp"]
+
+# DeepSeek 支援讀圖的模型（deepseek-v4-pro 不支援）
+DEEPSEEK_VISION_MODELS: List[str] = [DEEPSEEK_FLASH_MODEL, *DEEPSEEK_LEGACY_MODELS]
+
+
+def is_deepseek_model(model: Any) -> bool:
+    """是否為 DeepSeek 模型（涵蓋 deepseek-flash / deepseek-v4-pro / 舊名）。"""
+    return str(model or "").strip().lower().startswith("deepseek")
+
+
+def supports_vision_model(model: Any) -> bool:
+    """跨供應商判斷模型是否支援圖像輸入（DeepSeek 只有 flash 系列支援）。"""
+    m = str(model or "").strip().lower()
+    if not m:
+        return False
+
+    if is_deepseek_model(m):
+        if "pro" in m or "reasoner" in m:
+            return False
+        return "flash" in m or "vision" in m
+
+    return (
+        "gpt-4o" in m
+        or "gpt-4.1" in m
+        or "vision" in m
+        or m.startswith("grok")
+    )
+
+
+def apply_deepseek_thinking_off(cfg: dict, payload: dict) -> dict:
+    """DeepSeek V4 系列預設 Thinking Mode：思考會消耗 max_tokens，一旦在思考階段
+    用盡，content 會回傳空字串 → 「AI returned empty content」。
+
+    出題／讀圖需直接輸出 JSON，故對 DeepSeek 模型關閉思考模式。
+    同時帶上新舊兩種寫法：reasoning_effort="none"（現行）＋
+    thinking={"type": "disabled"}（相容舊版），兩者一致表示關閉思考。
+    """
+    if is_deepseek_model(cfg.get("model")):
+        payload["reasoning_effort"] = "none"
+        payload["thinking"] = {"type": "disabled"}
+    return payload
+
+
+# =========================================================
 # Load Subject Configuration from YAML
 # =========================================================
 
@@ -342,7 +404,17 @@ def _post_openai_compat(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    allowed = {"model", "messages", "temperature", "max_tokens", "stream", "response_format", "thinking"}
+    # reasoning_effort: DeepSeek 現行思考模式強度參數（none/low/high/max）
+    allowed = {
+        "model",
+        "messages",
+        "temperature",
+        "max_tokens",
+        "stream",
+        "response_format",
+        "thinking",
+        "reasoning_effort",
+    }
     safe_payload = {k: v for k, v in payload.items() if k in allowed}
 
     last_err: Optional[Exception] = None
@@ -386,11 +458,10 @@ def _chat(cfg: dict, messages: list, temperature: float, max_tokens: int, timeou
         "max_tokens": max_tokens,
         "stream": False,
     }
-    # DeepSeek V4 預設 Thinking Mode：思考會消耗 max_tokens，一旦在思考階段
-    # 用盡，content 會回傳空字串 → 「AI returned empty content」。
-    # 出題需直接輸出 JSON，故對 deepseek-v4* 關閉 thinking mode。
-    if str(cfg.get("model", "")).lower().startswith("deepseek-v4"):
-        payload["thinking"] = {"type": "disabled"}
+    # DeepSeek 預設 Thinking Mode：思考會消耗 max_tokens，一旦在思考階段用盡，
+    # content 會回傳空字串 → 「AI returned empty content」。
+    # 出題需直接輸出 JSON，故對所有 DeepSeek 模型（含新的 deepseek-flash）關閉思考。
+    payload = apply_deepseek_thinking_off(cfg, payload)
 
     data = _post_openai_compat(
         api_key=cfg["api_key"],

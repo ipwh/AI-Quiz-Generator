@@ -101,11 +101,11 @@ streamlit run app.py
 ## 🔌 AI 設定（Sidebar）
 
 *   預設使用 **DeepSeek V4**（校內若已配置內置 Key，老師可直接使用）
-*   **模型**：快速模式用 `deepseek-v4-flash`；關閉快速模式用 `deepseek-v4-pro`（較慢但適合數理推理）；讀圖用 `deepseek-v4-flash-vision-exp`（實驗版，支援 Vision）
-*   系統已對 DeepSeek V4 **關閉 Thinking Mode**，確保出題能直接輸出 JSON、避免回傳空內容；並已調高 `max_tokens`（主生成 8192）以支援較大題數輸出
+*   **模型**：快速模式用 `deepseek-flash`（DeepSeek-V4.1-Flash，快，支援讀圖）；關閉快速模式用 `deepseek-v4-pro`（較慢但適合數理推理，**不支援讀圖**）
+*   系統已對 DeepSeek **關閉 Thinking Mode**（`reasoning_effort="none"` + `thinking={"type":"disabled"}`），確保出題能直接輸出 JSON、避免回傳空內容；並已調高 `max_tokens`（主生成 8192）以支援較大題數輸出
 *   「⚙️ 進階設定」可切換其他供應商（OpenAI 相容、自訂、Grok、Azure 等）並提供「🧪 一鍵測試 API」。
 *   **🎯 難度**：基礎（理解與記憶）／標準（應用與理解）／進階（分析與思考）／混合；AI 會依所選難度注入對應規範調節題目深淺（見「AI 出題特色」）。
-*   OCR / Vision 模式可於進階區選擇（理科建議 Vision；DeepSeek 已支援 Vision，選用 `deepseek-v4-flash-vision-exp` 即可）。
+*   OCR / Vision 模式可於進階區選擇（理科建議 Vision；DeepSeek 選用 `deepseek-flash` 即可讀圖，選 `deepseek-v4-pro` 會自動回退為純文字出題並顯示提示）。
 *   本地 OCR 狀態會在「進階設定 → OCR/讀圖設定」中、選用「本地 OCR」模式時以一行顯示（PaddleOCR 就緒／僅 Tesseract／不可用），初次用家不會被原始狀態資訊阻礙。
 
 ***

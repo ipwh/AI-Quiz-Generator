@@ -46,6 +46,31 @@ except Exception:
     SUBJECT_DISTRACTOR_HINTS = {}
     rebalance_correct_positions = None
 
+# DeepSeek 相容層（模型改名／思考模式參數）共用 llm_service 的實作，
+# 避免兩處判斷不同步；import 失敗時退回本地等價實作。
+try:
+    from services.llm_service import (
+        apply_deepseek_thinking_off as _apply_deepseek_thinking_off,
+        supports_vision_model as _supports_vision_model,
+    )
+except Exception:
+    def _apply_deepseek_thinking_off(cfg: dict, payload: dict) -> dict:
+        if str(cfg.get("model", "")).lower().startswith("deepseek"):
+            payload["reasoning_effort"] = "none"
+            payload["thinking"] = {"type": "disabled"}
+        return payload
+
+    def _supports_vision_model(model: Any) -> bool:
+        m = str(model or "").strip().lower()
+        if not m:
+            return False
+        if m.startswith("deepseek"):
+            if "pro" in m or "reasoner" in m:
+                return False
+            return "flash" in m or "vision" in m
+        return "gpt-4o" in m or "gpt-4.1" in m or "vision" in m or m.startswith("grok")
+
+
 
 # =========================================================
 # HTTP Session
@@ -78,6 +103,7 @@ def _post_openai_compat(
         "response_format",
         "stream",
         "thinking",
+        "reasoning_effort",
     }
     safe_payload = {k: v for k, v in payload.items() if k in allowed}
 
@@ -96,11 +122,10 @@ def _post_openai_compat(
 
 
 def _disable_thinking_for_deepseek_v4(cfg: dict, payload: dict) -> dict:
-    """DeepSeek V4 預設 Thinking Mode；思考會消耗 max_tokens 令 content 為空。
-    讀圖/出題需直接輸出 JSON，故對 deepseek-v4* 關閉 thinking mode。"""
-    if str(cfg.get("model", "")).lower().startswith("deepseek-v4"):
-        payload["thinking"] = {"type": "disabled"}
-    return payload
+    """DeepSeek 預設 Thinking Mode；思考會消耗 max_tokens 令 content 為空。
+    讀圖/出題需直接輸出 JSON，故對所有 DeepSeek 模型（含新的 deepseek-flash）
+    關閉思考模式（reasoning_effort="none" + thinking={"type":"disabled"}）。"""
+    return _apply_deepseek_thinking_off(cfg, payload)
 
 
 def _chat_text(cfg: dict, messages: list, temperature: float, max_tokens: int, timeout: int) -> str:
@@ -161,21 +186,21 @@ def _chat_vision(
 # =========================================================
 
 def supports_vision(cfg: dict) -> bool:
-    """粗略判斷：gpt-4o / grok / vision 關鍵字；另外允許 cfg['vision']=True 強制。"""
+    """粗略判斷：gpt-4o / grok / vision 關鍵字 / DeepSeek flash 系列；
+    另外允許 cfg['vision']=True 強制。
+
+    DeepSeek 注意：`deepseek-flash` 支援圖像理解；`deepseek-v4-pro`
+    （及舊的 `deepseek-reasoner`）不支援，會回退為純文字出題。
+    """
 
     if cfg.get("vision") is True:
         return True
 
-    model = (cfg.get("model") or "").lower()
+    model = cfg.get("model") or ""
     if not model:
         return False
 
-    return (
-        "gpt-4o" in model
-        or "gpt-4.1" in model
-        or "vision" in model
-        or model.startswith("grok")
-    )
+    return _supports_vision_model(model)
 
 
 # =========================================================
