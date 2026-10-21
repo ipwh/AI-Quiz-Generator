@@ -80,6 +80,30 @@ def save_cache(cache: Dict[str, Any], max_items: int = 200) -> None:
         pass
 
 
+def clear_all_cache() -> int:
+    """
+    完全清空本機快取（刪除快取檔案）。
+    返回被移除的項目數。
+    """
+    try:
+        if not os.path.exists(CACHE_PATH):
+            return 0
+
+        removed_count = 0
+        try:
+            with open(CACHE_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, dict):
+                removed_count = len(data)
+        except Exception:
+            removed_count = 0
+
+        os.remove(CACHE_PATH)
+        return removed_count
+    except Exception:
+        return 0
+
+
 def clear_expired_cache() -> int:
     """
     手動清除所有過期快取項目。

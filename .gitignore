@@ -1,5 +1,6 @@
 __pycache__/
 *.pyc
 cache.json
+.cache.json
 .streamlit/secrets.toml
 .DS_Store

@@ -49,7 +49,7 @@
 *   `ui/components_export.py`：共用匯出 panel（Kahoot／Wayground／Google Form＋分享）
 *   `services/llm_service.py`：OpenAI-compatible 呼叫、JSON 修復、重試、ping、科目配置載入
 *   `services/vision_service.py`：Vision 直接出題／Vision OCR（支援 OpenAI-compatible / Grok 等）
-*   `services/cache_service.py`：本機快取（過期機制、`clear_all_cache()` 清空）
+*   `services/cache_service.py`：本機快取（`.cache.json` 存於專案根目錄；24 小時過期機制、`clear_expired_cache()`／`clear_all_cache()` 清空）
 *   `services/google_oauth.py`：Google OAuth（state 暫存、redirect URI、credentials dict 化）
 *   `services/google_forms_api.py`：建立 Google Form（Quiz/Survey，含評分與解釋）
 *   `exporters/`：Kahoot Excel / Wayground DOCX 匯出
@@ -137,6 +137,18 @@ Google OAuth 使用 `APP_URL` 作 redirect URI，部署後最穩定。
 
 ***
 
+## 🗃️ 本機快取與暫存檔
+
+*   執行時只在專案根目錄產生 `.cache.json`（AI 回覆快取；每個項目帶 `_timestamp`，24 小時自動過期，最多保留 200 筆）。此檔已列入 `.gitignore`，不會被提交。
+*   側欄「📘 出題設定 → 🗑️ 清空快取」會呼叫 `clear_all_cache()` 直接刪除 `.cache.json`；即使檔案不存在或內容損壞，也只會回傳 `0`，不會拋錯。
+*   `__pycache__/`、`*.pyc` 為 Python 自動產生的位元組碼快取（已列入 `.gitignore`），可隨時安全刪除，Python 會自動重建：
+
+    ```powershell
+    Get-ChildItem -Recurse -Directory -Filter __pycache__ | Remove-Item -Recurse -Force
+    ```
+
+***
+
 ## 🧯 常見問題（Troubleshooting）
 
 ### 1) 更新後仍見舊錯誤／功能未生效
@@ -150,6 +162,10 @@ Streamlit 可能仍載入舊 module，請 **reboot / restart**（你已驗證重
 ### 3) 匯出按鈕 key 重複（DuplicateElementKey）
 
 請確保同一頁面中 button 的 `key` 唯一；本版本已將「設定區」按鈕 key 與 export panel 區分開。
+
+### 4) 想完全重置本機狀態
+
+按側欄「🗑️ 清空快取」刪除 `.cache.json`，並刪除 `__pycache__/` 後重啟 Streamlit（詳見「本機快取與暫存檔」）。
 
 ***
 

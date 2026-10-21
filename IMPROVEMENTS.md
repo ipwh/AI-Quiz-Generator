@@ -2,6 +2,31 @@
 
 ---
 
+## 🗓️ 2026-10-21 更新：暫存檔清理、快取修復與死碼移除 🧹
+
+### 1）暫存檔清理 🗑️
+**文件**: [.gitignore](.gitignore)
+
+- 掃描全專案後移除 5 個 `__pycache__/` 目錄（14 個 `.pyc`）：4 個 `cpython-311` 與現行 Python 3.14 不符、10 個 `cpython-314` 早於來源檔修改時間，全部為可重建的過時位元組碼
+- 程式碼與設定檔（含 `requirements.txt`、`.devcontainer`、`.streamlit`）對 `__pycache__`／`.pyc` 零引用
+- `.gitignore` 補上 `.cache.json`：`cache_service.py` 實際寫入 `.cache.json`，舊規則只忽略 `cache.json`，執行期快取因此可能被誤提交
+
+### 2）補回 `clear_all_cache()` 🔧
+**文件**: [services/cache_service.py](services/cache_service.py)、[ui/sidebar.py](ui/sidebar.py)
+
+- 問題：側欄「🗑️ 清空快取」以 `try/except` 匯入 `clear_all_cache`，但函數從未實作 → 匯入失敗、變數為 `None`、按鈕整段不顯示
+- 修正：實作 `clear_all_cache() -> int`，讀取項目數後刪除 `.cache.json` 並回傳移除數量；檔案不存在、JSON 損壞或非 dict 均安全回傳 `0`
+- 驗證：無檔案 `0`、2 筆資料 `2`、損壞 JSON `0`、非 dict `0`；`save_cache`／`load_cache` 往返與 `clear_expired_cache()` 行為不變
+
+### 3）移除未引用的 Drive 模組 🧱
+**文件**: `services/google_drive_bank.py`、`services/google_drive_picker.py`、`ui/components_drive_picker.py`（已刪除）
+
+- 刪除前確認：全專案無 import／動態載入（`importlib`、`__import__` 零命中）、`__init__.py` 無 re-export、README 結構清單未列出、`app.py` 的 generate／import／sidebar 三條入口皆不觸及
+- 三者構成封閉依賴群，屬未接線的死碼；仍使用的 `services/google_oauth.py`、`services/google_forms_api.py`、`ui/components_export.py`（Drive 上傳／電郵分享）保持不變
+- 匯入回歸：失敗數由 8 降至 5，剩餘僅為本機未安裝 `googleapiclient`／`google_auth_oauthlib` 的環境問題
+
+---
+
 ## 🗓️ 2026-09-15 更新：DeepSeek 模型改名與 API 參數同步 🔄
 
 ### 1）DeepSeek 模型名更新 🤖
